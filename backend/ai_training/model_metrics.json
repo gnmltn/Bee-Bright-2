@@ -1,0 +1,76 @@
+{
+  "modelType": "TF-IDF intent classifier with keyword boosting",
+  "evaluationMethod": "3-fold stratified cross-validation",
+  "datasetSize": 113,
+  "trainingSamplesPerFold": 75,
+  "evaluationSamples": 113,
+  "accuracy": 0.9912,
+  "precision": 0.9935,
+  "recall": 0.9935,
+  "f1Score": 0.9933,
+  "classes": [
+    {
+      "intent": "greeting",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 9
+    },
+    {
+      "intent": "location",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 13
+    },
+    {
+      "intent": "contact",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 13
+    },
+    {
+      "intent": "enrollment",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 11
+    },
+    {
+      "intent": "schedule",
+      "precision": 0.9412,
+      "recall": 1,
+      "f1Score": 0.9697,
+      "support": 16
+    },
+    {
+      "intent": "payments",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 13
+    },
+    {
+      "intent": "materials",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 12
+    },
+    {
+      "intent": "tutor_help",
+      "precision": 1,
+      "recall": 0.9412,
+      "f1Score": 0.9697,
+      "support": 17
+    },
+    {
+      "intent": "farewell",
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "support": 9
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+backend/.env
+frontend/.env
+backend/mongo-data-local/
+backend/uploads/
+backend/*.log
+node_modules/

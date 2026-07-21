@@ -1,0 +1,4 @@
+{
+  "failPercent": 75,
+  "description": "Student recommendation: materials for subjects where grade < failPercent"
+}

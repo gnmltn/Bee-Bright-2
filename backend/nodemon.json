@@ -1,0 +1,5 @@
+{
+  "ignore": [
+    "ai_training/model_metrics.json"
+  ]
+}

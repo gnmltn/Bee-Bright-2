@@ -1,0 +1,35 @@
+flowchart LR
+    U[Public User / Student / Tutor / Admin / Super Admin]
+    F[Frontend Web App]
+    A[Express Backend API]
+    DB[(MongoDB)]
+    SMTP[SMTP Email Service]
+    AI[AI Rules / Ollama / Intent Model]
+    MM[MetaMask / Wallet]
+    SC[(BeeBrightPayments Smart Contract)]
+
+    U --> F
+    F --> A
+    A --> DB
+    A --> SMTP
+    A --> AI
+    F --> MM
+    MM --> SC
+    A -. payment verification / references .-> SC
+
+    subgraph Trust_Boundary_1[Browser Boundary]
+      U
+      F
+      MM
+    end
+
+    subgraph Trust_Boundary_2[Application Boundary]
+      A
+      AI
+    end
+
+    subgraph Trust_Boundary_3[Data Boundary]
+      DB
+      SMTP
+      SC
+    end

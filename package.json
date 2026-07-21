@@ -1,0 +1,12 @@
+{
+  "scripts": {
+    "test:contracts": "node --test ./test/contracts/**/*.test.js",
+    "gas:contracts": "node ./scripts/contracts/generate-gas-report.js"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.13",
+    "ethers": "^6.15.0",
+    "ganache": "^7.9.2",
+    "solc": "^0.8.30"
+  }
+}

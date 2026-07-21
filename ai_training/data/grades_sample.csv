@@ -1,0 +1,7 @@
+studentId,tutorId,programCategory,subjectItem,score,maxScore,period,remarks
+stud001,tutor001,Academic Tutorial,Mathematics,65,100,Q1 2024,Needs practice
+stud001,tutor001,Academic Tutorial,English,80,100,Q1 2024,Good progress
+stud001,tutor002,Academic Tutorial,Science,58,100,Q1 2024,Struggling - recommend materials
+stud002,tutor001,Pre-Kindergarten Readiness Program,Phonics,72,100,Q1 2024,Slight improvement needed
+stud002,tutor001,Pre-Kindergarten Readiness Program,Numbers 1-20,90,100,Q1 2024,Excellent
+stud003,tutor002,Academic Tutorial,Mathematics,45,100,Q1 2024,Failing - assign extra materials

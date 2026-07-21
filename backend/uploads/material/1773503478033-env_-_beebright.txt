@@ -1,0 +1,42 @@
+# Bee Bright Backend - Environment Variables
+
+# Server
+NODE_ENV=development
+PORT=5000
+
+# Client (for CORS and emails)
+CLIENT_URL=http://localhost:8080
+FRONTEND_URL=http://localhost:8080
+
+# MongoDB
+MONGODB_URI=mongodb://gaealatina_db:4jZjGCmt@ac-qeym9ck-shard-00-00.leqpryo.mongodb.net:27017,ac-qeym9ck-shard-00-01.leqpryo.mongodb.net:27017,ac-qeym9ck-shard-00-02.leqpryo.mongodb.net:27017/beebright?ssl=true&replicaSet=atlas-c4ajxb-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0
+
+# JWT
+JWT_SECRET=9f8c2a1b4e6d7c8a9f0e1d2c3b4a59687766554433221100ffeeddccbbaa9988
+JWT_EXPIRES_IN=30d
+
+# BLOCKCHAIN
+ENCRYPTION_KEY=12345678901234567890123456789012
+# Leave empty unless you deployed BeeBrightPayments.sol in Remix and copied the deployed contract address.
+BEEBRIGHT_PAYMENTS_CONTRACT=
+GANACHE_RPC_URL=http://127.0.0.1:7545
+PAYMENT_RECIPIENT_ETH_ADDRESS=0xf171b10821C0CA887B46d8078D0994E93e171c51
+GANACHE_CHAIN_ID=1337
+PHP_PER_ETH=250000
+
+# AI
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=phi
+OLLAMA_ENABLED=true
+
+# Super admin (auto-created on first backend start)
+SUPER_ADMIN_EMAIL=superadmin@beebright.edu.ph
+SUPER_ADMIN_PASSWORD=ChangeMe123!
+SUPER_ADMIN_PHONE=+639123456789
+
+# Email / SMTP
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=ctvndmn@gmail.com
+SMTP_PASS=gmulqcbyfzozuwob

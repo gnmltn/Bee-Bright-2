@@ -1,0 +1,190 @@
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const { getPasswordExpiresAt } = require('../utils/passwordPolicy');
+
+const userSchema = new mongoose.Schema({
+resetPasswordOtpHash: { type: String, select: false },
+resetPasswordOtpExpires: { type: Date, select: false },
+resetPasswordOtpAttempts: { type: Number, default: 0, select: false },
+resetPasswordOtpLastSentAt: { type: Date, select: false },
+passwordChangeOtpHash: { type: String, select: false },
+passwordChangeOtpExpires: { type: Date, select: false },
+passwordChangeOtpAttempts: { type: Number, default: 0, select: false },
+passwordChangeOtpLastSentAt: { type: Date, select: false },
+passwordChangedAt: { type: Date, default: Date.now },
+passwordExpiresAt: { type: Date, default: () => getPasswordExpiresAt({ passwordChangedAt: new Date() }) },
+
+  firstName: {
+    type: String,
+    required: [true, 'First name is required'],
+    trim: true
+  },
+  middleName: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  lastName: {
+    type: String,
+    required: [true, 'Last name is required'],
+    trim: true
+  },
+  email: {
+    type: String,
+    required: [true, 'Email is required'],
+    unique: true,
+    lowercase: true,
+    trim: true,
+    match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email']
+  },
+  phone: {
+    type: String,
+    required: [true, 'Phone number is required']
+  },
+  password: {
+    type: String,
+    required: [true, 'Password is required'],
+    minlength: 8,
+    select: false // CRITICAL: This prevents password from being returned by default
+  },
+  role: {
+    type: String,
+    enum: ['student', 'tutor', 'admin', 'super_admin'],
+    default: 'student'
+  },
+  gradeLevel: {
+    type: String,
+    enum: ['Toddler', 'Pre-Kindergarten', 'Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'],
+    required: function() { 
+      return this.role === 'student'; 
+    }
+  },
+  guardianName: {
+    type: String,
+    required: function() { 
+      return this.role === 'student'; 
+    }
+  },
+  guardianPhone: {
+    type: String,
+    default: ''
+  },
+  enrolledSubjects: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Subject'
+  }],
+  // Tutor-only: subjects this tutor can teach (refs to Subject model – same as programs)
+  subjectsTaught: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Subject'
+  }],
+  employmentType: {
+    type: String,
+    enum: ['full-time', 'part-time'],
+    default: 'full-time'
+  },
+  availability: {
+    type: String,
+    default: ''
+  },
+  enrollmentStatus: {
+    type: String,
+    enum: ['not_enrolled', 'payment_submitted', 'active', 'payment_rejected', 'cancelled', 'pending_payment'],
+    default: function() {
+      return this.role === 'student' ? 'not_enrolled' : 'active';
+    }
+  },
+  paymentStatus: {
+    type: String,
+    enum: ['pending', 'pending_verification', 'verified', 'rejected'],
+    default: 'pending'
+  },
+  isActive: {
+    type: Boolean,
+    default: function() {
+      // Admin, super admin and tutor should be active immediately
+      return this.role === 'admin' || this.role === 'super_admin' || this.role === 'tutor';
+    }
+  },
+  // When archived, the account is temporarily suspended (no login, but data retained)
+  isArchived: {
+    type: Boolean,
+    default: false
+  },
+  archivedAt: {
+    type: Date,
+    default: null
+  },
+  deletedAt: {
+    type: Date,
+    default: null
+  },
+  lastLogin: {
+    type: Date
+  },
+  lastActivityAt: {
+    type: Date,
+    default: null
+  },
+  emailVerifiedAt: {
+    type: Date,
+    default: null
+  },
+  profileImage: {
+    type: String,
+    default: ''
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Hash password before saving
+userSchema.pre('save', async function(next) {
+  // Only hash if password is modified
+  if (!this.isModified('password')) {
+    return next();
+  }
+  
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    this.passwordChangedAt = new Date();
+    this.passwordExpiresAt = getPasswordExpiresAt({ passwordChangedAt: this.passwordChangedAt });
+    
+    // Set isActive based on role for new users
+    if (this.isNew) {
+      if (this.role === 'admin' || this.role === 'tutor') {
+        this.isActive = true;
+        this.enrollmentStatus = 'active';
+        this.paymentStatus = 'verified';
+      }
+    }
+    
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Compare password method
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  try {
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch (error) {
+    throw new Error('Password comparison failed');
+  }
+};
+
+// Remove password from JSON response
+userSchema.methods.toJSON = function() {
+  const user = this.toObject();
+  delete user.password;
+  return user;
+};
+
+// Check if model already exists to prevent overwrite error
+const User = mongoose.models.User || mongoose.model('User', userSchema);
+
+module.exports = User;

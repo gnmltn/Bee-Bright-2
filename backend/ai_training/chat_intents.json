@@ -1,0 +1,178 @@
+[
+  {
+    "intent": "greeting",
+    "reply": "Hi! I'm the Bee Bright assistant. Ask me about enrollment, schedules, tutoring, payments, or learning materials.",
+    "keywords": ["hello", "hi", "hey", "good morning", "good afternoon", "good evening", "assistant"],
+    "examples": [
+      "hello",
+      "hi there",
+      "good morning",
+      "good afternoon",
+      "hey assistant",
+      "hi bee bright",
+      "hello bee bright assistant",
+      "hi bee bright assistant",
+      "hey bee bright"
+    ]
+  },
+  {
+    "intent": "location",
+    "reply": "Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.",
+    "keywords": ["location", "address", "located", "barangay", "dagupan", "city", "visit", "map", "find", "get to"],
+    "examples": [
+      "where is bee bright located",
+      "what is your address",
+      "where can i find bee bright",
+      "location of the tutorial center",
+      "what barangay are you in",
+      "where is your office in dagupan",
+      "what city is bee bright in",
+      "give me the center address",
+      "how do i get to bee bright",
+      "what is bee bright location in dagupan",
+      "where can i visit bee bright",
+      "show me the map location",
+      "how can i find bee bright location"
+    ]
+  },
+  {
+    "intent": "contact",
+    "reply": "You can contact Bee Bright through the admin office using the website contact details. For tutor-related concerns, open your dashboard Schedule section to identify your tutor first, then ask admin if you need direct contact assistance.",
+    "keywords": ["contact", "phone", "email", "reach", "call", "message", "number", "admin office", "contact bee bright"],
+    "examples": [
+      "how can i contact bee bright",
+      "what is your phone number",
+      "how do i reach admin",
+      "contact details please",
+      "how can i call the center",
+      "what email can i use to contact you",
+      "give me your contact number",
+      "how do i message the admin office",
+      "can i contact the center by phone",
+      "what is the admin office number",
+      "how can i contact the admin office",
+      "how do i text the admin office",
+      "contact bee bright for me"
+    ]
+  },
+  {
+    "intent": "enrollment",
+    "reply": "To enroll, go to the Enrollment page, fill in the student information, choose your program or subjects, submit the form, then complete the payment step. After you submit proof of payment, admin verifies it and your enrollment becomes active.",
+    "keywords": ["enroll", "enrollment", "register", "registration", "apply", "sign up", "student registration", "enrollment steps", "how to enroll"],
+    "examples": [
+      "how do i enroll",
+      "what is the enrollment process",
+      "how can i register as a student",
+      "where do i sign up",
+      "how to apply for enrollment",
+      "how do i become a student",
+      "student registration steps",
+      "how can i submit enrollment",
+      "what are the enrollment steps",
+      "can you explain enrollment step by step",
+      "how do i enroll in bee bright step by step"
+    ]
+  },
+  {
+    "intent": "schedule",
+    "reply": "Your class times are in the dashboard Schedule section. If you need to change or reschedule a class, contact admin first because schedule changes need to be updated in the system before they appear on your dashboard.",
+    "keywords": ["schedule", "class", "time", "calendar", "session", "timetable", "reschedule", "change schedule", "move class"],
+    "examples": [
+      "where can i see my schedule",
+      "what time is my class",
+      "how do i check session time",
+      "show my class schedule",
+      "when is my tutoring session",
+      "where is the calendar",
+      "how do i open my timetable",
+      "when is my next lesson",
+      "can i view my class timetable",
+      "how can i see my next session",
+      "open my schedule please",
+      "where do i check my class time",
+      "how do i reschedule my class",
+      "can i change my schedule",
+      "how do i move my class to another day",
+      "who do i contact for schedule changes"
+    ]
+  },
+  {
+    "intent": "payments",
+    "reply": "Payments are handled during enrollment. After you pay, submit your proof of payment, then wait for admin verification, which usually takes 1 to 2 business days. You can also check the Payments section or your enrollment status for updates.",
+    "keywords": ["payment", "pay", "gcash", "fee", "tuition", "payments", "verify payment", "price", "cost", "payment status", "tuition fee", "payment verification", "proof of payment"],
+    "examples": [
+      "how do i pay",
+      "where can i see my payment status",
+      "what payment options do you have",
+      "how is payment verified",
+      "can i pay using gcash",
+      "where is the payments tab",
+      "how much is the tuition fee",
+      "when will admin verify my payment",
+      "how do i check my payment status",
+      "what is the tuition fee amount",
+      "how does payment verification work",
+      "where do i upload proof of payment",
+      "when will my proof of payment be verified"
+    ]
+  },
+  {
+    "intent": "materials",
+    "reply": "Learning materials are available in the Materials section, and students with low grades can also receive recommended tutor materials in the AI area.",
+    "keywords": ["materials", "material", "pdf", "files", "worksheets", "lessons", "study materials"],
+    "examples": [
+      "where are my learning materials",
+      "how do i view tutor files",
+      "where can i open study materials",
+      "how do i find pdf lessons",
+      "where are the assigned materials",
+      "can i get recommended materials",
+      "where do i open worksheets",
+      "how can i read the lesson files",
+      "where can i download pdf files",
+      "how do i open my worksheets",
+      "where are my study files",
+      "where can i open lesson pdf files"
+    ]
+  },
+  {
+    "intent": "tutor_help",
+    "reply": "If you need your tutor, check your dashboard Schedule section to see the assigned tutor for your session. If you need help contacting that tutor or need extra academic support, ask admin or use the support options shown in your dashboard.",
+    "keywords": ["tutor", "teacher", "help", "support", "struggling", "academic support", "guidance", "remedial", "struggling in class", "contact tutor", "contact teacher"],
+    "examples": [
+      "i need help from my tutor",
+      "how do i contact my teacher",
+      "who is my tutor",
+      "i need academic support",
+      "how can my tutor help me",
+      "i am struggling in class",
+      "my teacher needs to help me",
+      "i need support with my lessons",
+      "i need help with my studies",
+      "my tutor can help me with lessons",
+      "who can guide me in class",
+      "i need guidance from my tutor",
+      "i need remedial support",
+      "i am struggling in class right now",
+      "how do i contact my tutor",
+      "where can i see my tutor details",
+      "can i message my tutor"
+    ]
+  },
+  {
+    "intent": "farewell",
+    "reply": "You're welcome. If you need anything else, ask again anytime.",
+    "keywords": ["thanks", "thank you", "bye", "goodbye", "see you", "welcome"],
+    "examples": [
+      "thank you",
+      "thanks",
+      "bye",
+      "goodbye",
+      "see you later",
+      "thanks for the help",
+      "see you",
+      "thank you so much",
+      "thanks assistant"
+    ]
+  }
+]

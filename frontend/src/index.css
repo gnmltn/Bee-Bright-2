@@ -1,0 +1,268 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Quicksand:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* BeeBright Tutorial Center Design System
+   Theme: Warm, educational, bee/honey-inspired
+   Colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Core brand colors - Honey/Amber theme */
+    --background: 45 30% 98%;
+    --foreground: 220 25% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 25% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 25% 15%;
+
+    /* Primary - Amber/Honey */
+    --primary: 38 92% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 43 96% 56%;
+    --primary-dark: 32 95% 44%;
+
+    /* Secondary - Soft Blue */
+    --secondary: 210 60% 95%;
+    --secondary-foreground: 210 60% 30%;
+
+    /* Muted - Cream tones */
+    --muted: 40 30% 94%;
+    --muted-foreground: 220 15% 45%;
+
+    /* Accent - Warm Orange */
+    --accent: 25 95% 53%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Success - Green for progress */
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 100%;
+
+    /* Info - Sky Blue */
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+
+    /* Warning */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 40 30% 88%;
+    --input: 40 30% 88%;
+    --ring: 38 92% 50%;
+
+    --radius: 0.75rem;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(38 92% 50%), hsl(25 95% 53%));
+    --gradient-hero: linear-gradient(135deg, hsl(38 92% 50%) 0%, hsl(43 96% 56%) 50%, hsl(25 95% 53%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(45 30% 98%) 100%);
+    --gradient-dark: linear-gradient(135deg, hsl(220 25% 15%) 0%, hsl(220 30% 25%) 100%);
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(220 25% 15% / 0.05);
+    --shadow-md: 0 4px 6px -1px hsl(220 25% 15% / 0.1), 0 2px 4px -2px hsl(220 25% 15% / 0.1);
+    --shadow-lg: 0 10px 15px -3px hsl(220 25% 15% / 0.1), 0 4px 6px -4px hsl(220 25% 15% / 0.1);
+    --shadow-xl: 0 20px 25px -5px hsl(220 25% 15% / 0.1), 0 8px 10px -6px hsl(220 25% 15% / 0.1);
+    --shadow-glow: 0 0 20px hsl(38 92% 50% / 0.3);
+
+    /* Sidebar */
+    --sidebar-background: 40 25% 97%;
+    --sidebar-foreground: 220 25% 25%;
+    --sidebar-primary: 38 92% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 40 30% 94%;
+    --sidebar-accent-foreground: 220 25% 15%;
+    --sidebar-border: 40 30% 88%;
+    --sidebar-ring: 38 92% 50%;
+  }
+
+  .dark {
+    --background: 220 25% 10%;
+    --foreground: 45 30% 95%;
+
+    --card: 220 25% 14%;
+    --card-foreground: 45 30% 95%;
+
+    --popover: 220 25% 14%;
+    --popover-foreground: 45 30% 95%;
+
+    --primary: 38 92% 50%;
+    --primary-foreground: 220 25% 10%;
+    --primary-light: 43 96% 56%;
+    --primary-dark: 32 95% 44%;
+
+    --secondary: 220 25% 20%;
+    --secondary-foreground: 45 30% 95%;
+
+    --muted: 220 25% 18%;
+    --muted-foreground: 45 20% 65%;
+
+    --accent: 25 95% 53%;
+    --accent-foreground: 0 0% 100%;
+
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 25% 22%;
+    --input: 220 25% 22%;
+    --ring: 38 92% 50%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(38 92% 50%), hsl(25 95% 53%));
+    --gradient-hero: linear-gradient(135deg, hsl(38 92% 50%) 0%, hsl(43 96% 56%) 50%, hsl(25 95% 53%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(220 25% 14%) 0%, hsl(220 25% 10%) 100%);
+    --gradient-dark: linear-gradient(135deg, hsl(220 25% 8%) 0%, hsl(220 30% 15%) 100%);
+
+    --shadow-glow: 0 0 30px hsl(38 92% 50% / 0.2);
+
+    --sidebar-background: 220 25% 12%;
+    --sidebar-foreground: 45 30% 90%;
+    --sidebar-primary: 38 92% 50%;
+    --sidebar-primary-foreground: 220 25% 10%;
+    --sidebar-accent: 220 25% 18%;
+    --sidebar-accent-foreground: 45 30% 95%;
+    --sidebar-border: 220 25% 22%;
+    --sidebar-ring: 38 92% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Nunito', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Quicksand', sans-serif;
+    @apply font-bold tracking-tight;
+  }
+}
+
+@layer components {
+  /* Bee pattern background */
+  .bee-pattern {
+    background-image: radial-gradient(circle at 25px 25px, hsl(38 92% 50% / 0.05) 2px, transparent 0);
+    background-size: 50px 50px;
+  }
+
+  /* Honeycomb pattern */
+  .honeycomb-bg {
+    background: 
+      linear-gradient(30deg, hsl(40 30% 94%) 12%, transparent 12.5%, transparent 87%, hsl(40 30% 94%) 87.5%, hsl(40 30% 94%)),
+      linear-gradient(150deg, hsl(40 30% 94%) 12%, transparent 12.5%, transparent 87%, hsl(40 30% 94%) 87.5%, hsl(40 30% 94%)),
+      linear-gradient(30deg, hsl(40 30% 94%) 12%, transparent 12.5%, transparent 87%, hsl(40 30% 94%) 87.5%, hsl(40 30% 94%)),
+      linear-gradient(150deg, hsl(40 30% 94%) 12%, transparent 12.5%, transparent 87%, hsl(40 30% 94%) 87.5%, hsl(40 30% 94%)),
+      linear-gradient(60deg, hsl(43 96% 56% / 0.1) 25%, transparent 25.5%, transparent 75%, hsl(43 96% 56% / 0.1) 75%, hsl(43 96% 56% / 0.1)),
+      linear-gradient(60deg, hsl(43 96% 56% / 0.1) 25%, transparent 25.5%, transparent 75%, hsl(43 96% 56% / 0.1) 75%, hsl(43 96% 56% / 0.1));
+    background-size: 80px 140px;
+    background-position: 0 0, 0 0, 40px 70px, 40px 70px, 0 0, 40px 70px;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-hero);
+  }
+
+  /* Card with hover effect */
+  .card-hover {
+    @apply transition-all duration-300 ease-out;
+    box-shadow: var(--shadow-md);
+  }
+  .card-hover:hover {
+    @apply -translate-y-1;
+    box-shadow: var(--shadow-xl);
+  }
+
+  /* Dashboard stat card */
+  .stat-card {
+    @apply rounded-xl p-6 bg-card border border-border;
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Navigation active state */
+  .nav-active {
+    @apply text-primary font-semibold;
+    position: relative;
+  }
+  .nav-active::after {
+    content: '';
+    @apply absolute bottom-0 left-0 w-full h-0.5 bg-primary rounded-full;
+  }
+
+  /* Button glow effect */
+  .btn-glow {
+    box-shadow: var(--shadow-glow);
+    @apply transition-all duration-300;
+  }
+  .btn-glow:hover {
+    box-shadow: 0 0 30px hsl(38 92% 50% / 0.5);
+  }
+
+  /* Progress bar animation */
+  .progress-animate {
+    @apply transition-all duration-700 ease-out;
+  }
+
+  /* Floating animation */
+  .float-animation {
+    animation: float 3s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  /* Pulse glow */
+  .pulse-glow {
+    animation: pulseGlow 2s ease-in-out infinite;
+  }
+
+  @keyframes pulseGlow {
+    0%, 100% {
+      box-shadow: 0 0 5px hsl(38 92% 50% / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 20px hsl(38 92% 50% / 0.6);
+    }
+  }
+
+  /* Staggered animation delay utilities */
+  .delay-100 { animation-delay: 100ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

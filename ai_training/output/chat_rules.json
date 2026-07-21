@@ -1,0 +1,36 @@
+[
+  {
+    "keywords": [
+      "enroll",
+      "enrollment",
+      "join"
+    ],
+    "reply": "Enrollment is done through the enrollment form. After payment verification, your programs appear under My Programs."
+  },
+  {
+    "keywords": [
+      "schedule",
+      "class",
+      "session",
+      "when"
+    ],
+    "reply": "Your schedule is in the Schedule tab. Sessions show date, time, and tutor."
+  },
+  {
+    "keywords": [
+      "payment",
+      "pay",
+      "fee",
+      "gcash"
+    ],
+    "reply": "Payments are verified by admin. Use GCash as shown during enrollment."
+  },
+  {
+    "keywords": [
+      "struggling",
+      "help",
+      "recommend"
+    ],
+    "reply": "Use the Recommendations section in the AI tab for suggested materials per subject."
+  }
+]
