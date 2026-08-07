@@ -31,10 +31,22 @@ interface DashboardLayoutProps {
   children: ReactNode;
 }
 
-const navigationByRole: Record<UserRole, { name: string; href: string; icon: typeof Home }[]> = {
+const navigationByRole: Record<string, { name: string; href: string; icon: typeof Home }[]> = {
   student: [
     { name: "Overview", href: "/student-dashboard", icon: Home },
     { name: "My Subjects", href: "/student-dashboard#subjects", icon: BookOpen },
+    { name: "Schedule", href: "/student-dashboard#schedule", icon: Calendar },
+    { name: "Progress", href: "/student-dashboard#progress", icon: TrendingUp },
+    { name: "Materials", href: "/student-dashboard#materials", icon: FileText },
+    { name: "Announcements", href: "/student-dashboard#announcements", icon: Bell },
+    { name: "Payments", href: "/student-dashboard/payments", icon: CreditCard },
+    { name: "Activity", href: "/student-dashboard#activity", icon: Activity },
+    { name: "Settings", href: "/student-dashboard/settings", icon: Settings },
+  ],
+  // Parent uses the same student dashboard — joined account
+  parent: [
+    { name: "Overview", href: "/student-dashboard", icon: Home },
+    { name: "My Child", href: "/student-dashboard#subjects", icon: BookOpen },
     { name: "Schedule", href: "/student-dashboard#schedule", icon: Calendar },
     { name: "Progress", href: "/student-dashboard#progress", icon: TrendingUp },
     { name: "Materials", href: "/student-dashboard#materials", icon: FileText },
@@ -80,8 +92,9 @@ const navigationByRole: Record<UserRole, { name: string; href: string; icon: typ
   ],
 };
 
-const dashboardTitles: Record<UserRole, string> = {
+const dashboardTitles: Record<string, string> = {
   student: "Student Portal",
+  parent: "Parent Portal",
   tutor: "Tutor Portal",
   admin: "Admin Portal",
   super_admin: "Super Admin Portal",

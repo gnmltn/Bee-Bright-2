@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Subject = require('../models/Subject');
 const Payment = require('../models/Payment');
+const Enrollment = require('../models/Enrollment');
 
 const getSettledValue = (result, fallback = 0) =>
   result.status === 'fulfilled' && typeof result.value === 'number' ? result.value : fallback;
@@ -10,10 +11,12 @@ const getSettledValue = (result, fallback = 0) =>
 // @access  Private (Admin)
 const getDashboardStats = async (req, res) => {
   try {
-    const [totalStudentsResult, activeTutorsResult, activeClassesResult, revenueResult] = await Promise.allSettled([
-      User.countDocuments({ role: 'student', deletedAt: null }),
+    const [totalStudentsResult, activeTutorsResult, pendingEnrollmentsResult, revenueResult] = await Promise.allSettled([
+      // "Enrolled Students" = enrollments that have been approved
+      // Children are not separate login accounts — the count comes from Enrollment, not User
+      Enrollment.countDocuments({ status: { $in: ['approved', 'active'] } }),
       User.countDocuments({ role: 'tutor', isActive: true, isArchived: { $ne: true }, deletedAt: null }),
-      Subject.countDocuments({ isActive: true }),
+      Enrollment.countDocuments({ status: { $in: ['submitted', 'payment_under_verification', 'pending_approval', 'pending'] } }),
       getMonthlyRevenue()
     ]);
 
@@ -22,7 +25,7 @@ const getDashboardStats = async (req, res) => {
       stats: {
         totalStudents: getSettledValue(totalStudentsResult),
         activeTutors: getSettledValue(activeTutorsResult),
-        activeClasses: getSettledValue(activeClassesResult),
+        pendingEnrollments: getSettledValue(pendingEnrollmentsResult),
         monthlyRevenue: getSettledValue(revenueResult)
       }
     });

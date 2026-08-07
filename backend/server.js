@@ -47,6 +47,7 @@ const settingsRoutes = require('./routes/settingsRoutes');
 const adminCreationRoutes = require('./routes/adminCreationRoutes');
 const { ensureSuperAdmin } = require('./utils/ensureSuperAdmin');
 const { migrateScheduleIndexes } = require('./utils/scheduleIndexMigration');
+const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
 
 const app = express();
@@ -139,6 +140,7 @@ mongoose.connect(process.env.MONGODB_URI, mongoConnectionOptions)
   try {
     await migrateScheduleIndexes();
     await ensureSuperAdmin();
+    await ensureRetiredPricing();
   } catch (err) {
     console.error('❌ Startup initialization task failed:', err);
   }
@@ -149,6 +151,8 @@ mongoose.connect(process.env.MONGODB_URI, mongoConnectionOptions)
 app.use('/api/auth', authRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/enrollments', enrollmentRoutes);
+// Admin enrollment management (mirrors /api/enrollments but under /api/admin/enrollments)
+app.use('/api/admin/enrollments', enrollmentRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/subjects', subjectRoutes);

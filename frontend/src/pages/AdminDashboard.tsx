@@ -260,14 +260,15 @@ type PaymentForExport = { _id: string; referenceNumber?: string; amount: number;
 const handleExportAll = (enrollmentsList: AdminEnrollment[], usersList: AdminUser[], paymentsList: PaymentForExport[]) => {
   let csvContent = "=== Bee Bright Tutorial Center — Full Report ===\nGenerated: " + new Date().toLocaleString() + "\n\n";
 
-  csvContent += "--- ENROLLMENTS ---\nName,Grade,Subject,Date,Status\n";
+  csvContent += "--- ENROLLMENTS ---\nName,Programs,Date,Status\n";
   (enrollmentsList || []).forEach((e: AdminEnrollment) => {
-    const name = e.student ? `${e.student.firstName} ${e.student.lastName}`.trim() : "—";
-    const grade = e.student?.gradeLevel ?? "—";
-    const subject = e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
+    const eAny = e as Record<string, unknown>;
+    const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+    const name = snap ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim() : "—";
+    const programs = (eAny.packages as { displayName?: string }[] | undefined)?.map((p) => p.displayName).join("; ") || e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
     const date = formatEnrollmentDate(e.enrollmentDate || e.createdAt);
     const status = enrollmentStatusLabel(e.status);
-    csvContent += `${name},${grade},${subject},${date},${status}\n`;
+    csvContent += `${name},${programs},${date},${status}\n`;
   });
 
   csvContent += "\n--- PAYMENTS ---\nReference,Student,Amount,Status,Date,Method\n";
@@ -412,11 +413,38 @@ export default function AdminDashboard() {
   const [enrollments, setEnrollments] = useState<AdminEnrollment[]>([]);
   const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
   const [enrollmentsError, setEnrollmentsError] = useState<string | null>(null);
+  const [enrollmentStatusFilter, setEnrollmentStatusFilter] = useState<string>('all');
+  const [enrollmentSearch, setEnrollmentSearch] = useState('');
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [viewEnrollmentId, setViewEnrollmentId] = useState<string | null>(null);
+  // Reject dialog state
+  const [rejectEnrollmentId, setRejectEnrollmentId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectAllowResubmit, setRejectAllowResubmit] = useState(true);
+  const [rejectLoading, setRejectLoading] = useState(false);
+  // Verify payment dialog state
+  const [verifyPaymentDialogOpen, setVerifyPaymentDialogOpen] = useState(false);
+  const [verifyPaymentTarget, setVerifyPaymentTarget] = useState<{ enrollmentId: string; paymentId: string } | null>(null);
+  const [verifyPaymentNote, setVerifyPaymentNote] = useState('');
+  const [verifyPaymentLoading, setVerifyPaymentLoading] = useState(false);
   type ViewEnrollmentData = {
-    enrollment: AdminEnrollment & { student?: AdminEnrollment["student"] & { guardianName?: string; guardianPhone?: string } };
-    payments: { _id: string; referenceNumber?: string; amount: number; status: string; gcashDetails?: { mobileNumber?: string; transactionId?: string; screenshotUrl?: string }; createdAt?: string }[];
+    enrollment: AdminEnrollment & {
+      enrollmentId?: string; parent?: { firstName?: string; lastName?: string; email?: string; phone?: string } | null;
+      studentSnapshot?: { firstName?: string; lastName?: string; birthdate?: string; computedAge?: number };
+      packages?: { programCode?: string; displayName?: string; price?: number; paymentOption?: string }[];
+      preferredStartDate?: string; preferredTime?: string;
+      healthInfo?: { allergies?: string; medications?: string; specialNeeds?: boolean; specialNeedsDetails?: string };
+      consentItems?: { name?: string; accepted?: boolean }[];
+      rejectionReason?: string; allowResubmission?: boolean; statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
+      student?: AdminEnrollment["student"] & { guardianName?: string; guardianPhone?: string; studentId?: string };
+    };
+    payments: {
+      _id: string; referenceNumber?: string; amount: number; amountDue?: number; status: string;
+      paymentMethod?: string; proofUrl?: string; payerReference?: string; resubmissionCount?: number;
+      submittedAt?: string; verifiedAt?: string; rejectionReason?: string;
+      gcashDetails?: { mobileNumber?: string; transactionId?: string; screenshotUrl?: string };
+      createdAt?: string;
+    }[];
   } | null;
   const [viewEnrollmentData, setViewEnrollmentData] = useState<ViewEnrollmentData>(null);
   const [viewEnrollmentLoading, setViewEnrollmentLoading] = useState(false);
@@ -546,7 +574,9 @@ export default function AdminDashboard() {
   });
 
   const managedUserRoles = useMemo(
-    () => new Set(isSuperAdmin ? ["student", "tutor", "admin"] : ["student", "tutor"]),
+    // 'student' role is no longer created — children are stored as studentSnapshot on Enrollment.
+    // Parent/Guardian is the only account owner that logs in.
+    () => new Set(isSuperAdmin ? ["tutor", "admin", "parent"] : ["tutor", "parent"]),
     [isSuperAdmin]
   );
   const getAdminUserName = (adminUser: AdminUser) =>
@@ -1312,41 +1342,66 @@ export default function AdminDashboard() {
   const handleAcceptEnrollment = async (enrollmentId: string) => {
     setVerifyingId(enrollmentId);
     try {
-      const res = await enrollmentService.verifyEnrollmentPayment(enrollmentId, true);
+      const res = await enrollmentService.approveEnrollment(enrollmentId);
       if (res.data?.success) {
-        toast.success("Enrollment accepted. Student is officially enrolled.");
-        fetchEnrollments();
-        fetchUsers();
-        fetchDashboardStats();
+        toast.success("Enrollment approved. Student account activated.");
+        fetchEnrollments(); fetchUsers(); fetchDashboardStats();
+        setViewEnrollmentId(null);
       } else {
-        toast.error(res.data?.message || "Failed to accept enrollment");
+        toast.error(res.data?.message || "Failed to approve enrollment");
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to accept enrollment";
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to approve enrollment";
       toast.error(msg);
-    } finally {
-      setVerifyingId(null);
-    }
+    } finally { setVerifyingId(null); }
   };
 
-  const handleRejectEnrollment = async (enrollmentId: string) => {
-    setVerifyingId(enrollmentId);
+  const openRejectDialog = (enrollmentId: string) => {
+    setRejectEnrollmentId(enrollmentId);
+    setRejectReason('');
+    setRejectAllowResubmit(true);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!rejectEnrollmentId) return;
+    if (!rejectReason.trim()) { toast.error("Please provide a rejection reason."); return; }
+    setRejectLoading(true);
     try {
-      const res = await enrollmentService.verifyEnrollmentPayment(enrollmentId, false);
+      const res = await enrollmentService.rejectEnrollment(rejectEnrollmentId, rejectReason, rejectAllowResubmit);
       if (res.data?.success) {
-        toast.success("Enrollment rejected.");
-        fetchEnrollments();
-        fetchUsers();
-        fetchDashboardStats();
-      } else {
-        toast.error(res.data?.message || "Failed to reject enrollment");
-      }
+        toast.success("Enrollment rejected and parent notified.");
+        fetchEnrollments(); fetchUsers(); fetchDashboardStats();
+        setRejectEnrollmentId(null); setViewEnrollmentId(null);
+      } else { toast.error(res.data?.message || "Failed to reject"); }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to reject enrollment";
       toast.error(msg);
-    } finally {
-      setVerifyingId(null);
-    }
+    } finally { setRejectLoading(false); }
+  };
+
+  const handleRejectEnrollment = (enrollmentId: string) => openRejectDialog(enrollmentId);
+
+  const openVerifyPaymentDialog = (enrollmentId: string, paymentId: string) => {
+    setVerifyPaymentTarget({ enrollmentId, paymentId });
+    setVerifyPaymentNote('');
+    setVerifyPaymentDialogOpen(true);
+  };
+
+  const handleConfirmVerifyPayment = async (verified: boolean) => {
+    if (!verifyPaymentTarget) return;
+    setVerifyPaymentLoading(true);
+    try {
+      const res = await enrollmentService.verifyEnrollmentPayment(verifyPaymentTarget.enrollmentId, verified, verifyPaymentNote || undefined);
+      if (res.data?.success) {
+        toast.success(verified ? "Payment verified." : "Payment rejected.");
+        setVerifyPaymentDialogOpen(false);
+        setViewEnrollmentId((prev) => { if (prev) handleViewEnrollment(prev); return prev; });
+        fetchEnrollments(); fetchAdminPayments(); fetchDashboardStats();
+      } else { toast.error(res.data?.message || "Action failed"); }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Action failed";
+      toast.error(msg);
+    } finally { setVerifyPaymentLoading(false); }
   };
 
   const resolvePaymentProofUrl = (src?: string) => {
@@ -1711,11 +1766,14 @@ export default function AdminDashboard() {
     tutor: "bg-info/10 text-info",
     admin: "bg-warning/10 text-warning",
     super_admin: "bg-violet-100 text-violet-700",
+    parent: "bg-rose-100 text-rose-700",
   };
 
   const formatRoleLabel = (role?: string | null) => {
     if (!role) return "—";
-    return role.replace(/_/g, " ");
+    if (role === "parent") return "Parent/Guardian";
+    if (role === "super_admin") return "Super Admin";
+    return role.charAt(0).toUpperCase() + role.slice(1);
   };
 
   const formatSlotTime = (hhmm: string) => {
@@ -1760,8 +1818,9 @@ export default function AdminDashboard() {
   const paymentHistoryList = allPaymentsList;
 
   const derivedStudentCount = useMemo(
-    () => users.filter((u) => u.role === "student").length,
-    [users]
+    // Count approved enrollments — children are not separate User accounts
+    () => enrollments.filter((e) => e.status === "approved" || e.status === "active").length,
+    [enrollments]
   );
   const derivedTutorCount = useMemo(
     () => users.filter((u) => u.role === "tutor" && u.isArchived !== true && u.isActive !== false).length,
@@ -1798,9 +1857,9 @@ export default function AdminDashboard() {
   const resolvedDashboardStats = useMemo<DashboardStats>(() => ({
     totalStudents: Math.max(dashboardStats?.totalStudents ?? 0, derivedStudentCount),
     activeTutors: Math.max(dashboardStats?.activeTutors ?? 0, derivedTutorCount),
-    activeClasses: Math.max(dashboardStats?.activeClasses ?? 0, derivedActiveClassCount),
+    pendingEnrollments: dashboardStats?.pendingEnrollments ?? enrollments.filter((e) => ['submitted', 'payment_under_verification', 'pending_approval', 'pending'].includes(e.status)).length,
     monthlyRevenue: Math.max(dashboardStats?.monthlyRevenue ?? 0, derivedMonthlyRevenue),
-  }), [dashboardStats, derivedActiveClassCount, derivedMonthlyRevenue, derivedStudentCount, derivedTutorCount]);
+  }), [dashboardStats, enrollments, derivedMonthlyRevenue, derivedStudentCount, derivedTutorCount]);
   const summaryLoading = statsLoading && usersLoading && enrollmentsLoading && paymentsLoading;
 
   const calendarDays = useMemo(() => {
@@ -2402,7 +2461,7 @@ export default function AdminDashboard() {
             className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8"
           >
             <StatCard
-              title="Total Students"
+              title="Enrolled Students"
               value={summaryLoading ? "—" : resolvedDashboardStats.totalStudents}
               icon={Users}
               variant="primary"
@@ -2414,9 +2473,9 @@ export default function AdminDashboard() {
               variant="info"
             />
             <StatCard
-              title="Active Classes"
-              value={summaryLoading ? "—" : resolvedDashboardStats.activeClasses}
-              icon={BookOpen}
+              title="Pending Enrollments"
+              value={summaryLoading ? "—" : resolvedDashboardStats.pendingEnrollments}
+              icon={FileText}
               variant="success"
             />
             <StatCard
@@ -2516,19 +2575,22 @@ export default function AdminDashboard() {
                       <div className="p-4 text-center text-sm text-muted-foreground">No enrollments yet</div>
                     ) : (
                       enrollments.slice(0, 5).map((enrollment) => {
-                        const name = enrollment.student ? `${enrollment.student.firstName} ${enrollment.student.lastName}`.trim() : "—";
+                        const eAny = enrollment as Record<string, unknown>;
+                        const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+                        const name = snap
+                          ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim()
+                          : "—";
                         const initials = name !== "—" ? name.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—";
-                        const grade = enrollment.student?.gradeLevel ?? "—";
-                        const subject = enrollment.selectedSubjects?.map((s) => s.name).join(", ") || "—";
+                        const programs = (eAny.packages as { displayName?: string }[] | undefined)
+                          ?.map((p) => p.displayName).join(", ") || enrollment.selectedSubjects?.map((s) => s.name).join(", ") || "—";
                         const status = enrollmentStatusLabel(enrollment.status);
-                        const studentImg = enrollment.student?.profileImage ? `${uploadsBaseUrl}/uploads/${enrollment.student.profileImage}` : null;
                         return (
                           <div key={enrollment._id} className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
                             <div className="flex items-center gap-3">
-                              <UserAvatar src={studentImg} fallback={initials} size={8} />
+                              <UserAvatar src={null} fallback={initials} size={8} />
                               <div>
                                 <p className="font-medium text-sm text-foreground">{name}</p>
-                                <p className="text-xs text-muted-foreground">{grade} • {subject}</p>
+                                <p className="text-xs text-muted-foreground">{programs}</p>
                               </div>
                             </div>
                             <span className={`text-xs px-2 py-1 rounded-full font-medium ${
@@ -2596,114 +2658,140 @@ export default function AdminDashboard() {
 
             {/* Enrollments Tab */}
             <TabsContent value="enrollments" className="space-y-6">
-              <div className="bg-card rounded-xl border border-border overflow-hidden">
-                <div className="p-4 border-b border-border flex items-center justify-between">
-                  <h3 className="font-display font-bold text-lg text-foreground">All Enrollments</h3>
-                  <Button size="sm" onClick={() => setAddStudentOpen(true)}>Add New Student</Button>
+              {/* Status filter + search */}
+              <div className="flex flex-wrap gap-2 items-center justify-between">
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { value: 'all',                      label: 'All' },
+                    { value: 'submitted',                label: 'Submitted' },
+                    { value: 'payment_under_verification', label: 'Payment Review' },
+                    { value: 'pending_approval',         label: 'Pending Approval' },
+                    { value: 'approved',                 label: 'Approved' },
+                    { value: 'rejected',                 label: 'Rejected' },
+                    { value: 'pending',                  label: 'Legacy Pending' },
+                  ].map((f) => (
+                    <button key={f.value} onClick={() => setEnrollmentStatusFilter(f.value)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        enrollmentStatusFilter === f.value
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-card border-border text-muted-foreground hover:border-primary/40'
+                      }`}>
+                      {f.label}
+                    </button>
+                  ))}
                 </div>
+                <div className="flex items-center gap-2">
+                  <Input placeholder="Search by name or ID…" value={enrollmentSearch}
+                    onChange={(e) => setEnrollmentSearch(e.target.value)} className="h-8 w-52 text-sm" />
+                  <Button size="sm" onClick={() => setAddStudentOpen(true)}>Add Student</Button>
+                </div>
+              </div>
+
+              <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-muted">
                       <tr>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Student</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Grade</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Subject</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Date</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Contact</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Payment</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Status</th>
-                        <th className="text-left p-4 text-sm font-semibold text-foreground">Actions</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Enrollment ID</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Student</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Programs</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Payment</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Status</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Date</th>
+                        <th className="text-left p-3 text-xs font-semibold text-foreground uppercase tracking-wide">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                       {enrollmentsLoading ? (
-                        <tr>
-                          <td colSpan={8} className="p-8 text-center">
-                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mx-auto" />
-                          </td>
-                        </tr>
+                        <tr><td colSpan={7} className="p-8 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" /></td></tr>
                       ) : enrollmentsError ? (
-                        <tr>
-                          <td colSpan={8} className="p-8 text-center text-muted-foreground">{enrollmentsError}</td>
-                        </tr>
-                      ) : enrollments.length === 0 ? (
-                        <tr>
-                          <td colSpan={8} className="p-8 text-center text-muted-foreground">No enrollments in the database yet.</td>
-                        </tr>
-                      ) : (
-                        enrollments.map((enrollment) => {
-                          const name = enrollment.student ? `${enrollment.student.firstName} ${enrollment.student.lastName}`.trim() : "—";
-                          const initials = name !== "—" ? name.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—";
-                          const grade = enrollment.student?.gradeLevel ?? "—";
-                          const subject = enrollment.selectedSubjects?.map((s) => s.name).join(", ") || "—";
-                          const date = formatEnrollmentDate(enrollment.enrollmentDate || enrollment.createdAt);
-                          const phone = enrollment.student?.phone ?? "—";
-                          const paymentStatus = enrollment.paymentStatus ?? "pending";
-                          const paymentLabel = paymentStatusLabel(paymentStatus);
-                          const status = enrollmentStatusLabel(enrollment.status);
-                          const canAcceptReject = enrollment.status === "pending" && verifyingId !== enrollment._id;
-                          const isVerifying = verifyingId === enrollment._id;
-                          const studentImg = enrollment.student?.profileImage ? `${uploadsBaseUrl}/uploads/${enrollment.student.profileImage}` : null;
+                        <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">{enrollmentsError}</td></tr>
+                      ) : (() => {
+                        const filtered = enrollments.filter((e) => {
+                          const statusMatch = enrollmentStatusFilter === 'all' || e.status === enrollmentStatusFilter;
+                          if (!statusMatch) return false;
+                          if (!enrollmentSearch.trim()) return true;
+                          const q = enrollmentSearch.toLowerCase();
+                          const eAny = e as Record<string, unknown>;
+                          const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+                          const eid = String(eAny.enrollmentId || '').toLowerCase();
+                          const studentName = snap
+                            ? `${snap.firstName || ''} ${snap.lastName || ''}`.toLowerCase()
+                            : '';
+                          const parentAny = eAny.parent as { firstName?: string; lastName?: string } | undefined;
+                          const parentName = parentAny ? `${parentAny.firstName || ''} ${parentAny.lastName || ''}`.toLowerCase() : '';
+                          return studentName.includes(q) || eid.includes(q) || parentName.includes(q);
+                        });
+                        if (filtered.length === 0) return (
+                          <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No enrollments match the selected filter.</td></tr>
+                        );
+                        return filtered.map((enrollment) => {
+                          const eAny = enrollment as Record<string, unknown>;
+                          const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+                          // Student name always comes from studentSnapshot — the child is not a separate User
+                          const name = snap
+                            ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim()
+                            : '—';
+                          const packages = (eAny.packages as { displayName?: string }[] | undefined) || [];
+                          const programsLabel = packages.length > 0
+                            ? packages.map((p) => p.displayName || '').join(', ')
+                            : enrollment.selectedSubjects?.map((s) => s.name).join(', ') || '—';
+                          const enrollmentId = String(eAny.enrollmentId || enrollment._id);
+                          const latestPayment = (eAny.latestPayment as { status?: string; paymentMethod?: string; amountDue?: number; _id?: string } | undefined);
+                          const payMethod = latestPayment?.paymentMethod || '';
+                          const payStatus = latestPayment?.status || enrollment.paymentStatus || 'pending';
+                          const isActionable = ['submitted', 'payment_under_verification', 'pending_approval', 'pending'].includes(enrollment.status);
+                          const statusColors: Record<string, string> = {
+                            approved: 'bg-emerald-100 text-emerald-800', active: 'bg-emerald-100 text-emerald-800',
+                            pending_approval: 'bg-purple-100 text-purple-800',
+                            payment_under_verification: 'bg-amber-100 text-amber-800',
+                            submitted: 'bg-blue-100 text-blue-800', pending: 'bg-blue-100 text-blue-800',
+                            rejected: 'bg-red-100 text-red-800', cancelled: 'bg-gray-100 text-gray-700',
+                            draft: 'bg-gray-100 text-gray-600',
+                          };
+                          const sc = statusColors[enrollment.status] || 'bg-muted text-muted-foreground';
                           return (
-                            <tr key={enrollment._id} className="hover:bg-muted/50 transition-colors">
-                              <td className="p-4">
-                                <div className="flex items-center gap-3">
-                                  <UserAvatar src={studentImg} fallback={initials} size={8} />
-                                  <span className="font-medium text-foreground">{name}</span>
+                            <tr key={enrollment._id} className="hover:bg-muted/40 transition-colors">
+                              <td className="p-3 font-mono text-xs text-foreground">{enrollmentId !== enrollment._id ? enrollmentId : enrollment._id.slice(-8)}</td>
+                              <td className="p-3 font-medium text-foreground">{name || '—'}</td>
+                              <td className="p-3 text-xs text-muted-foreground max-w-[160px] truncate" title={programsLabel}>{programsLabel}</td>
+                              <td className="p-3">
+                                <div className="text-xs space-y-0.5">
+                                  <span className={`px-2 py-0.5 rounded-full font-medium ${payStatus === 'verified' ? 'bg-emerald-100 text-emerald-800' : payStatus === 'submitted' ? 'bg-amber-100 text-amber-800' : payStatus === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-muted text-muted-foreground'}`}>{payStatus}</span>
+                                  {payMethod && <div className="text-muted-foreground">{payMethod}</div>}
                                 </div>
                               </td>
-                              <td className="p-4 text-muted-foreground">{grade}</td>
-                              <td className="p-4 text-muted-foreground">{subject}</td>
-                              <td className="p-4 text-muted-foreground">{date}</td>
-                              <td className="p-4 text-muted-foreground text-xs">{phone}</td>
-                              <td className="p-4">
-                                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                                  paymentStatus === "paid" ? "bg-success/10 text-success"
-                                    : paymentStatus === "pending_verification" ? "bg-info/10 text-info"
-                                    : paymentStatus === "failed" ? "bg-destructive/10 text-destructive"
-                                    : "bg-warning/10 text-warning"
-                                }`}>{paymentLabel}</span>
-                              </td>
-                              <td className="p-4">
-                                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                                  status === "confirmed" ? "bg-success/10 text-success"
-                                    : status === "pending" ? "bg-warning/10 text-warning"
-                                    : status === "cancelled" ? "bg-destructive/10 text-destructive"
-                                    : "bg-info/10 text-info"
-                                }`}>{status}</span>
-                              </td>
-                              <td className="p-4">
+                              <td className="p-3"><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sc}`}>{enrollment.status}</span></td>
+                              <td className="p-3 text-xs text-muted-foreground">{formatEnrollmentDate(enrollment.enrollmentDate || enrollment.createdAt)}</td>
+                              <td className="p-3">
                                 <div className="flex items-center gap-1 flex-wrap">
-                                  {canAcceptReject && (
+                                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleViewEnrollment(enrollment._id)}>View</Button>
+                                  {isActionable && enrollment.status !== 'approved' && enrollment.status !== 'rejected' && (
                                     <>
-                                      <Button
-                                        variant="default"
-                                        size="sm"
-                                        className="bg-success hover:bg-success/90 text-success-foreground"
-                                        onClick={() => handleAcceptEnrollment(enrollment._id)}
-                                        disabled={isVerifying}
-                                      >
-                                        {isVerifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-                                        Accept
+                                      {latestPayment?._id && (enrollment.status === 'submitted' || enrollment.status === 'payment_under_verification') && (
+                                        <Button variant="outline" size="sm" className="h-7 text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                                          onClick={() => openVerifyPaymentDialog(enrollment._id, latestPayment._id!)}>
+                                          Verify Pay
+                                        </Button>
+                                      )}
+                                      {/* Approve is available at every actionable stage so admin is never blocked */}
+                                      <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                                        disabled={verifyingId === enrollment._id}
+                                        onClick={() => handleAcceptEnrollment(enrollment._id)}>
+                                        {verifyingId === enrollment._id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3 mr-1" />}Approve
                                       </Button>
-                                      <Button
-                                        variant="destructive"
-                                        size="sm"
-                                        onClick={() => handleRejectEnrollment(enrollment._id)}
-                                        disabled={isVerifying}
-                                      >
-                                        <X className="h-4 w-4 mr-1" />
-                                        Reject
+                                      <Button variant="destructive" size="sm" className="h-7 text-xs"
+                                        onClick={() => openRejectDialog(enrollment._id)}>
+                                        <X className="h-3 w-3 mr-1" />Reject
                                       </Button>
                                     </>
                                   )}
-                                  <Button variant="ghost" size="sm" onClick={() => handleViewEnrollment(enrollment._id)}>View</Button>
                                 </div>
                               </td>
                             </tr>
                           );
-                        })
-                      )}
+                        });
+                      })()}
                     </tbody>
                   </table>
                 </div>
@@ -4042,22 +4130,30 @@ export default function AdminDashboard() {
                                 </div>
                               </td>
                               <td className="p-4">
-                                <span className={`text-xs px-2 py-1 rounded-full font-medium capitalize ${roleColors[u.role] || "bg-muted text-muted-foreground"}`}>{u.role.replace("_", " ")}</span>
+                                <span className={`text-xs px-2 py-1 rounded-full font-medium capitalize ${roleColors[u.role] || "bg-muted text-muted-foreground"}`}>{formatRoleLabel(u.role)}</span>
                               </td>
                               <td className="p-4 text-muted-foreground text-sm">{u.email}</td>
                               <td className="p-4 text-muted-foreground text-sm">{u.phone ?? "—"}</td>
                               <td className="p-4">
-                                <span
-                                  className={`text-xs px-2 py-1 rounded-full font-medium ${
-                                    status === "active"
-                                      ? "bg-success/10 text-success"
-                                      : status === "archived"
-                                      ? "bg-destructive/10 text-destructive"
-                                      : "bg-muted text-muted-foreground"
-                                  }`}
-                                >
-                                  {status}
-                                </span>
+                                <div className="flex flex-col gap-1">
+                                  <span
+                                    className={`text-xs px-2 py-1 rounded-full font-medium w-fit ${
+                                      status === "active"
+                                        ? "bg-success/10 text-success"
+                                        : status === "archived"
+                                        ? "bg-destructive/10 text-destructive"
+                                        : "bg-muted text-muted-foreground"
+                                    }`}
+                                  >
+                                    {status}
+                                  </span>
+                                  {/* Show enrollment status for parent/student so admin can track progress */}
+                                  {(u.role === "parent" || u.role === "student") && u.enrollmentStatus && u.enrollmentStatus !== "active" && (
+                                    <span className="text-xs text-muted-foreground">
+                                      {u.enrollmentStatus.replace(/_/g, " ")}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="p-4">
                                 <div className="flex gap-1">
@@ -5329,105 +5425,235 @@ export default function AdminDashboard() {
       <Dialog open={!!viewEnrollmentId} onOpenChange={(open) => !open && setViewEnrollmentId(null)}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Enrollment Details & Proof of Payment</DialogTitle>
-            <DialogDescription>Review student info and uploaded payment proof before approving.</DialogDescription>
+            <DialogTitle>Enrollment Details</DialogTitle>
+            <DialogDescription>Review student info, payment proof, and consent before taking action.</DialogDescription>
           </DialogHeader>
           {viewEnrollmentLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : viewEnrollmentData ? (
-            <div className="space-y-6">
-              <div className="p-4 bg-muted rounded-lg space-y-2">
-                <h4 className="font-semibold text-foreground">Student & Enrollment</h4>
-                <p className="text-sm text-muted-foreground">
-                  <span className="font-medium text-foreground">{viewEnrollmentData.enrollment.student ? [viewEnrollmentData.enrollment.student.firstName, viewEnrollmentData.enrollment.student.lastName].filter(Boolean).join(" ") : "—"}</span>
-                  {" · "}
-                  Grade: {viewEnrollmentData.enrollment.student?.gradeLevel ?? "—"}
-                  {" · "}
-                  Total: ₱{(viewEnrollmentData.enrollment.totalFee ?? 0).toLocaleString()} ({viewEnrollmentData.enrollment.paymentOption ?? "—"})
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Contact: {viewEnrollmentData.enrollment.student?.email ?? "—"} · {viewEnrollmentData.enrollment.student?.phone ?? "—"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Guardian: {viewEnrollmentData.enrollment.student && "guardianName" in viewEnrollmentData.enrollment.student ? (viewEnrollmentData.enrollment.student as { guardianName?: string; guardianPhone?: string }).guardianName : "—"}
-                  {" · "}
-                  {viewEnrollmentData.enrollment.student && "guardianPhone" in viewEnrollmentData.enrollment.student ? (viewEnrollmentData.enrollment.student as { guardianPhone?: string }).guardianPhone : "—"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Subjects: {viewEnrollmentData.enrollment.selectedSubjects?.map((s) => s.name).join(", ") || "—"}
-                </p>
-              </div>
-              <div className="space-y-3">
-                <h4 className="font-semibold text-foreground">Payment(s) & Proof</h4>
-                {viewEnrollmentData.payments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No payment records yet.</p>
-                ) : (
-                  viewEnrollmentData.payments.map((p) => (
-                    <div key={p._id} className="p-4 border border-border rounded-lg space-y-2">
-                      <p className="text-sm font-medium text-foreground">
-                        Reference: <span className="font-mono">{p.referenceNumber ?? p._id}</span> · ₱{(p.amount ?? 0).toLocaleString()} · {p.status}
-                      </p>
-                      {p.gcashDetails?.transactionId && (
-                        <p className="text-xs text-muted-foreground">GCash Transaction ID: {p.gcashDetails.transactionId}</p>
-                      )}
-                      {p.gcashDetails?.screenshotUrl ? (
-                        <div className="mt-2">
-                          <p className="text-xs text-muted-foreground mb-1">Proof of Payment:</p>
-                          <button
-                            type="button"
-                            onClick={() => openPaymentProof(p.gcashDetails?.screenshotUrl, p.referenceNumber ?? p._id)}
-                            className="group block overflow-hidden rounded border border-border bg-muted transition hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                          >
-                            <img
-                              src={resolvePaymentProofUrl(p.gcashDetails.screenshotUrl)}
-                              alt="Payment receipt"
-                              className="max-w-full max-h-64 object-contain rounded bg-muted cursor-zoom-in transition group-hover:scale-[1.01]"
-                            />
-                          </button>
-                          <p className="mt-2 text-[11px] text-muted-foreground">Click the image to open and zoom.</p>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">No screenshot uploaded.</p>
-                      )}
-                    </div>
-                  ))
+            <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+          ) : viewEnrollmentData ? (() => {
+            const e = viewEnrollmentData.enrollment;
+            const eAny = e as Record<string, unknown>;
+            const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string; birthdate?: string; computedAge?: number } | undefined;
+            const parent = eAny.parent as { firstName?: string; lastName?: string; email?: string; phone?: string } | undefined;
+            const packages = (eAny.packages as { displayName?: string; price?: number; paymentOption?: string }[] | undefined) || [];
+            const preferredStart = eAny.preferredStartDate ? new Date(String(eAny.preferredStartDate)).toLocaleDateString('en-PH') : '—';
+            const preferredTime = String(eAny.preferredTime || '—');
+            const healthInfo = eAny.healthInfo as { allergies?: string; medications?: string; specialNeeds?: boolean; specialNeedsDetails?: string } | undefined;
+            const consentItems = (eAny.consentItems as { name?: string; accepted?: boolean }[] | undefined) || [];
+            const statusHistory = (eAny.statusHistory as { status?: string; at?: string; byRole?: string; note?: string }[] | undefined) || [];
+            const statusColors: Record<string, string> = {
+              approved: 'bg-emerald-100 text-emerald-800', active: 'bg-emerald-100 text-emerald-800',
+              pending_approval: 'bg-purple-100 text-purple-800', payment_under_verification: 'bg-amber-100 text-amber-800',
+              submitted: 'bg-blue-100 text-blue-800', pending: 'bg-blue-100 text-blue-800',
+              rejected: 'bg-red-100 text-red-800', cancelled: 'bg-gray-100 text-gray-700', draft: 'bg-gray-100 text-gray-600',
+            };
+            const sc = statusColors[e.status] || 'bg-muted text-muted-foreground';
+            const isActionable = ['submitted','payment_under_verification','pending_approval','pending'].includes(e.status);
+            return (
+              <div className="space-y-5">
+                {/* Status badge */}
+                <div className="flex items-center gap-3">
+                  {eAny.enrollmentId && <span className="font-mono font-bold text-foreground">{String(eAny.enrollmentId)}</span>}
+                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${sc}`}>{e.status}</span>
+                  {(eAny.allowResubmission as boolean) && <span className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-800 font-medium">Resubmission Allowed</span>}
+                </div>
+
+                {/* Parent info */}
+                {parent && (
+                  <div className="p-3 bg-muted rounded-lg text-sm space-y-1">
+                    <p className="font-semibold text-foreground text-xs uppercase tracking-wide mb-1">Parent / Guardian</p>
+                    <p>{[parent.firstName, parent.lastName].filter(Boolean).join(' ') || '—'}</p>
+                    <p className="text-muted-foreground">{parent.email} · {parent.phone}</p>
+                  </div>
                 )}
-              </div>
-              <DialogFooter>
-                  <Button variant="outline" onClick={() => setViewEnrollmentId(null)}>
-                    Close
-                  </Button>
-                  {viewEnrollmentData.enrollment.status === "pending" && (
+
+                {/* Student info */}
+                <div className="p-3 bg-muted rounded-lg text-sm space-y-1">
+                  <p className="font-semibold text-foreground text-xs uppercase tracking-wide mb-1">Student (Child)</p>
+                  {snap ? (
                     <>
-                      <Button
-                        className="bg-success hover:bg-success/90 text-success-foreground"
-                        onClick={() => {
-                          if (viewEnrollmentId) handleAcceptEnrollment(viewEnrollmentId);
-                          setViewEnrollmentId(null);
-                        }}
-                        disabled={verifyingId === viewEnrollmentId}
-                      >
-                        {verifyingId === viewEnrollmentId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-                        Approve
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        onClick={() => {
-                          if (viewEnrollmentId) handleRejectEnrollment(viewEnrollmentId);
-                          setViewEnrollmentId(null);
-                        }}
-                        disabled={verifyingId === viewEnrollmentId}
-                      >
-                        <X className="h-4 w-4 mr-1" />
-                        Reject
-                      </Button>
+                      <p>{[snap.firstName, snap.lastName].filter(Boolean).join(' ') || '—'}</p>
+                      {snap.birthdate && <p className="text-muted-foreground">Born: {new Date(snap.birthdate).toLocaleDateString('en-PH')} · Age: {snap.computedAge ? `${snap.computedAge.toFixed(1)} yrs` : '—'}</p>}
+                      {(eAny.studentId as string) && <p className="text-muted-foreground">Student ID: <span className="font-mono font-semibold text-foreground">{String(eAny.studentId)}</span></p>}
                     </>
+                  ) : <p className="text-muted-foreground">—</p>}
+                  {(eAny.preferredStartDate as string) && <p className="text-muted-foreground">Preferred start: {preferredStart} ({preferredTime})</p>}
+                </div>
+
+                {/* Programs */}
+                {packages.length > 0 && (
+                  <div className="p-3 bg-muted rounded-lg text-sm">
+                    <p className="font-semibold text-foreground text-xs uppercase tracking-wide mb-2">Programs Selected</p>
+                    {packages.map((pkg, i) => (
+                      <div key={i} className="flex justify-between"><span>{pkg.displayName}</span><span className="font-medium">₱{(pkg.price || 0).toLocaleString()}</span></div>
+                    ))}
+                    <div className="border-t border-border mt-2 pt-2 flex justify-between font-bold">
+                      <span>Total Fee</span><span>₱{(e.totalFee || 0).toLocaleString()} ({e.paymentOption})</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Health info */}
+                {healthInfo && (healthInfo.allergies || healthInfo.medications || healthInfo.specialNeeds) && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                    <p className="font-semibold text-amber-800 text-xs uppercase tracking-wide mb-1">Health Info</p>
+                    {healthInfo.allergies && <p><strong>Allergies:</strong> {healthInfo.allergies}</p>}
+                    {healthInfo.medications && <p><strong>Medications:</strong> {healthInfo.medications}</p>}
+                    {healthInfo.specialNeeds && <p><strong>Special needs:</strong> {healthInfo.specialNeedsDetails || 'Yes'}</p>}
+                  </div>
+                )}
+
+                {/* Consent */}
+                {consentItems.length > 0 && (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm">
+                    <p className="font-semibold text-emerald-800 text-xs uppercase tracking-wide mb-2">Consent</p>
+                    {consentItems.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <CheckCircle2 className={`h-4 w-4 flex-shrink-0 ${c.accepted ? 'text-emerald-600' : 'text-red-500'}`} />
+                        <span className="text-xs">{c.name?.replace(/_/g, ' ')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Payments + Proof */}
+                <div className="space-y-3">
+                  <h4 className="font-semibold text-foreground text-sm">Payment(s) & Proof</h4>
+                  {viewEnrollmentData.payments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No payment records yet.</p>
+                  ) : viewEnrollmentData.payments.map((p) => {
+                    const proofSrc = p.proofUrl || p.gcashDetails?.screenshotUrl;
+                    return (
+                      <div key={p._id} className="p-4 border border-border rounded-lg space-y-2">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-sm font-medium">Ref: <span className="font-mono">{p.referenceNumber || p._id.slice(-8)}</span></p>
+                            <p className="text-xs text-muted-foreground">Method: {p.paymentMethod || '—'} · Amount: ₱{(p.amountDue || p.amount || 0).toLocaleString()}</p>
+                            {p.payerReference && <p className="text-xs text-muted-foreground">Payer ref: {p.payerReference}</p>}
+                            {p.resubmissionCount && p.resubmissionCount > 0 ? <p className="text-xs text-amber-600">Resubmitted {p.resubmissionCount}×</p> : null}
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${p.status === 'verified' ? 'bg-emerald-100 text-emerald-800' : p.status === 'submitted' ? 'bg-amber-100 text-amber-800' : p.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-muted text-muted-foreground'}`}>{p.status}</span>
+                        </div>
+                        {proofSrc ? (
+                          <div>
+                            <p className="text-xs text-muted-foreground mb-1">Proof of Payment:</p>
+                            {String(proofSrc).endsWith('.pdf') ? (
+                              <a href={resolvePaymentProofUrl(proofSrc)} target="_blank" rel="noopener noreferrer" className="text-primary text-xs underline">Open PDF proof</a>
+                            ) : (
+                              <button type="button" onClick={() => openPaymentProof(proofSrc, p.referenceNumber || p._id)}
+                                className="block overflow-hidden rounded border border-border hover:border-primary/40">
+                                <img src={resolvePaymentProofUrl(proofSrc)} alt="Payment proof" className="max-w-full max-h-48 object-contain rounded cursor-zoom-in" />
+                              </button>
+                            )}
+                          </div>
+                        ) : <p className="text-xs text-muted-foreground">No proof uploaded yet.</p>}
+                        {p.status === 'submitted' && (
+                          <div className="flex gap-2 pt-1">
+                            <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                              onClick={() => openVerifyPaymentDialog(viewEnrollmentId!, p._id)}>
+                              <Check className="h-3 w-3" /> Verify Payment
+                            </Button>
+                            <Button size="sm" variant="destructive" className="h-7 text-xs gap-1"
+                              onClick={() => { setVerifyPaymentTarget({ enrollmentId: viewEnrollmentId!, paymentId: p._id }); setVerifyPaymentNote(''); handleConfirmVerifyPayment(false); }}>
+                              <X className="h-3 w-3" /> Reject Payment
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Rejection reason */}
+                {e.status === 'rejected' && (eAny.rejectionReason as string) && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
+                    <p className="font-semibold text-red-800 mb-1">Rejection Reason</p>
+                    <p className="text-red-700">{String(eAny.rejectionReason)}</p>
+                  </div>
+                )}
+
+                {/* Status history */}
+                {statusHistory.length > 0 && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground font-medium">Status History ({statusHistory.length})</summary>
+                    <ol className="mt-2 space-y-1 pl-3 border-l border-border">
+                      {statusHistory.map((h, i) => (
+                        <li key={i}><span className="font-semibold">{h.status}</span> — {h.at ? new Date(h.at).toLocaleString('en-PH') : '—'} {h.byRole ? `(${h.byRole})` : ''} {h.note ? `· ${h.note}` : ''}</li>
+                      ))}
+                    </ol>
+                  </details>
+                )}
+
+                <DialogFooter className="flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setViewEnrollmentId(null)}>Close</Button>
+                  {isActionable && e.status === 'pending_approval' && (
+                    <Button className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                      disabled={verifyingId === viewEnrollmentId}
+                      onClick={() => { if (viewEnrollmentId) handleAcceptEnrollment(viewEnrollmentId); }}>
+                      {verifyingId === viewEnrollmentId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Approve Enrollment
+                    </Button>
+                  )}
+                  {isActionable && (
+                    <Button variant="destructive" className="gap-1" onClick={() => { if (viewEnrollmentId) openRejectDialog(viewEnrollmentId); }}>
+                      <X className="h-4 w-4" /> Reject Enrollment
+                    </Button>
                   )}
                 </DialogFooter>
+              </div>
+            );
+          })() : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Enrollment Dialog */}
+      <Dialog open={!!rejectEnrollmentId} onOpenChange={(open) => !open && setRejectEnrollmentId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject Enrollment</DialogTitle>
+            <DialogDescription>Provide a reason. The parent will be notified by email.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="rejectReason">Reason *</Label>
+              <textarea id="rejectReason" rows={3} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="e.g. Payment proof unclear, please resubmit a clearer screenshot."
+                value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
             </div>
-          ) : null}
+            <div className="flex items-center gap-2">
+              <Checkbox id="allowResubmit" checked={rejectAllowResubmit} onCheckedChange={(v) => setRejectAllowResubmit(Boolean(v))} />
+              <Label htmlFor="allowResubmit" className="cursor-pointer font-normal">Allow parent to resubmit payment proof</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectEnrollmentId(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={rejectLoading || !rejectReason.trim()} onClick={handleConfirmReject}>
+              {rejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Confirm Rejection
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Verify Payment Dialog */}
+      <Dialog open={verifyPaymentDialogOpen} onOpenChange={(open) => !open && setVerifyPaymentDialogOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Verify Payment</DialogTitle>
+            <DialogDescription>Confirm that the uploaded proof is valid and the payment amount matches.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="verifyNote">Admin Note (optional)</Label>
+              <Input id="verifyNote" placeholder="e.g. Verified GCash transaction #12345"
+                value={verifyPaymentNote} onChange={(e) => setVerifyPaymentNote(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVerifyPaymentDialogOpen(false)}>Cancel</Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1" disabled={verifyPaymentLoading}
+              onClick={() => handleConfirmVerifyPayment(true)}>
+              {verifyPaymentLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Verify Payment
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

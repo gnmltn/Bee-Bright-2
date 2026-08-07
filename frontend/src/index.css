@@ -121,10 +121,11 @@
     --input: 220 25% 22%;
     --ring: 38 92% 50%;
 
-    --gradient-primary: linear-gradient(135deg, hsl(38 92% 50%), hsl(25 95% 53%));
-    --gradient-hero: linear-gradient(135deg, hsl(38 92% 50%) 0%, hsl(43 96% 56%) 50%, hsl(25 95% 53%) 100%);
-    --gradient-card: linear-gradient(180deg, hsl(220 25% 14%) 0%, hsl(220 25% 10%) 100%);
-    --gradient-dark: linear-gradient(135deg, hsl(220 25% 8%) 0%, hsl(220 30% 15%) 100%);
+    /* Dark mode — solid colors, no gradients */
+    --gradient-primary: hsl(38 92% 50%);
+    --gradient-hero: hsl(38 92% 50%);
+    --gradient-card: hsl(220 25% 14%);
+    --gradient-dark: hsl(220 25% 8%);
 
     --shadow-glow: 0 0 30px hsl(38 92% 50% / 0.2);
 
@@ -183,6 +184,11 @@
   .gradient-text {
     @apply bg-clip-text text-transparent;
     background-image: var(--gradient-hero);
+  }
+  .dark .gradient-text {
+    /* In dark mode use solid amber instead of gradient */
+    background-image: none;
+    @apply text-primary;
   }
 
   /* Card with hover effect */
@@ -264,5 +270,15 @@
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* Dark mode — remove all gradient backgrounds, use solid colors only */
+  .dark .bg-gradient-to-br,
+  .dark .bg-gradient-to-b,
+  .dark .bg-gradient-to-r,
+  .dark .bg-gradient-to-tr,
+  .dark .bg-gradient-to-tl,
+  .dark [class*="bg-gradient"] {
+    background-image: none !important;
   }
 }

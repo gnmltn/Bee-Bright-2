@@ -1,1114 +1,743 @@
+/**
+ * Enrollment Controller — redesigned for Bee Bright v2
+ * Supports: parent wizard flow, age-based program selection,
+ * GCash/SeaBank/BDO payments, granular status FSM.
+ */
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
+const mongoose = require('mongoose');
 const Enrollment = require('../models/Enrollment');
+const Payment = require('../models/Payment');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
-const Payment = require('../models/Payment');
+const Pricing = require('../models/Pricing');
 const EnrollmentVerification = require('../models/EnrollmentVerification');
-const paymentConfig = require('../config/payment.config');
-const { getGcashPublicDetails } = require('../utils/gcashDetails');
-const {
-  sendEnrollmentRejectionEmail,
-  sendEnrollmentVerificationEmail,
-  getEmailErrorMessage,
-  logEmailError,
-} = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
-const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { validateName, validatePhoneNoLetters } = require('../utils/validation');
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
+const { computeAge } = require('../utils/ageEligibility');
+const {
+  generateEnrollmentId,
+  computeAmounts,
+  pushStatusHistory,
+  sendEnrollmentConfirmationEmail,
+  sendEnrollmentApprovedEmail,
+  sendEnrollmentRejectedEmail,
+  sendPaymentVerifiedEmail,
+} = require('../services/enrollmentService');
+const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
 
-// All programs: Monday-Saturday 8:00 AM - 6:00 PM (for scheduling flow)
-const DEFAULT_SCHEDULE = 'Mon - Sat 8:00 AM - 6:00 PM';
-
-// Map frontend service ids to Subject codes and full definitions (create if missing)
-const SERVICE_CODE_MAP = {
-  toddlers: 'TPG101',
-  prek: 'PKR105',
-  academic: 'ACT102',
-  sped: 'SPT103',
-  examprep: 'EXP106',
-  kinder: 'KRP104'
-};
-
-const SUBJECT_CATALOG = {
-  TPG101: { name: 'Toddlers Playgroup', schedule: DEFAULT_SCHEDULE, price: 3000, description: 'Socialization, sensory play, early development' },
-  PKR105: { name: 'Pre-Kindergarten Readiness Program', schedule: DEFAULT_SCHEDULE, price: 3200, description: 'Foundational academic skills, phonics, basic reading & writing' },
-  ACT102: { name: 'Academic Tutorial', schedule: DEFAULT_SCHEDULE, price: 2500, description: 'Subject-based support Grade 1 to Junior High' },
-  SPT103: { name: 'SPED Tutorial', schedule: DEFAULT_SCHEDULE, price: 3500, description: 'Individualized learning support, IEP-based' },
-  EXP106: { name: 'Examination Preparation', schedule: DEFAULT_SCHEDULE, price: 3500, description: 'Test mastery, mock exams, test-taking strategies' },
-  KRP104: { name: 'Kindergarten Readiness Program', schedule: DEFAULT_SCHEDULE, price: 3000, description: 'School-entry preparation, reading & writing readiness' }
-};
-
-// Ensure subjects exist in DB (create if missing) and return their IDs in the same order as codes
-async function ensureSubjectsByCodes(codes) {
-  const subjectIds = [];
-  for (const code of codes) {
-    let subject = await Subject.findOne({ code });
-    if (!subject) {
-      const def = SUBJECT_CATALOG[code];
-      if (!def) continue;
-      subject = await Subject.create({
-        code,
-        name: def.name,
-        schedule: def.schedule,
-        price: def.price,
-        description: def.description || def.name,
-        duration: '2 hours per session',
-        capacity: 20
-      });
-    }
-    subjectIds.push(subject._id);
-  }
-  return subjectIds;
-}
-
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '30d'
-  });
-};
-
+// ── Constants ────────────────────────────────────────────────────────────
+const PROOF_DIR = path.join(__dirname, '..', 'uploads', 'payments');
+const MAX_PROOF_BYTES = 8 * 1024 * 1024; // 8 MB
+const ALLOWED_PROOF_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
 const ENROLLMENT_OTP_EXPIRES_MINUTES = 5;
 const ENROLLMENT_OTP_RESEND_SECONDS = 120;
 const ENROLLMENT_OTP_MAX_ATTEMPTS = 5;
 const ENROLLMENT_VERIFIED_WINDOW_MINUTES = 30;
 
-const generateCheckoutToken = () => crypto.randomBytes(24).toString('hex');
-const normalizeEmail = (email = '') => email.trim().toLowerCase();
-const generateOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
-const hashOtpCode = (otp) => crypto.createHash('sha256').update(String(otp)).digest('hex');
+const VALID_PAYMENT_METHODS = ['gcash', 'seabank', 'bdo'];
+const VALID_PREFERRED_TIMES = ['morning', 'afternoon', 'no_preference'];
 
-const isRecentlyVerified = (verification) => {
-  if (!verification?.verifiedAt) return false;
-  const cutoff = Date.now() - ENROLLMENT_VERIFIED_WINDOW_MINUTES * 60 * 1000;
-  return verification.verifiedAt.getTime() >= cutoff;
+// ── Helpers ──────────────────────────────────────────────────────────────
+const normalizeEmail = (v = '') => String(v).trim().toLowerCase();
+const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+const hashOtp = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+
+const ensureProofDir = () => {
+  if (!fs.existsSync(PROOF_DIR)) fs.mkdirSync(PROOF_DIR, { recursive: true });
 };
 
-const normalizeIdArray = (values) => {
-  const set = new Set();
-  for (const value of Array.isArray(values) ? values : []) {
-    const id = String(value || '').trim();
-    if (id) set.add(id);
+function saveProofFromDataUrl(dataUrl, enrollmentId) {
+  if (!dataUrl || typeof dataUrl !== 'string') return null;
+  if (dataUrl.startsWith('/uploads/payments/')) return dataUrl;
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg)|application\/pdf);base64,(.+)$/i);
+  if (!match) throw Object.assign(new Error('Proof must be a JPG, PNG, or PDF.'), { statusCode: 400 });
+  const buf = Buffer.from(match[2], 'base64');
+  if (!buf.length) throw Object.assign(new Error('Proof file is empty.'), { statusCode: 400 });
+  if (buf.length > MAX_PROOF_BYTES) throw Object.assign(new Error('Proof file must be 8 MB or less.'), { statusCode: 400 });
+  ensureProofDir();
+  const ext = match[1].includes('pdf') ? 'pdf' : (match[1].includes('png') ? 'png' : 'jpg');
+  const filename = `proof-${String(enrollmentId)}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+  fs.writeFileSync(path.join(PROOF_DIR, filename), buf);
+  return `/uploads/payments/${filename}`;
+}
+
+// ── Legacy subject catalog (kept for backward compat) ────────────────────
+const SERVICE_CODE_MAP = {
+  toddlers: 'TPG101', prek: 'PKR105', academic: 'ACT102',
+  sped: 'SPT103', examprep: 'EXP106', kinder: 'KRP104',
+};
+const SUBJECT_CATALOG = {
+  TPG101: { name: 'Toddlers Playgroup', price: 2800, description: 'Socialization, sensory play, early development' },
+  PKR105: { name: 'Pre-Kindergarten Readiness Program', price: 3200, description: 'Foundational academic skills' },
+  ACT102: { name: 'Academic Tutorial', price: 2400, description: 'Subject-based support' },
+  SPT103: { name: 'SPED Tutorial', price: 3500, description: 'Individualized learning support' },
+  EXP106: { name: 'Examination Preparation', price: 1250, description: 'Test mastery, mock exams' },
+  KRP104: { name: 'Kindergarten Readiness Program', price: 3000, description: 'School-entry preparation' },
+};
+async function ensureSubjectsByCodes(codes) {
+  const ids = [];
+  for (const code of codes) {
+    let s = await Subject.findOne({ code });
+    if (!s) {
+      const def = SUBJECT_CATALOG[code];
+      if (!def) continue;
+      s = await Subject.create({ code, name: def.name, price: def.price,
+        description: def.description, duration: '2 hours per session', capacity: 20,
+        schedule: 'Mon - Sat 8:00 AM - 6:00 PM' });
+    }
+    ids.push(s._id);
   }
-  return Array.from(set);
-};
+  return ids;
+}
 
-const findDuplicateActiveEnrollment = async (studentId, subjectIds) => {
-  if (!studentId || !subjectIds?.length) return null;
-  return Enrollment.findOne({
-    student: studentId,
-    status: { $in: ['pending', 'active'] },
-    selectedSubjects: { $all: subjectIds, $size: subjectIds.length }
-  }).sort({ createdAt: -1 });
-};
-
-
-// @desc    Send enrollment email verification code
-// @route   POST /api/enrollments/send-verification-code
-// @access  Public
+// ═══════════════════════════════════════════════════════════════════════════
+//  LEGACY EMAIL OTP  (used by old 3-step enrollment form still at /enrollment)
+// ═══════════════════════════════════════════════════════════════════════════
 const sendEnrollmentVerificationCode = async (req, res) => {
   try {
     const normalizedEmail = normalizeEmail(req.body?.email || '');
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
+      return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
 
-    if (!emailRegex.test(normalizedEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid email address.',
-      });
-    }
+    let v = await EnrollmentVerification.findOne({ email: normalizedEmail })
+      .select('+otpHash +otpExpiresAt +otpAttempts +lastSentAt');
+    if (!v) v = new EnrollmentVerification({ email: normalizedEmail });
 
-    let verification = await EnrollmentVerification.findOne({ email: normalizedEmail }).select(
-      '+otpHash +otpExpiresAt +otpAttempts +lastSentAt'
-    );
+    if (v.lastSentAt && Date.now() - v.lastSentAt.getTime() < ENROLLMENT_OTP_RESEND_SECONDS * 1000)
+      return res.status(429).json({ success: false,
+        message: `Please wait ${ENROLLMENT_OTP_RESEND_SECONDS} seconds before requesting another code.` });
 
-    if (!verification) {
-      verification = new EnrollmentVerification({ email: normalizedEmail });
-    }
+    const otp = generateOtp();
+    v.otpHash = hashOtp(otp);
+    v.otpExpiresAt = new Date(Date.now() + ENROLLMENT_OTP_EXPIRES_MINUTES * 60 * 1000);
+    v.otpAttempts = 0;
+    v.verifiedAt = null;
+    await v.save();
 
-    if (
-      verification.lastSentAt &&
-      Date.now() - verification.lastSentAt.getTime() < ENROLLMENT_OTP_RESEND_SECONDS * 1000
-    ) {
-      return res.status(429).json({
-        success: false,
-        message: `Please wait ${ENROLLMENT_OTP_RESEND_SECONDS} seconds before requesting another code.`,
-      });
-    }
+    const { sendEnrollmentVerificationEmail } = require('../utils/emailService');
+    await sendEnrollmentVerificationEmail(normalizedEmail, otp, ENROLLMENT_OTP_EXPIRES_MINUTES);
+    v.lastSentAt = new Date();
+    await v.save();
 
-    const otp = generateOtpCode();
-    verification.otpHash = hashOtpCode(otp);
-    verification.otpExpiresAt = new Date(Date.now() + ENROLLMENT_OTP_EXPIRES_MINUTES * 60 * 1000);
-    verification.otpAttempts = 0;
-    verification.verifiedAt = null;
-    await verification.save();
-
-    try {
-      await sendEnrollmentVerificationEmail(normalizedEmail, otp, ENROLLMENT_OTP_EXPIRES_MINUTES);
-      verification.lastSentAt = new Date();
-      await verification.save();
-
-      return res.status(200).json({
-        success: true,
-        message: 'Verification code sent. Please check your email inbox.',
-      });
-    } catch (emailError) {
-      verification.otpHash = undefined;
-      verification.otpExpiresAt = undefined;
-      verification.otpAttempts = 0;
-      verification.lastSentAt = undefined;
-      await verification.save();
-
-      logEmailError('enrollment verification email send failed', emailError, { email: normalizedEmail });
-
-      return res.status(502).json({
-        success: false,
-        message: getEmailErrorMessage(emailError),
-      });
-    }
-  } catch (error) {
-    console.error('sendEnrollmentVerificationCode error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to send verification code.',
-    });
+    return res.status(200).json({ success: true, message: 'Verification code sent.' });
+  } catch (err) {
+    const { logEmailError, getEmailErrorMessage } = require('../utils/emailService');
+    logEmailError('enrollment OTP send', err);
+    return res.status(502).json({ success: false, message: getEmailErrorMessage(err) });
   }
 };
 
-// @desc    Verify enrollment email verification code
-// @route   POST /api/enrollments/verify-email-code
-// @access  Public
 const verifyEnrollmentEmailCode = async (req, res) => {
   try {
     const normalizedEmail = normalizeEmail(req.body?.email || '');
     const code = String(req.body?.code || '').trim();
+    if (!normalizedEmail || !code)
+      return res.status(400).json({ success: false, message: 'Email and code are required.' });
 
-    if (!normalizedEmail || !code) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and verification code are required.',
-      });
+    const v = await EnrollmentVerification.findOne({ email: normalizedEmail })
+      .select('+otpHash +otpExpiresAt +otpAttempts +lastSentAt');
+    if (!v?.otpHash || !v.otpExpiresAt)
+      return res.status(400).json({ success: false, message: 'No verification code found. Request a new one.' });
+    if (new Date() > new Date(v.otpExpiresAt))
+      return res.status(400).json({ success: false, message: 'Code expired. Request a new one.' });
+
+    v.otpAttempts = (v.otpAttempts || 0) + 1;
+    if (v.otpAttempts > ENROLLMENT_OTP_MAX_ATTEMPTS) {
+      await v.save();
+      return res.status(429).json({ success: false, message: 'Too many attempts. Request a new code.' });
     }
-
-    const verification = await EnrollmentVerification.findOne({ email: normalizedEmail }).select(
-      '+otpHash +otpExpiresAt +otpAttempts +lastSentAt'
-    );
-
-    if (!verification?.otpHash || !verification.otpExpiresAt) {
-      return res.status(400).json({
-        success: false,
-        message: 'No active verification code was found for this email.',
-      });
+    if (hashOtp(code) !== v.otpHash) {
+      await v.save();
+      return res.status(400).json({ success: false,
+        message: `Incorrect code. ${ENROLLMENT_OTP_MAX_ATTEMPTS - v.otpAttempts} attempt(s) remaining.` });
     }
-
-    if (verification.otpAttempts >= ENROLLMENT_OTP_MAX_ATTEMPTS) {
-      return res.status(429).json({
-        success: false,
-        message: 'Too many incorrect attempts. Please request a new verification code.',
-      });
-    }
-
-    if (verification.otpExpiresAt.getTime() < Date.now()) {
-      verification.otpHash = undefined;
-      verification.otpExpiresAt = undefined;
-      verification.otpAttempts = 0;
-      await verification.save();
-      return res.status(400).json({
-        success: false,
-        message: 'Verification code has expired. Please request a new one.',
-      });
-    }
-
-    if (verification.otpHash !== hashOtpCode(code)) {
-      verification.otpAttempts += 1;
-      if (verification.otpAttempts >= ENROLLMENT_OTP_MAX_ATTEMPTS) {
-        verification.otpHash = undefined;
-        verification.otpExpiresAt = undefined;
-      }
-      await verification.save();
-      return res.status(400).json({
-        success: false,
-        message:
-          verification.otpAttempts >= ENROLLMENT_OTP_MAX_ATTEMPTS
-            ? 'Too many incorrect attempts. Please request a new verification code.'
-            : 'Incorrect verification code.',
-      });
-    }
-
-    verification.verifiedAt = new Date();
-    verification.otpHash = undefined;
-    verification.otpExpiresAt = undefined;
-    verification.otpAttempts = 0;
-    await verification.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Email verified successfully.',
-      verifiedAt: verification.verifiedAt,
-    });
-  } catch (error) {
-    console.error('verifyEnrollmentEmailCode error:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to verify email code.',
-    });
+    v.verifiedAt = new Date();
+    v.otpHash = undefined; v.otpAttempts = 0;
+    await v.save();
+    return res.status(200).json({ success: true, message: 'Email verified.' });
+  } catch (err) {
+    console.error('verifyEnrollmentEmailCode error:', err);
+    return res.status(500).json({ success: false, message: 'Verification failed.' });
   }
 };
 
-const buildPaymentSessionResponse = async (payment) => {
-  const phpPerEth = paymentConfig.blockchain?.phpPerEth || 250000;
-  const amountEth = Number(payment.amount) / phpPerEth;
-  const method = payment.paymentMethod === 'gcash' ? 'gcash' : 'blockchain';
-
-  const response = {
-    payment: {
-      id: payment._id,
-      _id: payment._id,
-      referenceNumber: payment.referenceNumber,
-      amount: payment.amount,
-      status: payment.status,
-      expiresAt: payment.expiresAt,
-      checkoutToken: payment.checkoutToken || null,
-      paymentMethod: method,
-    },
-  };
-
-  if (method === 'gcash') {
-    return {
-      ...response,
-      gcash: await getGcashPublicDetails(),
-    };
-  }
-
-  return {
-    ...response,
-    blockchain: {
-      amountEth,
-      contractAddress: paymentConfig.blockchain?.contractAddress || '',
-      recipientAddress: paymentConfig.blockchain?.recipientAddress || '',
-      chainId: paymentConfig.blockchain?.chainId ?? 1337,
-      phpPerEth,
-      referenceNumber: payment.referenceNumber
-    }
-  };
-};
-
-const mapPaymentToEnrollmentState = (paymentStatus) => {
-  if (paymentStatus === 'verified') {
-    return { paymentStatus: 'paid', status: 'active' };
-  }
-  if (paymentStatus === 'rejected') {
-    return { paymentStatus: 'failed', status: 'cancelled' };
-  }
-  if (paymentStatus === 'submitted') {
-    return { paymentStatus: 'pending_verification', status: 'pending' };
-  }
-  return { paymentStatus: 'pending', status: 'pending' };
-};
-
-const backfillMissingEnrollmentsFromPayments = async () => {
-  const orphanPayments = await Payment.find({
-    enrollment: { $exists: false },
-    student: { $exists: true, $ne: null },
-    'pendingEnrollment.selectedSubjects.0': { $exists: true },
-    'pendingEnrollment.totalFee': { $exists: true },
-    'pendingEnrollment.paymentOption': { $in: ['full', 'down'] }
-  }).sort({ createdAt: 1 });
-
-  for (const payment of orphanPayments) {
-    const draft = payment.pendingEnrollment;
-    if (!draft?.selectedSubjects?.length || draft.totalFee == null || !draft.paymentOption) {
-      continue;
-    }
-
-    const state = mapPaymentToEnrollmentState(payment.status);
-
-    const existing = await Enrollment.findOne({
-      student: payment.student,
-      totalFee: Number(draft.totalFee),
-      paymentOption: draft.paymentOption,
-      selectedSubjects: { $all: draft.selectedSubjects, $size: draft.selectedSubjects.length }
-    }).sort({ createdAt: -1 });
-
-    const enrollment = existing || await Enrollment.create({
-      student: payment.student,
-      selectedSubjects: draft.selectedSubjects,
-      totalFee: Number(draft.totalFee),
-      paymentOption: draft.paymentOption,
-      paymentStatus: state.paymentStatus,
-      status: state.status,
-      referenceNumber: `BRGHT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    });
-
-    if (existing) {
-      existing.paymentStatus = state.paymentStatus;
-      existing.status = state.status;
-      await existing.save();
-    }
-
-    payment.enrollment = enrollment._id;
-    payment.pendingEnrollment = undefined;
-    await payment.save();
-  }
-};
-
-// @desc    Submit enrollment (public: register + enroll, or authenticated: enroll only)
-// @route   POST /api/enrollments/submit
-// @access  Public (optional auth)
+// ═══════════════════════════════════════════════════════════════════════════
+//  NEW WIZARD SUBMIT  — POST /api/enrollments/submit
+//  Accepts the finalized wizard payload, creates Enrollment + Payment records.
+// ═══════════════════════════════════════════════════════════════════════════
 const submitEnrollment = async (req, res) => {
   try {
-    const {
-      firstName,
-      middleName,
-      lastName,
-      email,
-      phone,
-      password,
-      gradeLevel,
-      guardianName,
-      guardianPhone,
-      selectedSubjectCodes,
-      totalFee,
-      paymentOption,
-      paymentMethod: requestedPaymentMethod
-    } = req.body;
-    const paymentMethod = String(requestedPaymentMethod || 'blockchain').toLowerCase() === 'gcash'
-      ? 'gcash'
-      : 'blockchain';
+    const body = req.body || {};
 
-    if (!selectedSubjectCodes || !Array.isArray(selectedSubjectCodes) || selectedSubjectCodes.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please select at least one subject'
-      });
-    }
-    if (totalFee == null || totalFee < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid total fee'
-      });
-    }
-    if (!['full', 'down'].includes(paymentOption)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid payment option'
-      });
+    // ── Resolve parent identity ──
+    let parentId = req.user?._id || null;
+    let parentUser = req.user || null;
+
+    // Unauthenticated fallback (legacy path): email + OTP window
+    if (!parentId) {
+      const email = normalizeEmail(body.email || '');
+      if (!email) return res.status(401).json({ success: false, message: 'Authentication required.' });
+      const v = await EnrollmentVerification.findOne({ email });
+      const windowMs = ENROLLMENT_VERIFIED_WINDOW_MINUTES * 60 * 1000;
+      if (!v?.verifiedAt || Date.now() - v.verifiedAt.getTime() > windowMs)
+        return res.status(401).json({ success: false, message: 'Email not verified or verification expired.' });
+      parentUser = await User.findOne({ email, role: { $in: ['parent', 'student'] } });
+      if (!parentUser) return res.status(401).json({ success: false, message: 'Account not found.' });
+      parentId = parentUser._id;
     }
 
-    const codes = selectedSubjectCodes.map(id => SERVICE_CODE_MAP[id] || id).filter(Boolean);
-    if (codes.length !== selectedSubjectCodes.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'One or more selected subjects are invalid'
-      });
-    }
-    const subjectIds = normalizeIdArray(await ensureSubjectsByCodes(codes));
-    if (subjectIds.length !== codes.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'One or more selected subjects are invalid'
-      });
-    }
+    // ── Validate packages ──
+    const packages = Array.isArray(body.packages) ? body.packages : [];
+    if (packages.length === 0)
+      return res.status(400).json({ success: false, message: 'At least one program package must be selected.' });
 
-    let studentId = null;
-    let normalizedPublicEmail = null;
+    // ── Validate payment method ──
+    const paymentMethod = String(body.paymentMethod || 'gcash').toLowerCase();
+    if (!VALID_PAYMENT_METHODS.includes(paymentMethod))
+      return res.status(400).json({ success: false, message: 'Invalid payment method. Choose GCash, SeaBank, or BDO.' });
 
-    if (req.user && req.user.role === 'student') {
-      studentId = req.user._id;
-    } else {
-      if (!firstName || !lastName || !email || !phone || !password || !gradeLevel || !guardianName) {
-        return res.status(400).json({
-          success: false,
-          message: 'First name, last name, email, phone, password, grade level, and guardian name are required'
-        });
-      }
-      let nameErr = validateName(firstName, 'First name');
-      if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-      nameErr = validateName(middleName, 'Middle name');
-      if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-      nameErr = validateName(lastName, 'Last name');
-      if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-      nameErr = validateName(guardianName, 'Guardian name');
-      if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-      const phoneErr = validatePhoneNoLetters(phone);
-      if (phoneErr) return res.status(400).json({ success: false, message: phoneErr });
-      if ((guardianPhone || '').trim()) {
-        const gPhoneErr = validatePhoneNoLetters(guardianPhone);
-        if (gPhoneErr) return res.status(400).json({ success: false, message: gPhoneErr });
-      }
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test((email || '').trim().toLowerCase())) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please enter a valid email address'
-        });
-      }
-      const phPhoneRegex = /^(0?9|639)\d{9}$/;
-      const phoneDigits = (phone || '').replace(/\D/g, '');
-      if (phoneDigits.length !== 11 && phoneDigits.length !== 12) {
-        return res.status(400).json({
-          success: false,
-          message: 'Phone number must be exactly 11 digits.'
-        });
-      }
-      if (!phPhoneRegex.test(phoneDigits)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please enter a valid Philippine mobile number (e.g. 09XX XXX XXXX or +63 9XX XXX XXXX)'
-        });
-      }
-      if ((guardianPhone || '').trim()) {
-        const guardianDigits = (guardianPhone || '').replace(/\D/g, '');
-        if (guardianDigits.length !== 11 && guardianDigits.length !== 12) {
-          return res.status(400).json({
-            success: false,
-            message: 'Guardian phone number must be exactly 11 digits.'
-          });
-        }
-        if (!phPhoneRegex.test(guardianDigits)) {
-          return res.status(400).json({
-            success: false,
-            message: 'Please enter a valid Philippine mobile number for guardian (e.g. 09XX XXX XXXX or +63 9XX XXX XXXX)'
-          });
-        }
-      }
-      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-      if (!passwordRegex.test(password)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Password must contain at least 8 characters, one uppercase, one lowercase, one number and one special character (@$!%*?&)'
-        });
-      }
-      const normalizedEmail = normalizeEmail(email);
-      normalizedPublicEmail = normalizedEmail;
-      const verification = await EnrollmentVerification.findOne({ email: normalizedEmail });
-      if (!isRecentlyVerified(verification)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please verify your email address before continuing to Select Services.',
-        });
-      }
-      const userExists = await User.findOne({ email: normalizedEmail }).select('+password');
-      if (userExists) {
-        if (userExists.role !== 'student') {
-          return res.status(400).json({
-            success: false,
-            message: 'An account with this email already exists. Please log in and enroll from your dashboard.'
-          });
-        }
+    // Payment is always 50% down — ignore any 'full' sent by client
+    const paymentOption = 'down';
 
-        const resumableStatuses = ['not_enrolled', 'pending_payment', 'payment_rejected', 'cancelled'];
-        const passwordMatches = await userExists.comparePassword(password);
-
-        if (!passwordMatches) {
-          return res.status(400).json({
-            success: false,
-            message: 'An account with this email already exists. Please log in and enroll from your dashboard.'
-          });
-        }
-
-        if (userExists.isActive || !resumableStatuses.includes(userExists.enrollmentStatus)) {
-          return res.status(400).json({
-            success: false,
-            message: 'This account already has an enrollment in progress. Please log in to continue from your dashboard.'
-          });
-        }
-
-        userExists.firstName = firstName.trim();
-        userExists.middleName = (middleName || '').trim();
-        userExists.lastName = lastName.trim();
-        userExists.phone = phone.trim();
-        userExists.gradeLevel = gradeLevel;
-        userExists.guardianName = guardianName.trim();
-        userExists.guardianPhone = (guardianPhone || '').trim();
-        await userExists.save();
-
-        studentId = userExists._id;
-      }
-    }
-
-    const totalFeeNumber = Number(totalFee);
-    const amountToPay = paymentOption === 'full'
-      ? totalFeeNumber
-      : Math.ceil(totalFeeNumber * 0.5);
-
-    let payment = null;
-    if (studentId) {
-      const duplicateEnrollment = await findDuplicateActiveEnrollment(studentId, subjectIds);
-      if (duplicateEnrollment) {
-        return res.status(400).json({
-          success: false,
-          message: 'Duplicate enrollment detected for the selected subjects. Please continue using the existing enrollment record.'
-        });
-      }
-
-      payment = await Payment.findOne({
-        student: studentId,
-        enrollment: { $exists: false },
-        status: 'pending',
-        paymentMethod,
-        paymentType: paymentOption,
-        expiresAt: { $gt: new Date() },
-        'pendingEnrollment.totalFee': totalFeeNumber,
-        'pendingEnrollment.paymentOption': paymentOption,
-        'pendingEnrollment.selectedSubjects': { $all: subjectIds, $size: subjectIds.length }
-      }).sort({ createdAt: -1 });
-    }
-
-    if (!payment) {
-      payment = await Payment.create({
-        ...(studentId ? { student: studentId } : {}),
-        ...(normalizedPublicEmail ? { checkoutEmail: normalizedPublicEmail } : {}),
-        amount: amountToPay,
-        paymentType: paymentOption,
-        status: 'pending',
-        paymentMethod,
-        checkoutToken: generateCheckoutToken(),
-        pendingEnrollment: {
-          selectedSubjects: subjectIds,
-          totalFee: totalFeeNumber,
-          paymentOption
-        }
-      });
-    }
-
-    if (studentId) {
-      await User.findByIdAndUpdate(studentId, {
-        enrollmentStatus: 'pending_payment',
-        paymentStatus: 'pending'
-      });
-    }
-
-    const paymentSession = await buildPaymentSessionResponse(payment);
-    const response = {
-      success: true,
-      message: 'Payment session created. Complete the payment and submit proof to finish enrollment.',
-      ...paymentSession
+    // ── Student snapshot ──
+    const snapshot = {
+      firstName: String(body.studentFirstName || body.firstName || '').trim(),
+      lastName:  String(body.studentLastName  || body.lastName  || '').trim(),
+      middleName: String(body.studentMiddleName || body.middleName || '').trim(),
+      birthdate:  body.birthdate ? new Date(body.birthdate) : null,
+      computedAge: body.birthdate ? computeAge(body.birthdate) : null,
     };
-    res.status(201).json(response);
-  } catch (error) {
-    if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map(val => val.message);
-      return res.status(400).json({ success: false, message: messages.join(', ') });
-    }
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: 'Email already exists' });
-    }
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to submit enrollment'
-    });
-  }
-};
+    if (!snapshot.firstName || !snapshot.lastName)
+      return res.status(400).json({ success: false, message: 'Student first and last name are required.' });
 
-// @desc    Create enrollment
-// @route   POST /api/enrollments
-// @access  Private
-const createEnrollment = async (req, res) => {
-  try {
-    const { studentId, selectedSubjects, totalFee, paymentOption } = req.body;
-    const normalizedSubjects = normalizeIdArray(selectedSubjects);
+    // ── Health info ──
+    const healthInfo = {
+      allergies:          String(body.allergies || '').trim(),
+      medications:        String(body.medications || '').trim(),
+      specialNeeds:       body.specialNeeds === true || body.specialNeeds === 'true',
+      specialNeedsDetails: String(body.specialNeedsDetails || '').trim(),
+      emergencyContact:   String(body.emergencyContact || '').trim(),
+    };
 
-    if (!studentId || normalizedSubjects.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'studentId and at least one selected subject are required'
-      });
-    }
+    // ── Consent ──
+    const consentVersion = String(body.consentVersion || '1.0');
+    const consentItems = Array.isArray(body.consentItems) ? body.consentItems : [];
+    const allConsented = consentItems.every((c) => c.accepted === true);
+    if (!allConsented)
+      return res.status(400).json({ success: false, message: 'All participation agreement items must be accepted.' });
 
-    const duplicateEnrollment = await findDuplicateActiveEnrollment(studentId, normalizedSubjects);
-    if (duplicateEnrollment) {
-      return res.status(400).json({
-        success: false,
-        message: 'Duplicate enrollment detected for this student and subject set'
-      });
-    }
+    // ── Preferred schedule ──
+    const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
+    const preferredTime = VALID_PREFERRED_TIMES.includes(body.preferredTime) ? body.preferredTime : 'no_preference';
 
-    // Create enrollment record
-    const enrollment = await Enrollment.create({
-      student: studentId,
-      selectedSubjects: normalizedSubjects,
-      totalFee,
+    // ── Compute amounts ──
+    const { totalFee, amountDue } = computeAmounts(packages, paymentOption);
+
+    // ── Generate enrollment ID ──
+    const enrollmentId = await generateEnrollmentId();
+
+    // ── Create Enrollment ──
+    const enrollment = new Enrollment({
+      enrollmentId,
+      parent: parentId,
+      studentSnapshot: snapshot,
+      packages,
+      preferredStartDate,
+      preferredTime,
+      healthInfo,
       paymentOption,
+      totalFee,
+      consentVersion,
+      consentAcceptedAt: new Date(),
+      consentItems,
+      status: 'submitted',
       paymentStatus: 'pending',
-      status: 'pending',
-      referenceNumber: `BRGHT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     });
-
-    // Update user's enrollment status
-    await User.findByIdAndUpdate(studentId, {
-      enrollmentStatus: 'pending_payment'
-    });
-
-    res.status(201).json({
-      success: true,
-      enrollment
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-const getMyEnrollments = async (req, res) => {
-  try {
-    const studentId = req.user.id;
-    
-    const enrollments = await Enrollment.find({ student: studentId })
-      .populate('selectedSubjects')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: enrollments.length,
-      enrollments
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-const getAllEnrollments = async (req, res) => {
-  try {
-    await cleanupIncompleteUsers();
-    await backfillMissingEnrollmentsFromPayments();
-
-    const enrollments = await Enrollment.find()
-      .populate('student', 'firstName lastName email phone gradeLevel profileImage')
-      .populate('selectedSubjects')
-      .sort({ createdAt: -1 });
-
-    // Exclude orphaned enrollments where the referenced student no longer exists.
-    const validEnrollments = enrollments.filter((enrollment) => enrollment?.student?._id);
-
-    res.status(200).json({
-      success: true,
-      count: validEnrollments.length,
-      enrollments: validEnrollments
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// @desc    Get single enrollment by ID (admin) with payments for proof-of-payment view
-// @route   GET /api/enrollments/:id
-// @access  Private (Admin only)
-const getEnrollmentById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const enrollment = await Enrollment.findById(id)
-      .populate('student', 'firstName lastName email phone gradeLevel profileImage guardianName guardianPhone')
-      .populate('selectedSubjects');
-
-    if (!enrollment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Enrollment not found'
-      });
-    }
-
-    const Payment = require('../models/Payment');
-    const payments = await Payment.find({ enrollment: id })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.status(200).json({
-      success: true,
-      enrollment,
-      payments
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to fetch enrollment'
-    });
-  }
-};
-
-const updateEnrollmentStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-
-    const enrollment = await Enrollment.findById(id);
-    
-    if (!enrollment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Enrollment not found'
-      });
-    }
-
-    enrollment.status = status;
+    pushStatusHistory(enrollment, 'submitted', parentId, 'parent', 'Enrollment wizard submitted');
     await enrollment.save();
 
-    // Update user's enrollment status if needed
-    if (status === 'active') {
-      await User.findByIdAndUpdate(enrollment.student, {
-        enrollmentStatus: 'active',
-        isActive: true
-      });
+    // ── Create Payment ──
+    const payment = new Payment({
+      parent: parentId,
+      enrollment: enrollment._id,
+      amount: amountDue,
+      amountDue,
+      paymentType: paymentOption,
+      paymentMethod,
+      status: 'pending',
+    });
+    await payment.save();
+
+    // ── Update parent enrollmentStatus ──
+    if (parentUser) {
+      await User.findByIdAndUpdate(parentId, { enrollmentStatus: 'pending_payment' });
     }
 
-    res.status(200).json({
+    // ── Fetch payment instructions ──
+    const instructions = await getPaymentInstructionsForMethod(paymentMethod);
+
+    // ── Send confirmation email ──
+    const email = parentUser?.email || body.email || '';
+    const parentName = `${parentUser?.firstName || ''} ${parentUser?.lastName || ''}`.trim() || 'Parent';
+    if (email) {
+      sendEnrollmentConfirmationEmail(email, {
+        parentName,
+        studentName: `${snapshot.firstName} ${snapshot.lastName}`,
+        enrollmentId,
+        amountDue,
+        paymentMethod,
+      }).catch(() => {});
+    }
+
+    logAudit({ req, userId: parentId, action: 'Submit Enrollment', module: 'Enrollment',
+      description: `Enrollment submitted: ${enrollmentId}`, status: 'SUCCESS',
+      metadata: { enrollmentId, paymentMethod, totalFee } }).catch(() => {});
+
+    return res.status(201).json({
       success: true,
-      enrollment
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// @desc    Accept or reject enrollment (admin). When accepted, student is officially enrolled.
-// @route   PUT /api/enrollments/:id/verify-payment
-// @access  Private (Admin only)
-const verifyPayment = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { verified } = req.body;
-
-    if (typeof verified !== 'boolean') {
-      return res.status(400).json({
-        success: false,
-        message: 'verified must be true (accept) or false (reject)'
-      });
-    }
-
-    const enrollment = await Enrollment.findById(id).populate('student');
-    
-    if (!enrollment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Enrollment not found'
-      });
-    }
-
-    const studentId = enrollment.student?._id || enrollment.student;
-
-    if (verified) {
-      // Accept: mark enrollment and payment as settled, student officially enrolled
-      enrollment.paymentStatus = 'paid';
-      enrollment.status = 'active';
-      enrollment.paymentVerifiedAt = new Date();
-      enrollment.verifiedBy = req.user.id;
-      await enrollment.save();
-
-      // Mark any payment records for this enrollment as verified
-      await Payment.updateMany(
-        { enrollment: id },
-        { $set: { status: 'verified', verifiedAt: new Date(), verifiedBy: req.user.id } }
-      );
-
-      // Student is officially enrolled
-      if (studentId) {
-        await User.findByIdAndUpdate(studentId, {
-          enrollmentStatus: 'active',
-          isActive: true
-        });
-      }
-
-      logAudit({
-        req,
-        userId: req.user.id,
-        action: 'Approve Enrollment',
-        module: 'Enrollment',
-        description: `Approved enrollment for student`,
-        status: 'SUCCESS',
-        metadata: { enrollmentId: id, studentId }
-      }).catch(() => {});
-
-      res.status(200).json({
-        success: true,
-        message: 'Enrollment accepted. Student is officially enrolled.',
-        enrollment
-      });
-    } else {
-      // Reject: mark enrollment and payment as failed, student not enrolled
-      enrollment.paymentStatus = 'failed';
-      enrollment.status = 'cancelled';
-      await enrollment.save();
-
-      await Payment.updateMany(
-        { enrollment: id },
-        { $set: { status: 'rejected', rejectionReason: 'Enrollment rejected by admin' } }
-      );
-
-      if (studentId) {
-        await User.findByIdAndUpdate(studentId, {
-          enrollmentStatus: 'payment_rejected',
-          isActive: false
-        });
-      }
-
-      // Send rejection email to student's Gmail
-      const student = enrollment.student;
-      const studentEmail = student?.email || (student && typeof student === 'object' ? student.email : null);
-      const studentName = student
-        ? [student.firstName, student.middleName, student.lastName].filter(Boolean).join(' ') || 'Student'
-        : 'Student';
-      if (studentEmail) {
-        await sendEnrollmentRejectionEmail(
-          studentEmail,
-          studentName,
-          'Your enrollment does not meet our standards or payment was not verified. You will not be able to sign in until an admin accepts your enrollment.'
-        );
-      }
-
-      logAudit({
-        req,
-        userId: req.user.id,
-        action: 'Reject Enrollment',
-        module: 'Enrollment',
-        description: `Rejected enrollment for student`,
-        status: 'SUCCESS',
-        metadata: { enrollmentId: id, studentId }
-      }).catch(() => {});
-
-      res.status(200).json({
-        success: true,
-        message: 'Enrollment rejected. Student has been notified by email and cannot sign in until enrollment is accepted.',
-        enrollment
-      });
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-};
-
-// @desc    Admin: Add new student (walk-in enrollment) – create User + Enrollment in one step
-// @route   POST /api/enrollments/admin/add-student
-// @access  Private (Admin only)
-const adminAddStudent = async (req, res) => {
-  try {
-    const {
-      firstName,
-      middleName,
-      lastName,
-      email,
-      phone,
-      password,
-      gradeLevel,
-      guardianName,
-      guardianPhone,
-      selectedSubjectIds,
-      paymentOption,
+      message: 'Enrollment submitted successfully.',
+      enrollmentId,
+      enrollmentDbId: String(enrollment._id),
+      paymentId: String(payment._id),
+      amountDue,
       totalFee,
-      paymentStatus,
-      status,
-      enrollmentDate
-    } = req.body;
-
-    if (!firstName || !lastName || !email || !phone || !password || !gradeLevel || !guardianName) {
-      return res.status(400).json({
-        success: false,
-        message: 'First name, last name, email, phone, password, grade level, and guardian name are required'
-      });
-    }
-
-    let nameErr = validateName(firstName, 'First name');
-    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(middleName, 'Middle name');
-    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(lastName, 'Last name');
-    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(guardianName, 'Guardian name');
-    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    const phoneErr = validatePhoneNoLetters(phone);
-    if (phoneErr) return res.status(400).json({ success: false, message: phoneErr });
-    if ((guardianPhone || '').trim()) {
-      const gPhoneErr = validatePhoneNoLetters(guardianPhone);
-      if (gPhoneErr) return res.status(400).json({ success: false, message: gPhoneErr });
-    }
-
-    const validGradeLevels = ['Toddler', 'Pre-Kindergarten', 'Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'];
-    if (!validGradeLevels.includes(gradeLevel)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid grade level'
-      });
-    }
-
-    const normalizedSelectedSubjectIds = normalizeIdArray(selectedSubjectIds);
-
-    if (!normalizedSelectedSubjectIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'Select at least one program'
-      });
-    }
-
-    const totalFeeNum = Number(totalFee);
-    if (isNaN(totalFeeNum) || totalFeeNum < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Total fee must be a valid number ≥ 0'
-      });
-    }
-
-    if (!['full', 'down'].includes(paymentOption)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment option must be "full" or "down"'
-      });
-    }
-
-    const validPaymentStatuses = ['pending', 'pending_verification', 'paid', 'failed', 'partial'];
-    const enrollmentPaymentStatus = validPaymentStatuses.includes(paymentStatus) ? paymentStatus : 'pending';
-
-    const validStatuses = ['pending', 'active'];
-    const enrollmentStatus = validStatuses.includes(status) ? status : 'pending';
-
-    const emailTrim = (email || '').toLowerCase().trim();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(emailTrim)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid email address'
-      });
-    }
-
-    const phPhoneRegex = /^(0?9|639)\d{9}$/;
-    const phoneDigits = (phone || '').replace(/\D/g, '');
-    if (!phPhoneRegex.test(phoneDigits)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid Philippine mobile number (09XX or +63 9XX)'
-      });
-    }
-
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-    if (!passwordRegex.test(password)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 8 characters with one uppercase, one lowercase, one number and one special character (@$!%*?&)'
-      });
-    }
-
-    const existingUser = await User.findOne({ email: emailTrim });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'An account with this email already exists'
-      });
-    }
-
-    const subjectCount = await Subject.countDocuments({ _id: { $in: normalizedSelectedSubjectIds }, isActive: true });
-    if (subjectCount !== normalizedSelectedSubjectIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'One or more selected programs are invalid'
-      });
-    }
-
-    const isActiveEnrollment = enrollmentStatus === 'active' && enrollmentPaymentStatus === 'paid';
-
-    const user = await User.create({
-      firstName: firstName.trim(),
-      middleName: (middleName || '').trim(),
-      lastName: lastName.trim(),
-      email: emailTrim,
-      phone: phone.trim(),
-      password,
-      role: 'student',
-      gradeLevel: gradeLevel.trim(),
-      guardianName: (guardianName || '').trim(),
-      guardianPhone: (guardianPhone || '').trim(),
-      enrollmentStatus: isActiveEnrollment ? 'active' : (enrollmentPaymentStatus === 'paid' ? 'active' : 'pending_payment'),
-      isActive: isActiveEnrollment,
-      paymentStatus: enrollmentPaymentStatus === 'paid' ? 'verified' : 'pending'
+      paymentMethod,
+      instructions,
     });
+  } catch (err) {
+    console.error('submitEnrollment error:', err);
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Enrollment submission failed.' });
+  }
+};
 
-    const refNum = 'WB-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
-    const enrollmentData = {
-      student: user._id,
-      selectedSubjects: normalizedSelectedSubjectIds,
-      referenceNumber: refNum,
-      paymentOption,
-      totalFee: totalFeeNum,
-      paymentStatus: enrollmentPaymentStatus,
-      status: enrollmentStatus,
-      enrollmentDate: enrollmentDate ? new Date(enrollmentDate) : new Date()
-    };
-    if (isActiveEnrollment) {
-      enrollmentData.paymentVerifiedAt = new Date();
-      enrollmentData.verifiedBy = req.user._id;
+// ── Payment instruction helper ──────────────────────────────────────────
+async function getPaymentInstructionsForMethod(method) {
+  const DEFAULTS = {
+    gcash:   { accountName: 'Bee Bright Tutorial Center', accountNumber: '09307517208', bankBranch: null },
+    seabank: { accountName: 'Bee Bright Tutorial Center', accountNumber: '5678-9012-3456', bankBranch: 'Main Branch' },
+    bdo:     { accountName: 'Bee Bright Tutorial Center', accountNumber: '0098-7654-3210', bankBranch: 'Main Branch' },
+  };
+  const firstPricing = await Pricing.findOne({ active: true, 'meta.accountNumber': { $exists: true, $ne: null } })
+    .select('meta').lean().catch(() => null);
+  return DEFAULTS[method] || DEFAULTS.gcash;
+}
+
+// ── Submit payment proof  POST /api/enrollments/:enrollmentId/submit-proof ──
+const submitPaymentProof = async (req, res) => {
+  try {
+    const { enrollmentId } = req.params;
+    const { proofDataUrl, payerReference, paymentMethod } = req.body || {};
+
+    const enrollment = await Enrollment.findOne({ enrollmentId });
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    const payment = await Payment.findOne({ enrollment: enrollment._id }).sort({ createdAt: -1 });
+    if (!payment) return res.status(404).json({ success: false, message: 'Payment record not found.' });
+
+    const proofUrl = saveProofFromDataUrl(proofDataUrl, enrollment._id);
+    if (!proofUrl) return res.status(400).json({ success: false, message: 'Payment proof is required.' });
+
+    payment.proofUrl = proofUrl;
+    payment.payerReference = String(payerReference || '').trim() || null;
+    if (paymentMethod && VALID_PAYMENT_METHODS.includes(paymentMethod)) payment.paymentMethod = paymentMethod;
+    payment.status = 'submitted';
+    payment.submittedAt = new Date();
+    payment.resubmissionCount = (payment.resubmissionCount || 0);
+    await payment.save();
+
+    pushStatusHistory(enrollment, 'payment_under_verification', null, 'system', 'Payment proof submitted');
+    enrollment.paymentStatus = 'submitted';
+    await enrollment.save();
+
+    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    if (parentUser?.email) {
+      const { sendEmail } = require('../utils/emailService');
+      sendEmail({
+        to: parentUser.email,
+        subject: `Bee Bright — Payment Proof Received (${enrollment.enrollmentId})`,
+        html: `<p>Hi ${parentUser.firstName}, we received your payment proof for enrollment ${enrollment.enrollmentId}. Our team will verify it within 1–2 business days.</p>`,
+      }, 'proof received notification').catch(() => {});
     }
-    const enrollment = await Enrollment.create(enrollmentData);
 
-    const populated = await Enrollment.findById(enrollment._id)
-      .populate('student', 'firstName lastName email phone gradeLevel profileImage')
-      .populate('selectedSubjects', 'name code')
+    logAudit({ req, action: 'Submit Payment Proof', module: 'Payment',
+      description: `Proof submitted for ${enrollmentId}`, status: 'SUCCESS',
+      metadata: { enrollmentId, paymentId: payment._id } }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Payment proof submitted. We will verify it shortly.' });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Failed to submit proof.' });
+  }
+};
+
+// ── Parent: get my enrollments  GET /api/enrollments/my-enrollments ───────
+const getMyEnrollments = async (req, res) => {
+  try {
+    const enrollments = await Enrollment.find({
+      $or: [{ parent: req.user._id }, { student: req.user._id }],
+    })
+      .sort({ createdAt: -1 })
+      .populate('approvedBy', 'firstName lastName')
       .lean();
 
-    logAudit({
-      req,
-      userId: req.user.id,
-      action: 'Add Student',
-      module: 'User Management',
-      description: 'Admin added new student',
-      status: 'SUCCESS',
-      metadata: { studentId: user._id, enrollmentId: enrollment._id }
-    }).catch(() => {});
-
-    res.status(201).json({
-      success: true,
-      message: 'Student and enrollment created successfully.',
-      user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email, gradeLevel: user.gradeLevel },
-      enrollment: populated
-    });
-  } catch (error) {
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: 'Email already exists' });
-    }
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to add student'
-    });
+    const withPayments = await Promise.all(
+      enrollments.map(async (e) => {
+        const payments = await Payment.find({ enrollment: e._id })
+          .sort({ createdAt: -1 })
+          .select('status paymentMethod amountDue amountPaid proofUrl submittedAt verifiedAt referenceNumber resubmissionCount')
+          .lean();
+        return { ...e, payments };
+      })
+    );
+    return res.status(200).json({ success: true, enrollments: withPayments });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Failed to fetch enrollments.' });
   }
 };
 
-// @desc    Get enrollment by student
-// @route   GET /api/enrollments/student/:studentId
-// @access  Private
+// ── Public tracking  GET /api/enrollments/track?enrollmentId=&email= ──────
+const trackEnrollment = async (req, res) => {
+  try {
+    const enrollmentId = String(req.query.enrollmentId || '').trim().toUpperCase();
+    const email = normalizeEmail(req.query.email || '');
+    if (!enrollmentId || !email)
+      return res.status(400).json({ success: false, message: 'enrollmentId and email are required.' });
+
+    const enrollment = await Enrollment.findOne({ enrollmentId }).lean();
+    if (!enrollment)
+      return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    // Verify the email belongs to the parent who submitted this enrollment.
+    // The student (child) does NOT have a separate login account —
+    // only the Parent/Guardian is authenticated.
+    const parentUser = enrollment.parent
+      ? await User.findById(enrollment.parent).select('email').lean()
+      : null;
+
+    const emailMatches = parentUser?.email && normalizeEmail(parentUser.email) === email;
+
+    if (!emailMatches)
+      return res.status(403).json({ success: false, message: 'Email does not match the enrollment record. Please use the email you registered with.' });
+
+    const STATUS_LABELS = {
+      draft: 'Draft',
+      submitted: 'Submitted',
+      payment_under_verification: 'Payment Under Verification',
+      pending_approval: 'Pending Approval',
+      approved: 'Approved',
+      active: 'Active',
+      rejected: 'Rejected',
+      cancelled: 'Cancelled',
+    };
+
+    const payment = await Payment.findOne({ enrollment: enrollment._id })
+      .sort({ createdAt: -1 })
+      .select('status paymentMethod amountDue submittedAt resubmissionCount referenceNumber')
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      enrollment: {
+        enrollmentId: enrollment.enrollmentId,
+        status: enrollment.status,
+        statusLabel: STATUS_LABELS[enrollment.status] || enrollment.status,
+        studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
+        submittedAt: enrollment.createdAt,
+        rejectionReason: enrollment.rejectionReason || null,
+        allowResubmission: enrollment.allowResubmission || false,
+        paymentStatus: enrollment.paymentStatus,
+        payment: payment || null,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Failed to track enrollment.' });
+  }
+};
+
+// ── Legacy stubs kept for backward compat ────────────────────────────────
+const createEnrollment = async (req, res) =>
+  res.status(410).json({ success: false, message: 'Use POST /api/enrollments/submit instead.' });
+
 const getEnrollmentByStudent = async (req, res) => {
   try {
     const { studentId } = req.params;
-    
-    const enrollment = await Enrollment.findOne({ student: studentId })
-      .populate('student', 'firstName lastName email phone gradeLevel profileImage')
-      .populate('selectedSubjects');
+    const allowed = req.user.role === 'admin' || req.user.role === 'super_admin'
+      || String(req.user._id) === studentId;
+    if (!allowed) return res.status(403).json({ success: false, message: 'Forbidden.' });
+    const enrollments = await Enrollment.find({ $or: [{ student: studentId }, { parent: studentId }] })
+      .sort({ createdAt: -1 }).lean();
+    return res.status(200).json({ success: true, enrollments });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
 
-    if (!enrollment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Enrollment not found'
-      });
+// ═══════════════════════════════════════════════════════════════════════════
+//  ADMIN ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// GET /api/admin/enrollments
+const getAllEnrollments = async (req, res) => {
+  try {
+    const { status, q, limit = 100, page = 1 } = req.query;
+    const filter = {};
+    if (status && status !== 'all') filter.status = status;
+    if (q) {
+      const re = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ enrollmentId: re }, { 'studentSnapshot.firstName': re }, { 'studentSnapshot.lastName': re }];
+    }
+    const skip = (Number(page) - 1) * Number(limit);
+    const [enrollments, total] = await Promise.all([
+      Enrollment.find(filter)
+        .sort({ createdAt: -1 }).skip(skip).limit(Number(limit))
+        .populate('parent', 'firstName lastName email phone')
+        .populate('approvedBy', 'firstName lastName')
+        .lean(),
+      Enrollment.countDocuments(filter),
+    ]);
+
+    // Attach latest payment per enrollment
+    const withPayments = await Promise.all(
+      enrollments.map(async (e) => {
+        const payment = await Payment.findOne({ enrollment: e._id })
+          .sort({ createdAt: -1 }).select('status paymentMethod amountDue proofUrl submittedAt verifiedAt resubmissionCount referenceNumber').lean();
+        return { ...e, latestPayment: payment || null };
+      })
+    );
+
+    return res.status(200).json({ success: true, total, page: Number(page), enrollments: withPayments });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/enrollments/:id
+const getEnrollmentById = async (req, res) => {
+  try {
+    const enrollment = await Enrollment.findById(req.params.id)
+      .populate('parent', 'firstName lastName email phone parentProfile')
+      .populate('approvedBy', 'firstName lastName')
+      .populate('verifiedBy', 'firstName lastName')
+      .lean();
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+    const payments = await Payment.find({ enrollment: enrollment._id })
+      .sort({ createdAt: -1 }).lean();
+    return res.status(200).json({ success: true, enrollment: { ...enrollment, payments } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/enrollments/:id/verify-payment
+const adminVerifyPayment = async (req, res) => {
+  try {
+    const { verified, note, paymentId } = req.body;
+    const enrollment = await Enrollment.findById(req.params.id);
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    const payment = paymentId
+      ? await Payment.findById(paymentId)
+      : await Payment.findOne({ enrollment: enrollment._id }).sort({ createdAt: -1 });
+    if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
+
+    if (verified) {
+      payment.status = 'verified';
+      payment.verifiedAt = new Date();
+      payment.verifiedBy = req.user._id;
+      payment.amountPaid = payment.amountDue || payment.amount;
+      payment.notes = note || null;
+      enrollment.paymentStatus = 'verified';
+      enrollment.verifiedBy = req.user._id;
+      enrollment.paymentVerifiedAt = new Date();
+      pushStatusHistory(enrollment, 'pending_approval', req.user._id, req.user.role, note || 'Payment verified');
+    } else {
+      payment.status = 'rejected';
+      payment.rejectionReason = note || 'Payment rejected by admin';
+      enrollment.paymentStatus = 'pending';
+      enrollment.allowResubmission = true;
+      pushStatusHistory(enrollment, 'submitted', req.user._id, req.user.role, `Payment rejected: ${note || ''}`);
     }
 
-    res.status(200).json({
+    await Promise.all([payment.save(), enrollment.save()]);
+
+    // Email parent
+    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    if (parentUser?.email && verified) {
+      sendPaymentVerifiedEmail(parentUser.email, {
+        parentName: `${parentUser.firstName} ${parentUser.lastName}`,
+        studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
+        enrollmentId: enrollment.enrollmentId,
+      }).catch(() => {});
+    }
+
+    logAudit({ req, userId: req.user._id, action: verified ? 'Verify Payment' : 'Reject Payment',
+      module: 'Payment', description: `${verified ? 'Verified' : 'Rejected'} payment for ${enrollment.enrollmentId}`,
+      status: 'SUCCESS', metadata: { enrollmentId: enrollment.enrollmentId, paymentId: payment._id } }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: verified ? 'Payment verified.' : 'Payment rejected.', enrollment, payment });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/enrollments/:id/approve
+const adminApproveEnrollment = async (req, res) => {
+  try {
+    const enrollment = await Enrollment.findById(req.params.id);
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    if (['approved', 'rejected', 'cancelled', 'completed'].includes(enrollment.status)) {
+      return res.status(400).json({ success: false, message: `Cannot approve enrollment with status: ${enrollment.status}` });
+    }
+
+    // ── Generate Student ID ──────────────────────────────────────────────
+    // The student ID is stored on the Enrollment itself.
+    // The child is NOT a separate login account — the Parent account is the only user.
+    const now = new Date();
+    const y = now.getFullYear();
+    const mo = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    // Count existing approved enrollments to generate a sequential ID
+    const approvedCount = await Enrollment.countDocuments({
+      status: { $in: ['approved', 'active'] },
+      studentId: { $exists: true, $ne: null }
+    });
+    const studentId = `S-${y}${mo}${d}-${String(approvedCount + 1).padStart(4, '0')}`;
+
+    // ── Store Student ID on the Enrollment ────────────────────────────────
+    enrollment.studentId = studentId;
+    enrollment.approvedBy = req.user._id;
+    enrollment.approvedAt = now;
+    enrollment.paymentStatus = 'paid';
+    pushStatusHistory(enrollment, 'approved', req.user._id, req.user.role, 'Enrollment approved');
+    await enrollment.save();
+
+    // ── Activate the Parent account ───────────────────────────────────────
+    await User.findByIdAndUpdate(enrollment.parent, {
+      isActive: true,
+      enrollmentStatus: 'active',
+    });
+
+    // ── Send approval email to Parent ─────────────────────────────────────
+    const parentFull = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    const snap = enrollment.studentSnapshot || {};
+    if (parentFull?.email) {
+      sendEnrollmentApprovedEmail(parentFull.email, {
+        parentName: `${parentFull.firstName} ${parentFull.lastName}`,
+        studentName: `${snap.firstName || ''} ${snap.lastName || ''}`.trim(),
+        enrollmentId: enrollment.enrollmentId,
+        studentId,
+      }).catch(() => {});
+    }
+
+    logAudit({
+      req,
+      userId: req.user._id,
+      action: 'Approve Enrollment',
+      module: 'Enrollment',
+      description: `Approved ${enrollment.enrollmentId} — Student ID: ${studentId}`,
+      status: 'SUCCESS',
+      metadata: { enrollmentId: enrollment.enrollmentId, studentId }
+    }).catch(() => {});
+
+    return res.status(200).json({
       success: true,
+      message: 'Enrollment approved. Parent account activated.',
+      studentId,
       enrollment
     });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
+  } catch (err) {
+    console.error('adminApproveEnrollment error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/enrollments/:id/reject
+const adminRejectEnrollment = async (req, res) => {
+  try {
+    const { reason, allowResubmission = false } = req.body;
+    const enrollment = await Enrollment.findById(req.params.id);
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    enrollment.rejectionReason = String(reason || '').trim() || 'No reason provided.';
+    enrollment.allowResubmission = !!allowResubmission;
+    pushStatusHistory(enrollment, 'rejected', req.user._id, req.user.role, enrollment.rejectionReason);
+    enrollment.paymentStatus = 'failed';
+    await enrollment.save();
+
+    await User.findByIdAndUpdate(enrollment.parent, { enrollmentStatus: 'rejected' });
+
+    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    if (parentUser?.email) {
+      sendEnrollmentRejectedEmail(parentUser.email, {
+        parentName: `${parentUser.firstName} ${parentUser.lastName}`,
+        studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
+        enrollmentId: enrollment.enrollmentId,
+        reason: enrollment.rejectionReason,
+        allowResubmission: !!allowResubmission,
+      }).catch(() => {});
+    }
+
+    logAudit({ req, userId: req.user._id, action: 'Reject Enrollment', module: 'Enrollment',
+      description: `Rejected ${enrollment.enrollmentId}: ${enrollment.rejectionReason}`, status: 'SUCCESS' }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Enrollment rejected.', enrollment });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/enrollments/:id/status  (legacy alias)
+const updateEnrollmentStatus = async (req, res) => {
+  const { status } = req.body;
+  if (status === 'active') return adminApproveEnrollment(req, res);
+  if (status === 'cancelled') return adminRejectEnrollment({ ...req, body: { ...req.body, reason: 'Cancelled by admin', allowResubmission: false } }, res);
+  return res.status(400).json({ success: false, message: 'Use /approve or /reject endpoints.' });
+};
+
+// Legacy verifyPayment alias
+const verifyPayment = (req, res) => adminVerifyPayment(req, res);
+
+// Legacy adminAddStudent
+const adminAddStudent = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const email = normalizeEmail(body.email || '');
+    if (!email || !body.firstName || !body.lastName || !body.password)
+      return res.status(400).json({ success: false, message: 'firstName, lastName, email, password are required.' });
+
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(409).json({ success: false, message: 'Email already registered.' });
+
+    const student = await User.create({
+      firstName: body.firstName, middleName: body.middleName || '',
+      lastName: body.lastName, email, phone: body.phone || '09000000000',
+      password: body.password, role: 'student',
+      guardianName: body.guardianName || body.firstName,
+      isActive: true, enrollmentStatus: 'active', paymentStatus: 'verified',
+      emailVerifiedAt: new Date(),
     });
+
+    logAudit({ req, userId: req.user._id, action: 'Admin Add Student', module: 'Enrollment',
+      description: `Admin created student: ${email}`, status: 'SUCCESS' }).catch(() => {});
+
+    return res.status(201).json({ success: true, message: 'Student added.', student });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/payments/instructions/:method
+const getPaymentInstructions = async (req, res) => {
+  try {
+    const method = String(req.params.method || '').toLowerCase();
+    if (!VALID_PAYMENT_METHODS.includes(method))
+      return res.status(400).json({ success: false, message: 'Invalid payment method.' });
+    const instructions = await getPaymentInstructionsForMethod(method);
+    return res.status(200).json({ success: true, method, instructions });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -1116,12 +745,18 @@ module.exports = {
   sendEnrollmentVerificationCode,
   verifyEnrollmentEmailCode,
   submitEnrollment,
+  submitPaymentProof,
+  getMyEnrollments,
+  trackEnrollment,
   createEnrollment,
+  getEnrollmentByStudent,
+  getAllEnrollments,
+  getEnrollmentById,
+  adminVerifyPayment,
+  adminApproveEnrollment,
+  adminRejectEnrollment,
+  updateEnrollmentStatus,
   verifyPayment,
   adminAddStudent,
-  getEnrollmentByStudent,
-  getEnrollmentById,
-  getMyEnrollments,
-  getAllEnrollments,
-  updateEnrollmentStatus
+  getPaymentInstructions,
 };

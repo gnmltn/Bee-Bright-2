@@ -1,0 +1,16 @@
+[
+  { "programCode": "TPG101", "packageSlug": "16h", "displayName": "Toddlers Playgroup - 16 hours", "priceFull": 2800, "currency": "PHP" },
+  { "programCode": "TPG101", "packageSlug": "24h", "displayName": "Toddlers Playgroup - 24 hours", "priceFull": 4080, "currency": "PHP" },
+  { "programCode": "TPG101", "packageSlug": "32h", "displayName": "Toddlers Playgroup - 32 hours", "priceFull": 5280, "currency": "PHP" },
+  { "programCode": "TPG101", "packageSlug": "40h", "displayName": "Toddlers Playgroup - 40 hours", "priceFull": 6400, "currency": "PHP" },
+
+  { "programCode": "EXAM", "packageSlug": "bright_5", "displayName": "Examination Preparation - Bright (5 sessions)", "priceFull": 1250, "currency": "PHP" },
+  { "programCode": "EXAM", "packageSlug": "smart_6", "displayName": "Examination Preparation - Smart (6 sessions)", "priceFull": 1450, "currency": "PHP" },
+  { "programCode": "EXAM", "packageSlug": "brilliant_8", "displayName": "Examination Preparation - Brilliant (8 sessions)", "priceFull": 1850, "currency": "PHP" },
+  { "programCode": "EXAM", "packageSlug": "genius_10", "displayName": "Examination Preparation - Genius (10 sessions)", "priceFull": 2200, "currency": "PHP" },
+
+  { "programCode": "ACT102", "packageSlug": "premier_12", "displayName": "Academic Tutorial - Premier (12 sessions)", "priceFull": 2400, "currency": "PHP" },
+  { "programCode": "ACT102", "packageSlug": "elite", "displayName": "Academic Tutorial - Elite", "priceFull": 3800, "currency": "PHP" },
+  { "programCode": "ACT102", "packageSlug": "prestige", "displayName": "Academic Tutorial - Prestige", "priceFull": 3120, "currency": "PHP" },
+  { "programCode": "ACT102", "packageSlug": "royalty", "displayName": "Academic Tutorial - Royalty", "priceFull": 11000, "currency": "PHP" }
+]

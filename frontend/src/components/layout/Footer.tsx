@@ -19,7 +19,7 @@ const footerLinks = {
 
 export function Footer() {
   return (
-    <footer className="bg-foreground text-background">
+    <footer className="bg-gray-950 text-gray-100">
       <div className="container mx-auto px-4 py-12 md:py-16">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 md:gap-12">
           {/* Brand */}
@@ -30,14 +30,14 @@ export function Footer() {
                 <span className="text-primary">Bee</span> Bright
               </span>
             </div>
-            <p className="text-background/70 text-sm leading-relaxed">
+            <p className="text-gray-400 text-sm leading-relaxed">
               Empowering students to achieve academic excellence through personalized tutoring and innovative learning solutions.
             </p>
             <div className="flex items-center gap-4">
-              <a href={FACEBOOK_URL} target="_blank" rel="noopener noreferrer" className="text-background/60 hover:text-primary transition-colors" aria-label="Facebook">
+              <a href={FACEBOOK_URL} target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-primary transition-colors" aria-label="Facebook">
                 <Facebook className="h-5 w-5" />
               </a>
-              <a href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer" className="text-background/60 hover:text-primary transition-colors" aria-label="Instagram">
+              <a href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-primary transition-colors" aria-label="Instagram">
                 <Instagram className="h-5 w-5" />
               </a>
             </div>
@@ -51,7 +51,7 @@ export function Footer() {
                 <li key={link.name}>
                   <Link
                     to={link.href}
-                    className="text-background/70 hover:text-primary transition-colors text-sm"
+                    className="text-gray-400 hover:text-primary transition-colors text-sm"
                   >
                     {link.name}
                   </Link>
@@ -68,7 +68,7 @@ export function Footer() {
                 <li key={link.name}>
                   <Link
                     to={link.href}
-                    className="text-background/70 hover:text-primary transition-colors text-sm"
+                    className="text-gray-400 hover:text-primary transition-colors text-sm"
                   >
                     {link.name}
                   </Link>
@@ -83,23 +83,23 @@ export function Footer() {
             <ul className="space-y-3">
               <li className="flex items-start gap-3 text-sm">
                 <MapPin className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-                <span className="text-background/70">
+                <span className="text-gray-400">
                   Dagupan City, Pangasinan, Philippines
                 </span>
               </li>
               <li className="flex items-center gap-3 text-sm">
                 <Phone className="h-5 w-5 text-primary shrink-0" />
-                <span className="text-background/70">+63 912 345 6789</span>
+                <span className="text-gray-400">+63 912 345 6789</span>
               </li>
               <li className="flex items-center gap-3 text-sm">
                 <Mail className="h-5 w-5 text-primary shrink-0" />
-                <span className="text-background/70">info@beebright.edu.ph</span>
+                <span className="text-gray-400">info@beebright.edu.ph</span>
               </li>
             </ul>
           </div>
         </div>
 
-        <div className="mt-12 pt-8 border-t border-background/10 flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-background/60">
+        <div className="mt-12 pt-8 border-t border-gray-800 flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-gray-500">
           <p>© 2025 Bee Bright Tutorial Center. All rights reserved.</p>
           <p>Dagupan City, Pangasinan</p>
         </div>

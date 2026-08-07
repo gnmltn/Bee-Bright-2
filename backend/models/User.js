@@ -3,6 +3,12 @@ const bcrypt = require('bcryptjs');
 const { getPasswordExpiresAt } = require('../utils/passwordPolicy');
 
 const userSchema = new mongoose.Schema({
+// Parent registration OTP fields
+parentOtpHash: { type: String, select: false },
+parentOtpExpires: { type: Date, select: false },
+parentOtpAttempts: { type: Number, default: 0, select: false },
+parentOtpLastSentAt: { type: Date, select: false },
+
 resetPasswordOtpHash: { type: String, select: false },
 resetPasswordOtpExpires: { type: Date, select: false },
 resetPasswordOtpAttempts: { type: Number, default: 0, select: false },
@@ -49,25 +55,46 @@ passwordExpiresAt: { type: Date, default: () => getPasswordExpiresAt({ passwordC
   },
   role: {
     type: String,
-    enum: ['student', 'tutor', 'admin', 'super_admin'],
+    enum: ['parent', 'student', 'tutor', 'admin', 'super_admin'],
     default: 'student'
   },
-  gradeLevel: {
-    type: String,
-    enum: ['Toddler', 'Pre-Kindergarten', 'Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'],
-    required: function() { 
-      return this.role === 'student'; 
-    }
+  // Student fields — enrollment is age-based, gradeLevel removed
+  birthdate: {
+    type: Date,
+    default: null
   },
   guardianName: {
     type: String,
-    required: function() { 
-      return this.role === 'student'; 
-    }
+    default: ''
   },
   guardianPhone: {
     type: String,
     default: ''
+  },
+  // Parent profile subdoc
+  parentProfile: {
+    address: { type: String, default: '' },
+    alternateGuardianName: { type: String, default: '' },
+    alternateGuardianPhone: { type: String, default: '' }
+  },
+  // Consent records
+  consents: [{
+    name: { type: String },          // e.g. 'participation_agreement'
+    version: { type: String },
+    acceptedAt: { type: Date },
+    ip: { type: String }
+  }],
+  // Student ID generated on enrollment approval (S-YYYYMMDD-XXXX)
+  studentId: {
+    type: String,
+    default: null,
+    sparse: true
+  },
+  // Parent linked to this student (set after enrollment approval)
+  parentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   },
   enrolledSubjects: [{
     type: mongoose.Schema.Types.ObjectId,
@@ -89,9 +116,13 @@ passwordExpiresAt: { type: Date, default: () => getPasswordExpiresAt({ passwordC
   },
   enrollmentStatus: {
     type: String,
-    enum: ['not_enrolled', 'payment_submitted', 'active', 'payment_rejected', 'cancelled', 'pending_payment'],
+    enum: [
+      'not_enrolled', 'pending_payment', 'payment_submitted',
+      'payment_under_verification', 'pending_approval',
+      'active', 'payment_rejected', 'rejected', 'cancelled'
+    ],
     default: function() {
-      return this.role === 'student' ? 'not_enrolled' : 'active';
+      return (this.role === 'student' || this.role === 'parent') ? 'not_enrolled' : 'active';
     }
   },
   paymentStatus: {
@@ -102,7 +133,7 @@ passwordExpiresAt: { type: Date, default: () => getPasswordExpiresAt({ passwordC
   isActive: {
     type: Boolean,
     default: function() {
-      // Admin, super admin and tutor should be active immediately
+      // Admin, super admin and tutor should be active immediately; parent/student start inactive
       return this.role === 'admin' || this.role === 'super_admin' || this.role === 'tutor';
     }
   },
@@ -160,6 +191,7 @@ userSchema.pre('save', async function(next) {
         this.enrollmentStatus = 'active';
         this.paymentStatus = 'verified';
       }
+      // parent and student start inactive until enrollment approved
     }
     
     next();

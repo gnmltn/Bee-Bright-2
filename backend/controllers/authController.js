@@ -671,25 +671,38 @@ const loginStart = async (req, res) => {
     }
 
     if (!user.isActive) {
-      if (user.role === 'student') {
+      // Parent accounts start inactive — they must be allowed to log in to
+      // track their enrollment status and manage their application.
+      // Only block if the account is truly deactivated (not simply pending approval).
+      if (user.role === 'parent') {
+        // Allow — parent will see their enrollment tracking dashboard
+      } else if (user.role === 'student') {
         return res.status(403).json({
           success: false,
           code: 'ENROLLMENT_PENDING_APPROVAL',
           message: 'Enrollment is pending admin approval. You can log in once your account is approved.'
         });
+      } else {
+        return res.status(401).json({ success: false, message: 'Account is deactivated. Please contact support.' });
       }
-
-      return res.status(401).json({ success: false, message: 'Account is deactivated. Please contact support.' });
     }
 
     if (role && user.role !== role.toLowerCase()) {
+      // Special case: parent accounts authenticate through the "Parent/Guardian" role.
+      // If the client sent 'student' but the account is 'parent', give a clear helpful message.
+      if (user.role === 'parent' && role === 'student') {
+        return res.status(401).json({
+          success: false,
+          message: 'You have a Parent/Guardian account. Please select "Parent / Guardian" on the login page.'
+        });
+      }
       return res.status(401).json({
         success: false,
         message: `Invalid credentials. You are registered as a ${user.role}.`
       });
     }
 
-    if (user.role === 'student' || user.role === 'tutor') {
+    if (user.role === 'student' || user.role === 'tutor' || user.role === 'parent') {
       const maintenanceOn = await getMaintenanceEnabled();
       if (maintenanceOn) {
         return res.status(503).json({
@@ -953,10 +966,16 @@ const verifyLoginOtp = async (req, res) => {
         });
       }
 
-      return res.status(401).json({
-        success: false,
-        message: 'Account is deactivated. Please contact support.'
-      });
+      // Parent accounts are inactive until enrollment is approved —
+      // they must be allowed through so they can track their application.
+      if (user.role === 'parent') {
+        // Do NOT block — continue to issue the login token below.
+      } else {
+        return res.status(401).json({
+          success: false,
+          message: 'Account is deactivated. Please contact support.'
+        });
+      }
     }
 
     if (
@@ -974,7 +993,8 @@ const verifyLoginOtp = async (req, res) => {
     if (
       verificationRecord.purpose === USER_LOGIN_OTP_PURPOSE &&
       user.role !== 'student' &&
-      user.role !== 'tutor'
+      user.role !== 'tutor' &&
+      user.role !== 'parent'
     ) {
       await AdminEmailVerification.deleteOne({ _id: verificationRecord._id });
       return res.status(401).json({
@@ -983,7 +1003,7 @@ const verifyLoginOtp = async (req, res) => {
       });
     }
 
-    if (user.role === 'student' || user.role === 'tutor') {
+    if (user.role === 'student' || user.role === 'tutor' || user.role === 'parent') {
       const maintenanceOn = await getMaintenanceEnabled();
       if (maintenanceOn) {
         return res.status(503).json({

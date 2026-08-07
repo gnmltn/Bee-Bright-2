@@ -8,7 +8,7 @@ import {
   setStoredUser,
 } from "@/utils/authStorage";
 
-export type UserRole = "student" | "tutor" | "admin" | "super_admin";
+export type UserRole = "student" | "tutor" | "admin" | "super_admin" | "parent";
 
 export interface User {
   id: string;
@@ -242,7 +242,7 @@ if (DEV_BYPASS) {
       const request =
         role === "admin" || role === "super_admin"
           ? authService.adminLoginStart({ email, password })
-          : authService.loginStart({ email, password, role: role as "student" | "tutor" });
+          : authService.loginStart({ email, password, role: role as "student" | "tutor" | "parent" });
 
       const { data } = await request;
       if (data?.success && data?.user) {
@@ -308,12 +308,15 @@ if (DEV_BYPASS) {
       if (data?.success && data?.user) {
         const apiUser = data.user as Record<string, unknown>;
         const authToken = (data as { token?: string })?.token;
+        // Legacy student accounts (not parent) that are pending approval cannot proceed
         if (apiUser.role === "student" && apiUser.enrollmentStatus !== "active") {
           return {
             success: false,
             message: "Your account is pending admin approval. You cannot log in until your enrollment is accepted.",
           };
         }
+        // Parent accounts are always allowed through — they may be inactive (pending approval)
+        // but they need to log in to track their enrollment status.
 
         const frontendUser = mapApiUserToFrontendUser(apiUser);
         setAuthSession(frontendUser, authToken || null);

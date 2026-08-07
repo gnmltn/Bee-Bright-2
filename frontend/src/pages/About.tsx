@@ -8,6 +8,7 @@ import {
   BookOpen,
   TrendingUp,
   Shield,
+  HeartHandshake,
 } from "lucide-react";
 import { Layout } from "@/components/layout/Layout";
 import beeMascot from "@/assets/bee-mascot.png";
@@ -41,6 +42,12 @@ const impacts = [
     title: "For Students",
     description: "More organized and engaging learning experience with easy access to schedules, materials, and progress updates.",
     color: "bg-primary/10 text-primary",
+  },
+  {
+    icon: HeartHandshake,
+    title: "For Parents",
+    description: "Real-time visibility into their child's progress, attendance, and announcements — giving peace of mind and keeping families actively involved in their child's learning journey.",
+    color: "bg-rose-500/10 text-rose-500",
   },
   {
     icon: Shield,
@@ -174,11 +181,11 @@ export default function AboutPage() {
               Making a <span className="gradient-text">Difference</span>
             </h2>
             <p className="text-muted-foreground text-lg">
-              See how Bee Bright positively impacts students, staff, and the community.
+              See how Bee Bright positively impacts students, parents, staff, and the community.
             </p>
           </motion.div>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {impacts.map((impact, index) => (
               <motion.div
                 key={impact.title}

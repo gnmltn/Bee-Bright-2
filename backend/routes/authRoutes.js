@@ -7,6 +7,11 @@ const {
   changePassword,
 } = require("../controllers/passwordController");
 const {
+  registerParent,
+  sendParentOtp,
+  verifyParentOtp,
+} = require('../controllers/parentAuthController');
+const {
   register,
   login,
   adminLogin,
@@ -48,13 +53,40 @@ const normalizeFields = (req, res, next) => {
 // Public routes
 router.get('/captcha-challenge', getCaptchaChallenge);
 
+// ── Parent/Guardian enrollment registration ──────────────────────────────
+router.post(
+  '/register-parent',
+  validate([
+    body('name').notEmpty().trim().withMessage('Name is required'),
+    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    body('mobile').notEmpty().withMessage('Mobile number is required'),
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  ]),
+  registerParent
+);
+router.post(
+  '/parent-otp/send',
+  validate([
+    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+  ]),
+  sendParentOtp
+);
+router.post(
+  '/parent-otp/verify',
+  validate([
+    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    body('code').isLength({ min: 6, max: 6 }).isNumeric().withMessage('6-digit code required'),
+  ]),
+  verifyParentOtp
+);
+
 router.post(
   '/login-start',
   userLoginLimiter,
   validate([
     body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
     body('password').notEmpty().withMessage('Password is required'),
-    body('role').isIn(['student', 'tutor']).withMessage('Role must be student or tutor'),
+    body('role').isIn(['student', 'tutor', 'parent']).withMessage('Role must be student, tutor, or parent'),
   ]),
   loginStart
 );

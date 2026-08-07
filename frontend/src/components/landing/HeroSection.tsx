@@ -1,36 +1,11 @@
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
-import { ArrowRight, Sparkles, Award } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { dashboardService } from "@/services/api";
 import beeMascot from "@/assets/bee-mascot.png";
 import heroStudents from "@/assets/hero-students.jpg";
 
 export function HeroSection() {
-  const [monthlyNewStudents, setMonthlyNewStudents] = useState<number | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-
-    dashboardService
-      .getPublicStats()
-      .then((res) => {
-        if (!mounted) return;
-        if (res.data?.success && typeof res.data?.stats?.monthlyNewStudents === "number") {
-          setMonthlyNewStudents(res.data.stats.monthlyNewStudents);
-        }
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setMonthlyNewStudents(null);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   return (
     <section className="relative overflow-hidden bg-gradient-to-br from-background via-muted to-background">
       {/* Decorative elements */}
@@ -112,28 +87,6 @@ export function HeroSection() {
                   alt="Bee mascot"
                   className="relative h-24 w-24 md:h-32 md:w-32 drop-shadow-xl"
                 />
-              </div>
-            </motion.div>
-
-            {/* Floating card */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.6 }}
-              className="absolute -top-4 -right-4 md:-top-6 md:-right-6 bg-card rounded-xl p-4 shadow-lg border border-border"
-            >
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-full bg-success/20 flex items-center justify-center">
-                  <Award className="h-5 w-5 text-success" />
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">This Month</p>
-                  <p className="font-semibold text-foreground">
-                    {monthlyNewStudents == null
-                      ? "New Students"
-                      : `${monthlyNewStudents.toLocaleString()} New Students`}
-                  </p>
-                </div>
               </div>
             </motion.div>
           </motion.div>

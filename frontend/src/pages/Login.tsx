@@ -1,7 +1,7 @@
 import { useState, useEffect, lazy, Suspense, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowLeft, GraduationCap, Users, Eye, EyeOff, RotateCcw } from "lucide-react";
+import { ArrowLeft, GraduationCap, Users, Eye, EyeOff, RotateCcw, Baby } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,20 +13,23 @@ import beeMascot from "@/assets/bee-mascot.png";
 
 const ForgotPasswordModal = lazy(() => import("@/components/ForgotPasswordModal"));
 
+// ── Role definitions ──────────────────────────────────────────────────────
+// "student" role is kept for legacy compatibility but the primary
+// public-facing account type is now "parent" (Parent/Guardian).
+type LoginRole = "parent" | "tutor";
+
 const roles: Array<{
-  id: "student" | "tutor";
+  id: LoginRole;
   name: string;
   icon: typeof GraduationCap;
   description: string;
-  sampleEmail: string;
   color: string;
 }> = [
   {
-    id: "student",
-    name: "Student",
-    icon: GraduationCap,
-    description: "Access your lessons and progress",
-    sampleEmail: "student@beebright.com",
+    id: "parent",
+    name: "Parent / Guardian",
+    icon: Baby,
+    description: "Manage your child's enrollment and progress",
     color: "from-primary to-primary/80",
   },
   {
@@ -34,25 +37,28 @@ const roles: Array<{
     name: "Tutor",
     icon: Users,
     description: "Manage your classes and students",
-    sampleEmail: "tutor@beebright.com",
     color: "from-primary to-primary/80",
   },
 ];
 
+// Maps every role that can log in via this page to its dashboard route
+const dashboardRoutes: Record<string, string> = {
+  parent: "/student-dashboard",  // parent uses student dashboard — joined account
+  student: "/student-dashboard",
+  tutor: "/tutor-dashboard",
+  admin: "/admin-dashboard",
+  super_admin: "/super-admin-dashboard",
+};
+
 function formatExpiry(expiresAt?: string) {
   if (!expiresAt) return "Code expires soon.";
-
   const date = new Date(expiresAt);
   if (Number.isNaN(date.getTime())) return "Code expires soon.";
-
-  return `Code expires at ${date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}.`;
+  return `Code expires at ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
 }
 
 export default function Login() {
-  const [selectedRole, setSelectedRole] = useState<"student" | "tutor" | null>(null);
+  const [selectedRole, setSelectedRole] = useState<LoginRole | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [otpCode, setOtpCode] = useState("");
@@ -66,6 +72,7 @@ export default function Login() {
   const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [resendCountdown, setResendCountdown] = useState(0);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+
   const { startOtpLogin, verifyOtpLogin, isAuthenticated, user, authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -73,13 +80,7 @@ export default function Login() {
   const pendingMessage = (location.state as { message?: string })?.message;
   const expiryLabel = useMemo(() => formatExpiry(otpExpiresAt), [otpExpiresAt]);
 
-  const dashboardRoutes: Record<"student" | "tutor" | "admin" | "super_admin", string> = {
-    student: "/student-dashboard",
-    tutor: "/tutor-dashboard",
-    admin: "/admin-dashboard",
-    super_admin: "/super-admin-dashboard",
-  };
-
+  // Show expired-session banner if redirected here after timeout
   useEffect(() => {
     const sessionExpired = sessionStorage.getItem("session_expired_message");
     if (sessionExpired) {
@@ -88,28 +89,32 @@ export default function Login() {
     }
   }, [toast]);
 
-  const canAccessDashboard = user && (user.role !== "student" || user.enrollmentStatus === "active");
+  // Redirect already-authenticated users to their dashboard
+  const canAccessDashboard = user && (
+    user.role === "tutor" ||
+    user.role === "admin" ||
+    user.role === "super_admin" ||
+    user.role === "parent" ||        // parent uses student dashboard
+    (user.role === "student" && user.enrollmentStatus === "active")
+  );
 
   useEffect(() => {
     if (authLoading) return;
-    if (isAuthenticated && canAccessDashboard) {
-      navigate(dashboardRoutes[user!.role], { replace: true });
+    if (isAuthenticated && canAccessDashboard && user) {
+      const route = dashboardRoutes[user.role] ?? "/parent-dashboard";
+      navigate(route, { replace: true });
     }
-  }, [isAuthenticated, user, authLoading, navigate, canAccessDashboard, dashboardRoutes]);
+  }, [isAuthenticated, user, authLoading, navigate, canAccessDashboard]);
 
+  // Resend countdown timer
   useEffect(() => {
     if (resendCountdown <= 0) return;
-
     const timer = window.setInterval(() => {
-      setResendCountdown((current) => {
-        if (current <= 1) {
-          window.clearInterval(timer);
-          return 0;
-        }
-        return current - 1;
+      setResendCountdown((c) => {
+        if (c <= 1) { window.clearInterval(timer); return 0; }
+        return c - 1;
       });
     }, 1000);
-
     return () => window.clearInterval(timer);
   }, [resendCountdown]);
 
@@ -122,73 +127,43 @@ export default function Login() {
     setResendCountdown(0);
   };
 
-  const handleRoleSelect = (role: "student" | "tutor") => {
+  const handleRoleSelect = (role: LoginRole) => {
     setSelectedRole(role);
     resetOtpStep();
   };
 
+  const getApiRole = (role: LoginRole): "parent" | "tutor" => role;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRole) {
-      toast({
-        title: "Please select a role",
-        description: "Choose whether you're a Student or Tutor",
-        variant: "destructive",
-      });
+      toast({ title: "Please select a role", description: "Choose Parent/Guardian or Tutor", variant: "destructive" });
       return;
     }
-
     if (isSubmitting) return;
     setIsSubmitting(true);
-
     try {
-      const result = await startOtpLogin(email.trim().toLowerCase(), password, selectedRole);
+      const result = await startOtpLogin(email.trim().toLowerCase(), password, getApiRole(selectedRole));
       if (!result.success) {
-        if (typeof result.retryAfterSeconds === "number") {
-          setResendCountdown(result.retryAfterSeconds);
-        }
-        if (result.code === "PASSWORD_EXPIRED") {
-          setShowForgotPassword(true);
-        }
-        if (result.code === "SYSTEM_MAINTENANCE") {
-          navigate("/maintenance", { replace: true });
-          return;
-        }
-
-        toast({
-          title: "Login failed",
-          description: result.message || "Please check your credentials",
-          variant: "destructive",
-        });
+        if (typeof result.retryAfterSeconds === "number") setResendCountdown(result.retryAfterSeconds);
+        if (result.code === "PASSWORD_EXPIRED") setShowForgotPassword(true);
+        if (result.code === "SYSTEM_MAINTENANCE") { navigate("/maintenance", { replace: true }); return; }
+        toast({ title: "Login failed", description: result.message || "Please check your credentials", variant: "destructive" });
         return;
       }
-
       if (!result.verificationId) {
         const role = result.user?.role ?? selectedRole;
-        toast({
-          title: "Welcome back!",
-          description: result.message || "Logged in using trusted device.",
-        });
-        window.location.replace(dashboardRoutes[role]);
+        toast({ title: "Welcome back!", description: result.message || "Logged in using trusted device." });
+        window.location.replace(dashboardRoutes[role] ?? "/parent-dashboard");
         return;
       }
-
       setVerificationId(result.verificationId);
       setMaskedEmail(result.maskedEmail || "");
       setOtpExpiresAt(result.expiresAt);
       setOtpCode("");
       setShowOtpStep(true);
       setResendCountdown(result.nextResendAvailableInSeconds || 0);
-      toast({
-        title: "Verification code sent",
-        description: result.message || "Please check your email for the code.",
-      });
-      if (result.devOtp) {
-        toast({
-          title: "Development OTP",
-          description: result.devOtp,
-        });
-      }
+      toast({ title: "Verification code sent", description: result.message || "Please check your email." });
     } finally {
       setIsSubmitting(false);
     }
@@ -197,36 +172,17 @@ export default function Login() {
   const handleVerifyOtp = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!selectedRole || !verificationId || !otpCode.trim() || isVerifyingOtp) return;
-
     setIsVerifyingOtp(true);
     try {
-      const result = await verifyOtpLogin(
-        email.trim().toLowerCase(),
-        verificationId,
-        otpCode.trim(),
-        selectedRole
-      );
-
+      const result = await verifyOtpLogin(email.trim().toLowerCase(), verificationId, otpCode.trim(), getApiRole(selectedRole));
       if (!result.success) {
-        if (result.code === "SYSTEM_MAINTENANCE") {
-          navigate("/maintenance", { replace: true });
-          return;
-        }
-
-        toast({
-          title: "Verification failed",
-          description: result.message || "Please try again.",
-          variant: "destructive",
-        });
+        if (result.code === "SYSTEM_MAINTENANCE") { navigate("/maintenance", { replace: true }); return; }
+        toast({ title: "Verification failed", description: result.message || "Please try again.", variant: "destructive" });
         return;
       }
-
-      toast({
-        title: "Welcome back!",
-        description: `Logged in as ${selectedRole}`,
-      });
       const role = result.user?.role ?? selectedRole;
-      window.location.replace(dashboardRoutes[role]);
+      toast({ title: "Welcome back!", description: `Logged in as ${role === "parent" ? "Parent/Guardian" : role}` });
+      window.location.replace(dashboardRoutes[role] ?? "/parent-dashboard");
     } finally {
       setIsVerifyingOtp(false);
     }
@@ -234,49 +190,26 @@ export default function Login() {
 
   const handleResendOtp = async () => {
     if (!selectedRole || !email.trim() || !password || isResendingOtp || resendCountdown > 0) return;
-
     setIsResendingOtp(true);
     try {
-      const result = await startOtpLogin(email.trim().toLowerCase(), password, selectedRole);
+      const result = await startOtpLogin(email.trim().toLowerCase(), password, getApiRole(selectedRole));
       if (!result.success) {
-        if (typeof result.retryAfterSeconds === "number") {
-          setResendCountdown(result.retryAfterSeconds);
-        }
-
-        toast({
-          title: "Resend unavailable",
-          description: result.message || "Could not send another code yet.",
-          variant: "destructive",
-        });
+        if (typeof result.retryAfterSeconds === "number") setResendCountdown(result.retryAfterSeconds);
+        toast({ title: "Resend unavailable", description: result.message || "Could not send another code yet.", variant: "destructive" });
         return;
       }
-
       if (!result.verificationId) {
         const role = result.user?.role ?? selectedRole;
-        toast({
-          title: "Welcome back!",
-          description: result.message || "Logged in using trusted device.",
-        });
-        window.location.replace(dashboardRoutes[role]);
+        toast({ title: "Welcome back!", description: result.message || "Logged in using trusted device." });
+        window.location.replace(dashboardRoutes[role] ?? "/parent-dashboard");
         return;
       }
-
       setVerificationId(result.verificationId);
       setMaskedEmail(result.maskedEmail || "");
       setOtpExpiresAt(result.expiresAt);
       setOtpCode("");
-      setShowOtpStep(true);
       setResendCountdown(result.nextResendAvailableInSeconds || 0);
-      toast({
-        title: "Verification code sent",
-        description: result.message || "Please check your email for the code.",
-      });
-      if (result.devOtp) {
-        toast({
-          title: "Development OTP",
-          description: result.devOtp,
-        });
-      }
+      toast({ title: "Verification code sent", description: result.message || "Please check your email." });
     } finally {
       setIsResendingOtp(false);
     }
@@ -299,6 +232,8 @@ export default function Login() {
     );
   }
 
+  const selectedRoleDef = roles.find((r) => r.id === selectedRole);
+
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
@@ -310,11 +245,8 @@ export default function Login() {
             </div>
           )}
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="text-center mb-8"
-          >
+          {/* Header */}
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-8">
             <img src={beeMascot} alt="Bee Bright" className="h-20 w-20 mx-auto mb-4" />
             <h1 className="font-display text-3xl md:text-4xl font-bold mb-2">
               <span className="text-primary">Bee</span>
@@ -325,15 +257,11 @@ export default function Login() {
             </p>
           </motion.div>
 
-          <div className="flex justify-center gap-4 mb-8">
-            <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto">
+          {/* Role selector */}
+          <div className="flex justify-center mb-8">
+            <div className="grid grid-cols-2 gap-4 max-w-xl w-full mx-auto">
               {roles.map((role, index) => (
-                <motion.div
-                  key={role.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                >
+                <motion.div key={role.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.1 }}>
                   <Card
                     className={`cursor-pointer transition-all duration-300 hover:shadow-lg ${
                       selectedRole === role.id ? "ring-2 ring-primary border-primary" : "hover:border-primary/50"
@@ -341,9 +269,7 @@ export default function Login() {
                     onClick={() => handleRoleSelect(role.id)}
                   >
                     <CardHeader className="text-center pb-2">
-                      <div
-                        className={`w-16 h-16 mx-auto rounded-full bg-gradient-to-br ${role.color} flex items-center justify-center mb-3`}
-                      >
+                      <div className={`w-16 h-16 mx-auto rounded-full bg-gradient-to-br ${role.color} flex items-center justify-center mb-3`}>
                         <role.icon className="h-8 w-8 text-primary-foreground" />
                       </div>
                       <CardTitle className="text-xl">{role.name}</CardTitle>
@@ -355,6 +281,7 @@ export default function Login() {
             </div>
           </div>
 
+          {/* Credentials / OTP form */}
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: selectedRole ? 1 : 0.6 }}>
             <Card className="max-w-md mx-auto">
               <CardHeader>
@@ -375,11 +302,7 @@ export default function Login() {
                       <Input
                         id="email"
                         type="email"
-                        placeholder={
-                          selectedRole
-                            ? roles.find((role) => role.id === selectedRole)?.sampleEmail || "your@email.com"
-                            : "your@email.com"
-                        }
+                        placeholder="your@email.com"
                         value={email}
                         onChange={(e) => setEmail(e.target.value.toLowerCase())}
                         autoCapitalize="none"
@@ -412,19 +335,15 @@ export default function Login() {
                       </div>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      After your password is confirmed, we&apos;ll send a one-time verification code to your email.
+                      After your password is confirmed, we'll send a one-time verification code to your email.
                     </p>
                     <Button type="submit" className="w-full btn-glow" size="lg" disabled={!selectedRole || isSubmitting}>
                       {isSubmitting
                         ? "Sending code..."
-                        : `Send Code for ${selectedRole ? roles.find((role) => role.id === selectedRole)?.name : "..."}`}
+                        : `Send Code for ${selectedRoleDef?.name ?? "..."}`}
                     </Button>
                     <p className="mt-4 text-center text-sm text-muted-foreground">
-                      <button
-                        type="button"
-                        onClick={() => setShowForgotPassword(true)}
-                        className="text-primary hover:underline"
-                      >
+                      <button type="button" onClick={() => setShowForgotPassword(true)} className="text-primary hover:underline">
                         Forgot Password?
                       </button>
                     </p>
@@ -434,14 +353,11 @@ export default function Login() {
                     <div className="rounded-xl border border-border/70 bg-muted/30 p-4 space-y-2">
                       <p className="text-sm font-medium text-foreground">Verification code sent</p>
                       <p className="text-sm text-muted-foreground">
-                        Enter the 6-digit code sent to <span className="font-medium text-foreground">{maskedEmail || email}</span>.
+                        Enter the 6-digit code sent to{" "}
+                        <span className="font-medium text-foreground">{maskedEmail || email}</span>.
                       </p>
                       <p className="text-xs text-muted-foreground">{expiryLabel}</p>
-                      <p className="text-xs text-muted-foreground">
-                        You can resend once immediately, then the wait becomes 3 minutes, then 5 minutes for the next resends.
-                      </p>
                     </div>
-
                     <div className="space-y-2">
                       <Label htmlFor="otp">Email OTP</Label>
                       <Input
@@ -456,16 +372,9 @@ export default function Login() {
                         required
                       />
                     </div>
-
-                    <Button
-                      type="submit"
-                      className="w-full btn-glow"
-                      size="lg"
-                      disabled={isVerifyingOtp || otpCode.trim().length !== 6}
-                    >
+                    <Button type="submit" className="w-full btn-glow" size="lg" disabled={isVerifyingOtp || otpCode.trim().length !== 6}>
                       {isVerifyingOtp ? "Verifying..." : "Verify and Login"}
                     </Button>
-
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Button
                         type="button"
@@ -475,11 +384,7 @@ export default function Login() {
                         disabled={isResendingOtp || resendCountdown > 0}
                       >
                         <RotateCcw className="mr-2 h-4 w-4" />
-                        {isResendingOtp
-                          ? "Sending..."
-                          : resendCountdown > 0
-                            ? `Resend in ${Math.ceil(resendCountdown / 60)}m`
-                            : "Resend Code"}
+                        {isResendingOtp ? "Sending..." : resendCountdown > 0 ? `Resend in ${Math.ceil(resendCountdown / 60)}m` : "Resend Code"}
                       </Button>
                       <Button type="button" variant="ghost" className="flex-1" onClick={resetOtpStep}>
                         <ArrowLeft className="mr-2 h-4 w-4" />
@@ -490,6 +395,16 @@ export default function Login() {
                 )}
               </CardContent>
             </Card>
+          </motion.div>
+
+          {/* Enrollment CTA for new parents */}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="text-center mt-6">
+            <p className="text-sm text-muted-foreground">
+              Don't have an account yet?{" "}
+              <a href="/enroll" className="text-primary font-medium hover:underline">
+                Enroll your child
+              </a>
+            </p>
           </motion.div>
         </div>
       </div>

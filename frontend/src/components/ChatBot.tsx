@@ -44,6 +44,21 @@ const QUESTIONNAIRES: Record<PromptRole, { title: string; intro: string; questio
       "How do I contact my tutor?"
     ]
   },
+  // Parent uses the same dashboard as student — same assistant prompts
+  parent: {
+    title: "Parent / Guardian Portal",
+    intro: "Welcome back. I am your assistant for the Bee Bright Parent Portal. I can help you with your child's enrollment status, payment information, schedules, and progress updates. How may I assist you today?",
+    questions: [
+      "What is my child's enrollment status?",
+      "What is the payment status?",
+      "When is my child's next class?",
+      "Who is my child's tutor?",
+      "How do I upload payment proof?",
+      "How do I track my enrollment?",
+      "When will the enrollment be approved?",
+      "How do I contact Bee Bright?"
+    ]
+  },
   tutor: {
     title: "Tutor Portal",
     intro: "Welcome to your dashboard. I am here to assist you with session management, learning material uploads, student oversight, and administrative communication. What can I help you with today?",
@@ -96,8 +111,10 @@ const QUESTIONNAIRES: Record<PromptRole, { title: string; intro: string; questio
 
 export function ChatBot() {
   const { user } = useAuth();
-  const promptRole: PromptRole = user?.role ?? "public";
-  const questionnaire = QUESTIONNAIRES[promptRole];
+  const promptRole: PromptRole = (user?.role && user.role in QUESTIONNAIRES)
+    ? (user.role as PromptRole)
+    : "public";
+  const questionnaire = QUESTIONNAIRES[promptRole] ?? QUESTIONNAIRES["public"];
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {

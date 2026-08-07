@@ -18,8 +18,8 @@ const loadAdminUser = async (userId) => (
 );
 
 const MANAGEABLE_ROLES_BY_ACTOR = {
-  admin: ['student', 'tutor'],
-  super_admin: ['admin', 'student', 'tutor'],
+  admin: ['student', 'tutor', 'parent'],
+  super_admin: ['admin', 'student', 'tutor', 'parent'],
 };
 
 const getManageableRolesForActor = (actorRole) => MANAGEABLE_ROLES_BY_ACTOR[actorRole] || [];

@@ -84,6 +84,49 @@ api.interceptors.response.use(
   }
 );
 
+// ── Parent Auth (enrollment wizard) ─────────────────────────────────────
+export const parentAuthService = {
+  register: (data: { name: string; email: string; mobile: string; password: string }) =>
+    api.post<{ success: boolean; message: string; verificationSentTo: string; parentId: string }>(
+      '/auth/register-parent', data
+    ),
+  sendOtp: (email: string) =>
+    api.post<{ success: boolean; message: string; verificationSentTo: string }>(
+      '/auth/parent-otp/send', { email }
+    ),
+  verifyOtp: (email: string, code: string) =>
+    api.post<{ success: boolean; token: string; emailVerifiedAt: string; parentId: string }>(
+      '/auth/parent-otp/verify', { email, code }
+    ),
+};
+
+// ── Pricing ──────────────────────────────────────────────────────────────
+export interface PricingPackage {
+  _id: string;
+  programCode: string;
+  packageSlug: string;
+  displayName: string;
+  durationDesc: string;
+  priceFull: number;
+  priceDown: number;
+  currency: string;
+  ageMin: number | null;
+  ageMax: number | null;
+  displayOrder: number;
+  active: boolean;
+  meta: {
+    qrUrl?: string | null;
+    accountName?: string | null;
+    accountNumber?: string | null;
+    bankBranch?: string | null;
+  };
+}
+export const pricingService = {
+  getAll: () => api.get<{ success: boolean; count: number; pricing: PricingPackage[] }>('/enrollments/pricing'),
+  getPaymentInstructions: (method: 'gcash' | 'seabank' | 'bdo') =>
+    api.get<{ success: boolean; method: string; instructions: Record<string, string> }>(`/payments/instructions/${method}`),
+};
+
 // Auth Service - FIXED endpoints
 export const authService = {
   getCaptchaChallenge: () =>
@@ -98,7 +141,7 @@ export const authService = {
         expiresInSeconds: number;
       };
     }>('/auth/captcha-challenge'),
-  loginStart: (credentials: { email: string; password: string; role: 'student' | 'tutor' }) =>
+  loginStart: (credentials: { email: string; password: string; role: 'student' | 'tutor' | 'parent' }) =>
     api.post<{
       success: boolean;
       requiresOtp?: boolean;
@@ -224,64 +267,107 @@ export const enrollmentService = {
     api.post<{ success: boolean; message: string }>('/enrollments/send-verification-code', { email }),
   verifyEmailCode: (email: string, code: string) =>
     api.post<{ success: boolean; message: string; verifiedAt?: string }>('/enrollments/verify-email-code', { email, code }),
+
+  // ── New wizard submit ─────────────────────────────────────────────────
+  submitWizard: (data: {
+    packages: { programCode: string; packageSlug: string; displayName: string; price: number; paymentOption: 'down' }[];
+    paymentOption: 'down'; // always 50% down — backend enforces this
+    paymentMethod: 'gcash' | 'seabank' | 'bdo';
+    studentFirstName: string;
+    studentLastName: string;
+    studentMiddleName?: string;
+    birthdate: string;
+    preferredStartDate?: string;
+    preferredTime?: 'morning' | 'afternoon' | 'no_preference';
+    allergies?: string;
+    medications?: string;
+    specialNeeds?: boolean;
+    specialNeedsDetails?: string;
+    emergencyContact?: string;
+    consentVersion: string;
+    consentItems: { name: string; accepted: boolean; version: string }[];
+  }) => api.post<{
+    success: boolean; enrollmentId: string; enrollmentDbId: string;
+    paymentId: string; amountDue: number; totalFee: number;
+    paymentMethod: string; instructions: Record<string, string>;
+  }>('/enrollments/submit', data),
+
+  submitPaymentProof: (enrollmentId: string, data: {
+    proofDataUrl: string;
+    payerReference?: string;
+    paymentMethod?: string;
+  }) => api.post(`/enrollments/${enrollmentId}/submit-proof`, data),
+
+  trackEnrollment: (enrollmentId: string, email: string) =>
+    api.get('/enrollments/track', { params: { enrollmentId, email } }),
+
+  getMyEnrollments: () => api.get('/enrollments/my-enrollments'),
+
+  // ── Legacy ────────────────────────────────────────────────────────────
   submitEnrollment: (data: {
-    firstName?: string;
-    middleName?: string;
-    lastName?: string;
-    email?: string;
-    phone?: string;
-    password?: string;
-    gradeLevel?: string;
-    guardianName?: string;
-    guardianPhone?: string;
-    selectedSubjectCodes: string[];
-    totalFee: number;
-    paymentOption: 'full' | 'down';
-    paymentMethod?: 'gcash' | 'blockchain';
+    firstName?: string; middleName?: string; lastName?: string;
+    email?: string; phone?: string; password?: string; gradeLevel?: string;
+    guardianName?: string; guardianPhone?: string;
+    selectedSubjectCodes: string[]; totalFee: number;
+    paymentOption: 'full' | 'down'; paymentMethod?: 'gcash' | 'blockchain';
   }) => api.post('/enrollments/submit', data),
   createEnrollment: (data: Record<string, unknown>) => api.post('/enrollments', data),
-  getMyEnrollments: () => api.get('/enrollments/my-enrollments'),
   getEnrollment: (enrollmentId: string) => api.get(`/enrollments/${enrollmentId}`),
-  /** Admin: get enrollment for a student (e.g. to get official enrollment start date) */
   getEnrollmentByStudent: (studentId: string) => api.get(`/enrollments/student/${studentId}`),
-  /** Admin: get all enrollments from database */
-  getAllEnrollments: () => api.get('/enrollments'),
-  /** Admin: get single enrollment with payments (for View proof of payment) */
-  getEnrollmentById: (enrollmentId: string) => api.get(`/enrollments/${enrollmentId}`),
+  getAllEnrollments: (params?: { status?: string; q?: string; page?: number; limit?: number }) =>
+    api.get('/enrollments/admin/all', { params }),
+  getEnrollmentById: (id: string) => api.get(`/enrollments/${id}`),
   updateEnrollmentStatus: (enrollmentId: string, status: string) =>
     api.put(`/enrollments/${enrollmentId}/status`, { status }),
-  /** Admin: accept (verified: true) or reject (verified: false) enrollment. When accepted, student is officially enrolled. */
-  verifyEnrollmentPayment: (enrollmentId: string, verified: boolean) =>
-    api.put(`/enrollments/${enrollmentId}/verify-payment`, { verified }),
-  /** Admin: add new student (walk-in enrollment) – creates User + Enrollment */
+  verifyEnrollmentPayment: (enrollmentId: string, verified: boolean, note?: string) =>
+    api.put(`/enrollments/${enrollmentId}/verify-payment`, { verified, note }),
+  approveEnrollment: (enrollmentId: string) =>
+    api.put(`/enrollments/${enrollmentId}/approve`),
+  rejectEnrollment: (enrollmentId: string, reason: string, allowResubmission = true) =>
+    api.put(`/enrollments/${enrollmentId}/reject`, { reason, allowResubmission }),
   adminAddStudent: (data: {
-    firstName: string;
-    middleName?: string;
-    lastName: string;
-    email: string;
-    phone: string;
-    password: string;
-    gradeLevel: string;
-    guardianName: string;
-    guardianPhone?: string;
-    selectedSubjectIds: string[];
-    paymentOption: 'full' | 'down';
-    totalFee: number;
-    paymentStatus: string;
-    status: string;
-    enrollmentDate?: string;
+    firstName: string; middleName?: string; lastName: string; email: string;
+    phone: string; password: string; gradeLevel: string; guardianName: string;
+    guardianPhone?: string; selectedSubjectIds: string[]; paymentOption: 'full' | 'down';
+    totalFee: number; paymentStatus: string; status: string; enrollmentDate?: string;
   }) => api.post('/enrollments/admin/add-student', data),
+  resubmitPayment: (paymentId: string, data: { proofDataUrl: string; payerReference?: string }) =>
+    api.put(`/payments/${paymentId}/resubmit`, data),
 };
-
 export interface AdminEnrollment {
   _id: string;
+  enrollmentId?: string;
+  // The parent/guardian who submitted the enrollment — the only login account
+  parent?: { _id: string; firstName: string; lastName: string; email: string; phone?: string } | null;
+  // Child info captured at submission time — NOT a separate User account
+  studentSnapshot?: { firstName?: string; lastName?: string; middleName?: string; birthdate?: string; computedAge?: number } | null;
+  // Generated on approval and stored on the Enrollment, not on a User
+  studentId?: string | null;
+  packages?: { programCode?: string; packageSlug?: string; displayName?: string; price?: number; paymentOption?: string }[];
+  preferredStartDate?: string | null;
+  preferredTime?: string | null;
+  rejectionReason?: string | null;
+  allowResubmission?: boolean;
+  statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
+  consentItems?: { name?: string; accepted?: boolean }[];
+  latestPayment?: {
+    _id?: string;
+    status?: string;
+    paymentMethod?: string;
+    amountDue?: number;
+    proofUrl?: string;
+    submittedAt?: string;
+    verifiedAt?: string;
+    resubmissionCount?: number;
+    referenceNumber?: string;
+  } | null;
+  // Legacy fields kept for backward compat with old enrollment records
   student?: {
     _id: string;
     firstName: string;
     lastName: string;
     email: string;
     phone?: string;
-    gradeLevel?: string;
     profileImage?: string;
   } | null;
   selectedSubjects?: { _id: string; name: string; code?: string; price?: number }[];
@@ -335,7 +421,7 @@ export const dashboardService = {
 export interface DashboardStats {
   totalStudents: number;
   activeTutors: number;
-  activeClasses: number;
+  pendingEnrollments: number;
   monthlyRevenue: number;
 }
 
