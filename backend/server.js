@@ -45,9 +45,11 @@ const announcementRoutes = require('./routes/announcementRoutes');
 const auditRoutes = require('./routes/auditRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const adminCreationRoutes = require('./routes/adminCreationRoutes');
+const assessmentRoutes = require('./routes/assessmentRoutes');
 const { ensureSuperAdmin } = require('./utils/ensureSuperAdmin');
 const { migrateScheduleIndexes } = require('./utils/scheduleIndexMigration');
 const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
+const { ensureAssessmentTemplates } = require('./utils/ensureAssessmentTemplates');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
 
 const app = express();
@@ -141,6 +143,7 @@ mongoose.connect(process.env.MONGODB_URI, mongoConnectionOptions)
     await migrateScheduleIndexes();
     await ensureSuperAdmin();
     await ensureRetiredPricing();
+    await ensureAssessmentTemplates();
   } catch (err) {
     console.error('❌ Startup initialization task failed:', err);
   }
@@ -166,6 +169,7 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/audit-logs', auditRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/admin-invites', adminCreationRoutes);
+app.use('/api/assessments', assessmentRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

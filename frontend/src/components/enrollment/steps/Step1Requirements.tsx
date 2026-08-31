@@ -137,6 +137,7 @@ function DocUpload({
 
 export default function Step1Requirements({ data, update, onNext }: Props) {
   const { toast } = useToast();
+  const isAddChildMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'add-child';
 
   const allDocsUploaded =
     !!data.docBirthCertificate && !!data.docStudentPhoto && !!data.docGuardianId;
@@ -160,8 +161,9 @@ export default function Step1Requirements({ data, update, onNext }: Props) {
       <div>
         <h2 className="text-xl font-bold text-foreground">Enrollment Requirements</h2>
         <p className="text-muted-foreground text-sm mt-1">
-          Upload the three required documents below before creating your account.
-          You can take a clear photo of physical documents.
+          {isAddChildMode
+            ? 'Upload the three required documents below before continuing with this child\'s enrollment.'
+            : 'Upload the three required documents below before creating your account. You can take a clear photo of physical documents.'}
         </p>
       </div>
 

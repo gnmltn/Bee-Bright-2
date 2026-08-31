@@ -1,7 +1,7 @@
 /**
  * Shared types for the Bee Bright Enrollment Wizard.
  */
-import type { PricingPackage } from '@/services/api';
+import type { AssessmentTemplate } from './assessment-types';
 
 export interface SelectedPackage {
   programCode: string;
@@ -71,6 +71,17 @@ export interface WizardData {
   specialNeedsDetails: string;
   emergencyContact: string;
 
+  // ── Conditional – Pre-enrollment assessment (Academic Tutorial K / Grade 1) ──
+  assessmentApplicable: boolean | null;
+  assessmentTemplateId: string | null;
+  assessmentSkipReason: string;
+  assessmentInfoValues: Record<string, string>;
+  assessmentRatings: Record<string, string>;
+  assessmentRemarks: string;
+  assessmentGoals: { goal: string; timeline: string }[];
+  assessmentAssessedBy: string;
+  assessmentSnapshot: AssessmentTemplate | null;
+
   // ── Step 10 – Billing ─────────────────────────────────────────────────
   paymentMethod: 'gcash' | 'seabank' | 'bdo';
   proofDataUrl: string | null;   // base64 payment receipt
@@ -120,6 +131,16 @@ export const INITIAL_WIZARD_DATA: WizardData = {
 
   // Step 9
   allergies: '', medications: '', specialNeeds: false, specialNeedsDetails: '', emergencyContact: '',
+
+  assessmentApplicable: null,
+  assessmentTemplateId: null,
+  assessmentSkipReason: '',
+  assessmentInfoValues: {},
+  assessmentRatings: {},
+  assessmentRemarks: '',
+  assessmentGoals: [],
+  assessmentAssessedBy: '',
+  assessmentSnapshot: null,
 
   // Step 10
   paymentMethod: 'gcash', proofDataUrl: null, proofFileName: null, payerReference: '',

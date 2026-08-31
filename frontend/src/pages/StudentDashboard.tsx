@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import { formatAge } from "@/components/enrollment/wizard-types";
 import {
   BookOpen,
   Calendar,
@@ -27,6 +28,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
 import { enrollmentService, scheduleService, materialService, gradeService, announcementService, auditLogService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
+import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import { AITab } from "@/components/ai/AITab";
 
 function formatTime12h(hhmm: string) {
@@ -114,7 +117,16 @@ export default function StudentDashboard() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [enrollments, setEnrollments] = useState<{ _id: string; selectedSubjects?: { _id: string; name: string }[]; status?: string }[]>([]);
+  const [enrollments, setEnrollments] = useState<{
+    _id: string;
+    enrollmentId?: string;
+    status?: string;
+    studentSnapshot?: { firstName?: string; lastName?: string };
+    studentId?: string;
+    selectedSubjects?: { _id: string; name: string }[];
+    packages?: { displayName?: string }[];
+    preEnrollmentAssessment?: PreEnrollmentAssessment | null;
+  }[]>([]);
   const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
   const [schedules, setSchedules] = useState<{
     _id: string;
@@ -260,6 +272,46 @@ export default function StudentDashboard() {
       }
     }
     return list;
+  }, [enrollments]);
+
+  const childEntries = useMemo(() => {
+    const map = new Map<string, {
+      childName: string;
+      birthdate?: string;
+      statuses: string[];
+      programs: string[];
+      enrollments: typeof enrollments;
+    }>();
+
+    for (const enrollment of enrollments) {
+      const snap = enrollment.studentSnapshot;
+      const childName = snap ? `${snap.firstName || ""} ${snap.lastName || ""}`.trim() : "Child";
+      const key = childName || `child-${enrollment._id}`;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          childName,
+          birthdate: snap?.birthdate,
+          statuses: [],
+          programs: [],
+          enrollments: [],
+        });
+      }
+
+      const entry = map.get(key)!;
+      entry.enrollments.push(enrollment);
+      if (enrollment.status && !entry.statuses.includes(enrollment.status)) {
+        entry.statuses.push(enrollment.status);
+      }
+
+      for (const pkg of enrollment.packages || []) {
+        if (pkg.displayName && !entry.programs.includes(pkg.displayName)) {
+          entry.programs.push(pkg.displayName);
+        }
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.childName.localeCompare(b.childName));
   }, [enrollments]);
 
   const uniqueSchedules = useMemo(() => {
@@ -578,6 +630,7 @@ export default function StudentDashboard() {
     "#subjects": "subjects",
     "#schedule": "schedule",
     "#progress": "progress",
+    "#assessment": "assessment",
     "#materials": "materials",
     "#announcements": "announcements",
     "#activity": "activity",
@@ -590,12 +643,17 @@ export default function StudentDashboard() {
       subjects: "subjects",
       schedule: "schedule",
       progress: "progress",
+      assessment: "assessment",
       materials: "materials",
       announcements: "announcements",
       activity: "activity",
     };
     const nextHash = tabToHash[value] ?? value;
     navigate(nextHash ? `/student-dashboard#${nextHash}` : "/student-dashboard", { replace: true });
+  };
+
+  const handleAddChild = () => {
+    navigate("/enroll?mode=add-child");
   };
 
   const handleQuickAction = (action: string) => {
@@ -802,27 +860,76 @@ export default function StudentDashboard() {
 
                 <TabsContent value="subjects" className="space-y-6">
                   <div className="bg-card rounded-xl border border-border overflow-hidden h-full">
-                    <div className="p-4 border-b border-border flex items-center justify-between">
-                      <h3 className="font-display font-bold text-lg text-foreground">My Subjects</h3>
-                      <span className="text-sm text-muted-foreground">{enrollmentsLoading ? "..." : `${enrolledSubjectsList.length} subjects`}</span>
+                    <div className="p-4 border-b border-border flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-display font-bold text-lg text-foreground">My Child</h3>
+                        <p className="text-sm text-muted-foreground">Manage each child and keep their enrollment details separate.</p>
+                      </div>
+                      <Button onClick={handleAddChild} className="bg-amber-500 hover:bg-amber-600 text-white">
+                        + Add Child
+                      </Button>
                     </div>
-                    <div className="divide-y divide-border">
+
+                    <div className="p-4 space-y-4">
                       {enrollmentsLoading ? (
                         <div className="flex items-center justify-center py-12">
                           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                         </div>
-                      ) : enrolledSubjectsList.length === 0 ? (
-                        <p className="p-8 text-center text-muted-foreground">No enrolled subjects yet. Complete enrollment to see your subjects here.</p>
+                      ) : childEntries.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border bg-muted/20 p-8 text-center">
+                          <p className="font-semibold text-foreground">No child enrolled yet.</p>
+                          <p className="mt-2 text-sm text-muted-foreground">Add your first child to begin the enrollment process.</p>
+                          <Button onClick={handleAddChild} className="mt-4 bg-amber-500 hover:bg-amber-600 text-white">
+                            Add Child
+                          </Button>
+                        </div>
                       ) : (
-                        enrolledSubjectsList.map((subject) => (
-                          <div key={subject._id} className="p-4 hover:bg-muted/50 transition-colors">
-                            <div className="flex items-center gap-4">
-                              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                                <BookOpen className="h-5 w-5 text-primary" />
-                              </div>
+                        childEntries.map((child) => (
+                          <div key={child.childName} className="rounded-2xl border border-border bg-muted/20 p-4 shadow-sm">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                               <div>
-                                <p className="font-semibold text-foreground">{subject.name}</p>
-                                <p className="text-sm text-muted-foreground">Enrolled</p>
+                                <p className="text-lg font-bold text-foreground">{child.childName}</p>
+                                {child.birthdate && (
+                                  <p className="text-sm text-muted-foreground">Age: {formatAge(child.birthdate)}</p>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {child.statuses.length > 0 ? child.statuses.map((status) => (
+                                  <span key={`${child.childName}-${status}`} className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                                    {status}
+                                  </span>
+                                )) : (
+                                  <span className="rounded-full bg-muted px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Pending
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="mt-4 grid gap-3 md:grid-cols-2">
+                              <div className="rounded-xl border border-border bg-background p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Programs</p>
+                                <div className="mt-2 space-y-1">
+                                  {child.programs.length > 0 ? child.programs.map((program) => (
+                                    <div key={`${child.childName}-${program}`} className="text-sm text-foreground">• {program}</div>
+                                  )) : (
+                                    <p className="text-sm text-muted-foreground">No program selected yet.</p>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="rounded-xl border border-border bg-background p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Enrollment Record</p>
+                                <div className="mt-2 space-y-2">
+                                  {child.enrollments.map((enrollment) => (
+                                    <div key={enrollment._id} className="rounded-lg border border-dashed border-border bg-muted/30 p-2">
+                                      <p className="text-sm font-medium text-foreground">
+                                        {enrollment.enrollmentId || "Enrollment"}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">Status: {enrollment.status || "Pending"}</p>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -1121,6 +1228,35 @@ export default function StudentDashboard() {
                   </div>
 
 
+                </TabsContent>
+
+                <TabsContent value="assessment" className="space-y-6">
+                  <div className="bg-card rounded-xl border border-border overflow-hidden">
+                    <div className="p-4 border-b border-border">
+                      <h3 className="font-display font-bold text-lg text-foreground">Pre-Enrollment Assessment</h3>
+                      <p className="text-sm text-muted-foreground">Results saved with your child&apos;s enrollment record.</p>
+                    </div>
+                    <div className="p-4 space-y-6">
+                      {enrollmentsLoading ? (
+                        <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+                      ) : enrollments.filter((en) => en.preEnrollmentAssessment?.completedAt).length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-8">No assessment on file yet.</p>
+                      ) : (
+                        enrollments.filter((en) => en.preEnrollmentAssessment?.completedAt).map((en) => {
+                          const childName = [en.studentSnapshot?.firstName, en.studentSnapshot?.lastName].filter(Boolean).join(" ") || "Child";
+                          return (
+                            <div key={en._id} className="rounded-lg border border-border p-4 space-y-3">
+                              <div className="flex flex-wrap justify-between gap-2 text-sm">
+                                <p className="font-semibold">{childName}</p>
+                                <p className="text-muted-foreground">{en.enrollmentId} · {en.status}</p>
+                              </div>
+                              <EnrollmentAssessmentView assessment={en.preEnrollmentAssessment} />
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="progress" className="space-y-6">

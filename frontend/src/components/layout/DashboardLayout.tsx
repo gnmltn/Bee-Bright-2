@@ -37,6 +37,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "My Subjects", href: "/student-dashboard#subjects", icon: BookOpen },
     { name: "Schedule", href: "/student-dashboard#schedule", icon: Calendar },
     { name: "Progress", href: "/student-dashboard#progress", icon: TrendingUp },
+    { name: "Assessment", href: "/student-dashboard#assessment", icon: ClipboardList },
     { name: "Materials", href: "/student-dashboard#materials", icon: FileText },
     { name: "Announcements", href: "/student-dashboard#announcements", icon: Bell },
     { name: "Payments", href: "/student-dashboard/payments", icon: CreditCard },
@@ -49,6 +50,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "My Child", href: "/student-dashboard#subjects", icon: BookOpen },
     { name: "Schedule", href: "/student-dashboard#schedule", icon: Calendar },
     { name: "Progress", href: "/student-dashboard#progress", icon: TrendingUp },
+    { name: "Assessment", href: "/student-dashboard#assessment", icon: ClipboardList },
     { name: "Materials", href: "/student-dashboard#materials", icon: FileText },
     { name: "Announcements", href: "/student-dashboard#announcements", icon: Bell },
     { name: "Payments", href: "/student-dashboard/payments", icon: CreditCard },
@@ -58,6 +60,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
   tutor: [
     { name: "Overview", href: "/tutor-dashboard", icon: Home },
     { name: "My Students", href: "/tutor-dashboard#students", icon: Users },
+    { name: "Assessments", href: "/tutor-dashboard#assessments", icon: ClipboardList },
     { name: "Attendance", href: "/tutor-dashboard#attendance", icon: Calendar },
     { name: "Schedule", href: "/tutor-dashboard#schedule", icon: Calendar },
     { name: "Materials", href: "/tutor-dashboard#materials", icon: FileText },

@@ -25,6 +25,8 @@ const {
   sendEnrollmentRejectedEmail,
   sendPaymentVerifiedEmail,
 } = require('../services/enrollmentService');
+const { validateAndBuildAssessment } = require('../utils/validateAssessment');
+const Schedule = require('../models/Schedule');
 const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -232,6 +234,10 @@ const submitEnrollment = async (req, res) => {
     const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
     const preferredTime = VALID_PREFERRED_TIMES.includes(body.preferredTime) ? body.preferredTime : 'no_preference';
 
+    // ── Pre-enrollment assessment (required only when a matching template exists) ──
+    const selectedProgramCodes = packages.map((p) => p.programCode).filter(Boolean);
+    const { assessment } = await validateAndBuildAssessment(body, selectedProgramCodes);
+
     // ── Compute amounts ──
     const { totalFee, amountDue } = computeAmounts(packages, paymentOption);
 
@@ -254,6 +260,7 @@ const submitEnrollment = async (req, res) => {
       consentItems,
       status: 'submitted',
       paymentStatus: 'pending',
+      preEnrollmentAssessment: assessment || undefined,
     });
     pushStatusHistory(enrollment, 'submitted', parentId, 'parent', 'Enrollment wizard submitted');
     await enrollment.save();
@@ -529,6 +536,38 @@ const getEnrollmentById = async (req, res) => {
   }
 };
 
+// GET /api/enrollments/tutor/assessments
+const getTutorAssessments = async (req, res) => {
+  try {
+    const sessions = await Schedule.find({ tutor: req.user._id }).select('student students').lean();
+    const userIds = [];
+    for (const session of sessions) {
+      if (session.student) userIds.push(session.student);
+      if (Array.isArray(session.students)) userIds.push(...session.students);
+    }
+
+    const filter = {
+      'preEnrollmentAssessment.completedAt': { $ne: null },
+    };
+    if (userIds.length > 0) {
+      filter.$or = [{ parent: { $in: userIds } }, { student: { $in: userIds } }];
+    } else {
+      // No assigned sessions yet — still allow tutor to see nothing rather than all enrollments
+      return res.status(200).json({ success: true, enrollments: [] });
+    }
+
+    const enrollments = await Enrollment.find(filter)
+      .sort({ createdAt: -1 })
+      .populate('parent', 'firstName lastName email phone')
+      .select('enrollmentId studentId studentSnapshot packages status preEnrollmentAssessment parent createdAt')
+      .lean();
+
+    return res.status(200).json({ success: true, enrollments });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Failed to load assessments.' });
+  }
+};
+
 // PUT /api/admin/enrollments/:id/verify-payment
 const adminVerifyPayment = async (req, res) => {
   try {
@@ -752,6 +791,7 @@ module.exports = {
   getEnrollmentByStudent,
   getAllEnrollments,
   getEnrollmentById,
+  getTutorAssessments,
   adminVerifyPayment,
   adminApproveEnrollment,
   adminRejectEnrollment,

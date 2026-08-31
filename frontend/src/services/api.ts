@@ -202,6 +202,13 @@ export const settingsService = {
   setMaintenance: (enabled: boolean) => api.put<{ success: boolean; maintenanceMode: boolean }>('/settings/maintenance', { enabled }),
 };
 
+export const assessmentService = {
+  getTemplates: (programCodes: string[]) =>
+    api.get('/assessments/templates', {
+      params: { programCodes: programCodes.join(',') },
+    }),
+};
+
 // Payment Service - FIXED endpoints
 export const paymentService = {
   getGcashInfo: () => api.get('/payments/gcash-info'),
@@ -286,6 +293,16 @@ export const enrollmentService = {
     emergencyContact?: string;
     consentVersion: string;
     consentItems: { name: string; accepted: boolean; version: string }[];
+    assessment?: {
+      applicable: boolean;
+      skipReason?: string;
+      templateId?: string;
+      infoValues?: Record<string, string>;
+      ratings?: Record<string, string>;
+      remarks?: string;
+      goals?: { goal: string; timeline: string }[];
+      assessedBy?: string;
+    };
   }) => api.post<{
     success: boolean; enrollmentId: string; enrollmentDbId: string;
     paymentId: string; amountDue: number; totalFee: number;
@@ -302,6 +319,7 @@ export const enrollmentService = {
     api.get('/enrollments/track', { params: { enrollmentId, email } }),
 
   getMyEnrollments: () => api.get('/enrollments/my-enrollments'),
+  getTutorAssessments: () => api.get('/enrollments/tutor/assessments'),
 
   // ── Legacy ────────────────────────────────────────────────────────────
   submitEnrollment: (data: {

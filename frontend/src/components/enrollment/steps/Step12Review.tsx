@@ -5,6 +5,7 @@ import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { computeTotalFee, formatAge } from '../wizard-types';
 import { enrollmentService } from '@/services/api';
+import { EnrollmentAssessmentView } from '@/components/enrollment/EnrollmentAssessmentView';
 
 interface Props {
   data: WizardData; update: (p: Partial<WizardData>) => void;
@@ -44,6 +45,16 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         emergencyContact: data.emergencyContact || undefined,
         consentVersion: data.consentVersion,
         consentItems: data.consentItems,
+        assessment: data.assessmentApplicable === null ? undefined : {
+          applicable: data.assessmentApplicable,
+          skipReason: data.assessmentSkipReason || undefined,
+          templateId: data.assessmentTemplateId || undefined,
+          infoValues: data.assessmentInfoValues,
+          ratings: data.assessmentRatings,
+          remarks: data.assessmentRemarks,
+          goals: data.assessmentGoals,
+          assessedBy: data.assessmentAssessedBy,
+        },
       };
 
       const res = await enrollmentService.submitWizard(payload);
@@ -137,6 +148,26 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
           <Row label="Preferred Start" value={data.preferredStartDate ? new Date(data.preferredStartDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'} />
           <Row label="Time" value={TIME_LABELS[data.preferredTime] || '—'} />
         </Section>
+
+        {data.assessmentApplicable !== null && (
+          <Section title="Pre-Enrollment Assessment">
+            <EnrollmentAssessmentView
+              assessment={{
+                applicable: data.assessmentApplicable,
+                skipReason: data.assessmentSkipReason,
+                templateId: data.assessmentTemplateId,
+                snapshot: data.assessmentSnapshot || undefined,
+                templateTitle: data.assessmentSnapshot?.title,
+                infoValues: data.assessmentInfoValues,
+                ratings: data.assessmentRatings,
+                remarks: data.assessmentRemarks,
+                goals: data.assessmentGoals,
+                assessedBy: data.assessmentAssessedBy,
+              }}
+              compact
+            />
+          </Section>
+        )}
       </div>
 
       <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 rounded-lg flex gap-2 text-xs text-blue-800 dark:text-blue-300">

@@ -11,6 +11,7 @@ const {
   getEnrollmentById,
   getEnrollmentByStudent,
   getAllEnrollments,
+  getTutorAssessments,
   adminVerifyPayment,
   adminApproveEnrollment,
   adminRejectEnrollment,
@@ -42,6 +43,7 @@ router.post('/admin/add-student', protect, authorize('admin'), adminAddStudent);
 
 // ── Parent / Student named routes (MUST come before /:id) ────────────────
 router.get('/my-enrollments', protect, getMyEnrollments);
+router.get('/tutor/assessments', protect, authorize('tutor'), getTutorAssessments);
 router.get('/student/:studentId', protect, getEnrollmentByStudent);
 
 // ── Wizard submit ─────────────────────────────────────────────────────────

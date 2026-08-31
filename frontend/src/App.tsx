@@ -22,7 +22,6 @@ import StudentPayments from "./pages/StudentPayments";
 import TutorDashboard from "./pages/TutorDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
 import SuperAdminDashboard from "./pages/SuperAdminDashboard";
-import Enrollment from "./pages/Enrollment";
 import EnrollmentWizard from "./pages/EnrollmentWizard";
 import EnrollmentTracking from "./pages/EnrollmentTracking";
 import EnrollmentSuccess from "./pages/EnrollmentSuccess";
@@ -183,7 +182,7 @@ const App = () => (
                   </ProtectedRoute>
                 }
               />
-              <Route path="/enrollment" element={<Enrollment />} />
+              <Route path="/enrollment" element={<EnrollmentWizard />} />
               <Route path="/enroll" element={<EnrollmentWizard />} />
               <Route path="/enrollment-success" element={<EnrollmentSuccess />} />
               <Route path="/track-enrollment" element={<EnrollmentTracking />} />

@@ -149,7 +149,27 @@ const enrollmentSchema = new mongoose.Schema({
   // Generated on approval — unique identifier for this student record
   // Format: S-YYYYMMDD-XXXX
   // The child is NOT a separate login account. This ID lives on the enrollment.
-  studentId: { type: String, default: null }
+  studentId: { type: String, default: null },
+
+  // Pre-enrollment assessment (Academic Tutorial Kindergarten / Grade 1 only).
+  // Structure is copied from AssessmentTemplate at submit time.
+  preEnrollmentAssessment: {
+    applicable: { type: Boolean, default: null },
+    skipReason: { type: String, default: null },
+    templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'AssessmentTemplate', default: null },
+    templateSlug: { type: String, default: null },
+    templateTitle: { type: String, default: null },
+    snapshot: { type: mongoose.Schema.Types.Mixed, default: null },
+    infoValues: { type: mongoose.Schema.Types.Mixed, default: {} },
+    ratings: { type: mongoose.Schema.Types.Mixed, default: {} },
+    remarks: { type: String, default: '' },
+    goals: [{
+      goal: { type: String, default: '' },
+      timeline: { type: String, default: '' },
+    }],
+    assessedBy: { type: String, default: '' },
+    completedAt: { type: Date, default: null },
+  },
 }, {
   timestamps: true
 });

@@ -28,7 +28,7 @@ import {
   Archive,
   RotateCcw,
 } from "lucide-react";
-import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -5500,6 +5500,13 @@ export default function AdminDashboard() {
                     {healthInfo.allergies && <p><strong>Allergies:</strong> {healthInfo.allergies}</p>}
                     {healthInfo.medications && <p><strong>Medications:</strong> {healthInfo.medications}</p>}
                     {healthInfo.specialNeeds && <p><strong>Special needs:</strong> {healthInfo.specialNeedsDetails || 'Yes'}</p>}
+                  </div>
+                )}
+
+                {eAny.preEnrollmentAssessment && (
+                  <div className="p-3 bg-sky-50 border border-sky-200 rounded-lg">
+                    <p className="font-semibold text-sky-900 text-xs uppercase tracking-wide mb-2">Pre-Enrollment Assessment</p>
+                    <EnrollmentAssessmentView assessment={eAny.preEnrollmentAssessment as never} compact />
                   </div>
                 )}
 
