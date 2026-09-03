@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
-import { computeAgeYears, formatAge } from '../wizard-types';
+import { computeAgeYears, formatAge, checkProgramEligibility } from '../wizard-types';
 
 interface Props { data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void; }
 
@@ -16,6 +16,31 @@ export default function Step5StudentInfo({ data, update, onNext, onBack }: Props
   const ageLabel = data.birthdate ? formatAge(data.birthdate) : null;
 
   const isMinAge = ageYears !== null && ageYears >= 1.5;
+
+  /**
+   * When birthdate changes:
+   * 1. Update the birthdate field.
+   * 2. Immediately remove any previously selected packages whose program is
+   *    no longer age-eligible under the new birthdate.
+   *    This prevents stale ineligible packages from being silently submitted.
+   */
+  const handleBirthdateChange = (newBirthdate: string) => {
+    const newAgeYears = newBirthdate ? computeAgeYears(newBirthdate) : 0;
+
+    // Keep only packages the child is still eligible for
+    const remainingPackages = data.selectedPackages.filter((pkg) => {
+      const { eligible } = checkProgramEligibility(pkg.programCode, newAgeYears);
+      return eligible;
+    });
+
+    update({
+      birthdate: newBirthdate,
+      // Drop ineligible packages so the user must re-select valid ones
+      selectedPackages: remainingPackages,
+    });
+
+    setErrors((prev) => ({ ...prev, birthdate: '' }));
+  };
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -67,7 +92,7 @@ export default function Step5StudentInfo({ data, update, onNext, onBack }: Props
           <Input id="birthdate" type="date" min={minDateStr} max={today}
             className={errors.birthdate ? 'border-destructive' : ''}
             value={data.birthdate}
-            onChange={(e) => { update({ birthdate: e.target.value }); setErrors((p) => ({ ...p, birthdate: '' })); }}
+            onChange={(e) => { handleBirthdateChange(e.target.value); }}
           />
           {errors.birthdate && <p className="text-xs text-destructive">{errors.birthdate}</p>}
           {ageLabel && (

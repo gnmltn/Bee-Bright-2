@@ -1,8 +1,11 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const Schedule = require('../models/Schedule');
 const { logAudit } = require('../utils/auditService');
 const Enrollment = require('../models/Enrollment');
 const User = require('../models/User');
+const Subject = require('../models/Subject');
+const TutoringArea = require('../models/TutoringArea');
 const TutorUnavailability = require('../models/TutorUnavailability');
 const TutorAbsenceAnnouncement = require('../models/TutorAbsenceAnnouncement');
 const ScheduleSubstitutionLog = require('../models/ScheduleSubstitutionLog');
@@ -15,6 +18,16 @@ const {
   canAddStudent,
   getCurrentEnrollment
 } = require('../utils/sessionTypeManager');
+const {
+  getProgramPolicy,
+  validateTimeWindow,
+  validateTutorCount,
+  validatePlaygroupChildCount,
+  calculatePlaygroupTutorRequirement,
+  enrollmentCoversSubject,
+} = require('../utils/schedulingPolicy');
+const { matchesParentPreference } = require('../utils/schedulePreferences');
+const { isRoomDoubleBooked } = require('../utils/weeklySchedulingUtils');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
 
@@ -143,7 +156,7 @@ async function isTutorUnavailableForDate(tutorId, date) {
 
 async function hasTutorScheduleConflict({ tutorId, date, startTime, endTime, excludeScheduleId = null }) {
   const query = {
-    tutor: tutorId,
+    $or: [{ tutor: tutorId }, { tutors: tutorId }],
     date
   };
   if (excludeScheduleId) {
@@ -166,13 +179,125 @@ async function hasRoomScheduleConflict({ date, startTime, endTime, excludeSchedu
   return existingSchedules.some((existing) => timeRangesOverlap(targetStart, targetEnd, existing.startTime, existing.endTime || getSessionEndTime(existing.startTime, existing.endTime)));
 }
 
+async function getDefaultTutoringAreaId(sessionType) {
+  const areaType = sessionType === 'playgroup' ? 'toddler_room' : 'tutoring_area';
+  const area = await TutoringArea.findOne({ areaType, isActive: true }).select('_id').lean();
+  return area?._id || null;
+}
+
+function isSchedulableEnrollmentStatus(enrollment) {
+  const status = String(enrollment?.status || '');
+  return ['active', 'approved'].includes(status) || (enrollment?.paymentStatus === 'paid' && status !== 'cancelled' && status !== 'rejected');
+}
+
+async function ensureStudentUserForEnrollment(enrollmentDoc) {
+  if (enrollmentDoc.student) {
+    const existing = await User.findOne({ _id: enrollmentDoc.student, role: 'student', deletedAt: null });
+    if (existing) return existing;
+  }
+  const snap = enrollmentDoc.studentSnapshot || {};
+  const email = `child.${enrollmentDoc._id}@students.beebright.internal`;
+  let user = await User.findOne({ email });
+  if (!user) {
+    user = await User.create({
+      firstName: snap.firstName || 'Student',
+      middleName: snap.middleName || '',
+      lastName: snap.lastName || 'Child',
+      email,
+      phone: '09000000000',
+      password: crypto.randomBytes(18).toString('hex'),
+      role: 'student',
+      isActive: true,
+      enrollmentStatus: 'active',
+      emailVerifiedAt: new Date(),
+    });
+  }
+  enrollmentDoc.student = user._id;
+  if (typeof enrollmentDoc.save === 'function') {
+    await enrollmentDoc.save();
+  } else {
+    await Enrollment.findByIdAndUpdate(enrollmentDoc._id, { student: user._id });
+  }
+  return user;
+}
+
+async function findCompatibleOpenSlots({ subjectId, sessionType, enrollment, excludeScheduleId }) {
+  const query = {
+    subject: subjectId,
+    date: { $gte: utcTodayStart() },
+  };
+  if (excludeScheduleId) query._id = { $ne: excludeScheduleId };
+  if (sessionType === 'playgroup') {
+    query.sessionType = 'playgroup';
+  } else {
+    query.sessionType = { $in: ['one-on-one', null] };
+    query.$or = [{ student: null }, { student: { $exists: false } }];
+  }
+  const schedules = await Schedule.find(query)
+    .populate('tutor', 'firstName lastName')
+    .sort({ date: 1, startTime: 1 })
+    .limit(20)
+    .lean();
+  return schedules
+    .filter((row) => {
+      if (sessionType === 'playgroup') {
+        const count = Array.isArray(row.students) ? row.students.length : 0;
+        if (count >= (row.maxCapacity || 10)) return false;
+      }
+      return matchesParentPreference({
+        preferredStartDate: enrollment.preferredStartDate,
+        preferredTime: enrollment.preferredTime,
+        date: row.date,
+        startTime: row.startTime,
+      }).ok;
+    })
+    .slice(0, 8)
+    .map((row) => ({
+      _id: row._id,
+      date: row.date,
+      startTime: row.startTime,
+      endTime: row.endTime,
+      tutorName: row.tutor ? [row.tutor.firstName, row.tutor.lastName].filter(Boolean).join(' ') : 'Tutor',
+    }));
+}
+
+async function notifyAssignmentSaved({ schedule, enrollment, studentUser }) {
+  const when = `${toDateOnly(schedule.date)} ${schedule.startTime || ''}–${schedule.endTime || ''}`.trim();
+  const subjectName = schedule.subject?.name || 'session';
+  const studentName = [studentUser.firstName, studentUser.lastName].filter(Boolean).join(' ') || 'your child';
+  const parent = enrollment.parent && typeof enrollment.parent === 'object'
+    ? enrollment.parent
+    : await User.findById(enrollment.parent).select('email firstName lastName').lean();
+  const tutorDocs = await User.find({
+    _id: { $in: [...(schedule.tutors || []), schedule.tutor].filter(Boolean) },
+    role: 'tutor',
+  }).select('email firstName lastName').lean();
+
+  const emails = [];
+  if (parent?.email) {
+    emails.push(sendEmail({
+      to: parent.email,
+      subject: `Bee Bright schedule confirmed: ${subjectName}`,
+      text: `Hello ${parent.firstName || 'parent'}, ${studentName} is scheduled for ${subjectName} on ${when}.`,
+    }, 'schedule assignment parent').catch((error) => logEmailError('schedule assignment parent', error, { to: parent.email })));
+  }
+  for (const tutor of tutorDocs) {
+    if (!tutor.email) continue;
+    emails.push(sendEmail({
+      to: tutor.email,
+      subject: `Bee Bright: ${studentName} assigned to ${subjectName}`,
+      text: `Hello ${tutor.firstName || 'tutor'}, ${studentName} was assigned to ${subjectName} on ${when}.`,
+    }, 'schedule assignment tutor').catch((error) => logEmailError('schedule assignment tutor', error, { to: tutor.email })));
+  }
+  await Promise.allSettled(emails);
+}
+
 async function canTutorHandleSchedule({ tutorId, subjectId, date, startTime, endTime, excludeScheduleId = null }) {
   const tutor = await User.findOne({
     _id: tutorId,
     role: 'tutor',
     isActive: true,
-    deletedAt: null,
-    subjectsTaught: subjectId
+    deletedAt: null
   }).select('_id employmentType availability');
   if (!tutor) {
     return { ok: false, reason: 'Tutor cannot teach this subject or is unavailable' };
@@ -283,7 +408,6 @@ async function findSubstituteTutorForSchedule(schedule, excludedTutorIds = []) {
     role: 'tutor',
     isActive: true,
     deletedAt: null,
-    subjectsTaught: schedule.subject,
     _id: { $nin: excludedTutorIds }
   })
     .select('_id employmentType createdAt')
@@ -798,7 +922,7 @@ const getTutorsBySubject = async (req, res) => {
     const tutors = await User.find({
       role: 'tutor',
       isActive: true,
-      subjectsTaught: subjectId
+      deletedAt: null
     })
       .select('firstName lastName middleName email availability employmentType')
       .populate('subjectsTaught', 'name code')
@@ -864,17 +988,17 @@ const getAvailableSlots = async (req, res) => {
         slots: []
       });
     }
-    const dayStart = new Date(dateStr + 'T00:00:00.000Z');
-    const dayEnd = new Date(dayStart);
-    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
-    const existing = await Schedule.find({
-      date: { $gte: dayStart, $lt: dayEnd }
-    }).lean();
-    const booked = new Set();
-    for (const s of existing) {
-      booked.add(s.startTime);
+    const scheduleDate = new Date(dateStr + 'T00:00:00.000Z');
+    const slots = [];
+    for (const slot of possibleSlots) {
+      const tutorBusy = await hasTutorScheduleConflict({
+        tutorId,
+        date: scheduleDate,
+        startTime: slot.startTime,
+        endTime: slot.endTime
+      });
+      if (!tutorBusy) slots.push(slot);
     }
-    const slots = possibleSlots.filter(slot => !booked.has(slot.startTime));
 
     res.status(200).json({
       success: true,
@@ -899,6 +1023,8 @@ const createSchedule = async (req, res) => {
       studentId,
       students: studentsRaw,
       tutorId,
+      tutorIds: tutorIdsRaw,
+      enrollmentId,
       subjectId,
       date: dateStr,
       startTime,
@@ -906,41 +1032,79 @@ const createSchedule = async (req, res) => {
       sessionType: sessionTypeParam
     } = req.body;
 
+    const requestedTutorIds = [
+      ...(Array.isArray(tutorIdsRaw) ? tutorIdsRaw.map(String).filter(Boolean) : []),
+      ...(tutorId ? [String(tutorId)] : [])
+    ];
+    const uniqueTutorIds = [...new Set(requestedTutorIds)];
+
     // Validate required fields
-    if (!tutorId || !subjectId || !dateStr || !startTime || !endTime) {
+    if (!uniqueTutorIds.length || !subjectId || !dateStr || !startTime || !endTime) {
       return res.status(400).json({
         success: false,
-        message: 'tutorId, subjectId, date, startTime, and endTime are required'
+        message: 'tutorId or tutorIds, subjectId, date, startTime, and endTime are required'
       });
     }
 
-    // Determine session type (default to one-on-one for backward compatibility)
+    const subject = await Subject.findById(subjectId).select('name code').lean();
+    if (!subject) {
+      return res.status(404).json({ success: false, message: 'Subject or program not found' });
+    }
+    const policy = getProgramPolicy(subject);
     const defaultSessionType = getDefaultSessionType();
-    const sessionType = sessionTypeParam && getSessionType(sessionTypeParam) ? sessionTypeParam : defaultSessionType.type;
+    const sessionType = policy?.sessionType || (sessionTypeParam && getSessionType(sessionTypeParam) ? sessionTypeParam : defaultSessionType.type);
     const sessionTypeConfig = getSessionType(sessionType);
-    const maxCapacity = sessionTypeConfig.maxCapacity;
+    const maxCapacity = policy?.maxStudents || sessionTypeConfig.maxCapacity;
+    const normalizedStartTime = normalizeTime(startTime);
+    const normalizedEndTime = normalizeTime(endTime);
+    const scheduleTimeError = validateTimeWindow({ date: dateStr, startTime: normalizedStartTime, endTime: normalizedEndTime, policy });
+    if (scheduleTimeError) return res.status(400).json({ success: false, message: scheduleTimeError });
+
+    const finalTutorIds = uniqueTutorIds;
+
+    // Validate tutor count based on session type
+    // For playgroup: count is dynamic based on actual child count in this session.
+    // When creating an empty playgroup slot (no students yet), accept 1–4 tutors.
+    // When children are provided at creation time, apply the ratio immediately.
+    let tutorCountError = null;
+    if (sessionType === 'playgroup') {
+      const childCountNow = Array.isArray(studentsRaw) ? studentsRaw.filter(Boolean).length
+        : studentId ? 1 : 0;
+      if (childCountNow >= 2) {
+        // Children provided — enforce exact ratio
+        tutorCountError = validateTutorCount(policy || { sessionType: 'playgroup' }, finalTutorIds.length, childCountNow);
+      } else {
+        // Empty slot creation — accept 1–4 tutors (ratio enforced at enrollment time)
+        if (finalTutorIds.length < 1 || finalTutorIds.length > 4) {
+          tutorCountError = 'Toddlers Playgroup requires 1–4 tutors (exact count determined by number of enrolled children).';
+        }
+      }
+    } else {
+      const oneOnOnePolicy = policy || { minTutors: 1, maxTutors: 1 };
+      tutorCountError = validateTutorCount(oneOnOnePolicy, finalTutorIds.length);
+    }
+    if (tutorCountError) return res.status(400).json({ success: false, message: tutorCountError });
 
     // Validate student enrollment based on session type
-    let finalStudentId = studentId;
+    // Note: one-on-one sessions can be created without a student (empty slots).
+    // The admin assigns the child later from the calendar's "Assign child" panel.
+    let finalStudentId = studentId || null;
     let finalStudents = [];
 
     if (sessionType === 'one-on-one') {
-      // One-on-one: require single studentId
-      if (!studentId) {
-        return res.status(400).json({
-          success: false,
-          message: 'studentId is required for one-on-one sessions'
-        });
+      // Student is optional at slot creation; required only when provided
+      if (studentId) {
+        finalStudentId = studentId;
+        finalStudents = [studentId];
       }
-      finalStudentId = studentId;
-      finalStudents = [studentId];
+      // No student provided → create an empty bookable slot
     } else {
-      // Group sessions: require students array
       if (Array.isArray(studentsRaw) && studentsRaw.length > 0) {
         finalStudents = studentsRaw.map(s => String(s)).filter(Boolean);
       } else if (studentId) {
-        // Fallback: single student for initial group session creation
         finalStudents = [studentId];
+      } else if (sessionType === 'playgroup') {
+        finalStudents = [];
       } else {
         return res.status(400).json({
           success: false,
@@ -972,31 +1136,15 @@ const createSchedule = async (req, res) => {
       });
     }
 
-    // Validate tutor
-    const tutor = await User.findOne({
-      _id: tutorId,
-      role: 'tutor',
-      subjectsTaught: subjectId
-    });
-    if (!tutor) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tutor cannot teach this subject or not found'
+    for (const assignedTutorId of finalTutorIds) {
+      const tutorCheck = await canTutorHandleSchedule({
+        tutorId: assignedTutorId,
+        subjectId,
+        date: d,
+        startTime: normalizedStartTime,
+        endTime: normalizedEndTime
       });
-    }
-
-    // Validate tutor schedule
-    const tutorCheck = await canTutorHandleSchedule({
-      tutorId,
-      subjectId,
-      date: d,
-      startTime
-    });
-    if (!tutorCheck.ok) {
-      return res.status(400).json({
-        success: false,
-        message: tutorCheck.reason
-      });
+      if (!tutorCheck.ok) return res.status(400).json({ success: false, message: tutorCheck.reason });
     }
 
     // Validate students enrollment
@@ -1041,26 +1189,47 @@ const createSchedule = async (req, res) => {
       validatedStudents.push(sid);
     }
 
-    // Validate room availability (one room, no double-booking)
-    const normalizedStartTime = normalizeTime(startTime);
-    const normalizedEndTime = normalizeTime(endTime);
-    const roomConflict = await hasRoomScheduleConflict({
-      date: d,
-      startTime: normalizedStartTime,
-      endTime: normalizedEndTime
-    });
+    // Only check parent preference when a student is being assigned at creation time
+    if (validatedStudents.length > 0) {
+      for (const sid of validatedStudents) {
+        const preferenceQuery = enrollmentId
+          ? { _id: enrollmentId, status: 'active' }
+          : { student: sid, status: 'active' };
+        const enrollment = await Enrollment.findOne(preferenceQuery).select('preferredStartDate preferredTime').lean();
+        if (enrollment) {
+          const preferenceCheck = matchesParentPreference({
+            preferredStartDate: enrollment.preferredStartDate,
+            preferredTime: enrollment.preferredTime,
+            date: d,
+            startTime: normalizedStartTime,
+          });
+          if (!preferenceCheck.ok) return res.status(409).json({ success: false, code: 'PARENT_PREFERENCE_CONFLICT', message: preferenceCheck.reason });
+        }
+      }
+    }
+
+    const tutoringAreaId = await getDefaultTutoringAreaId(sessionType);
+    if (!tutoringAreaId) {
+      return res.status(400).json({
+        success: false,
+        message: sessionType === 'playgroup'
+          ? 'Toddler Room is not configured yet. Please add an active toddler room before scheduling playgroup.'
+          : 'Tutoring Area is not configured yet. Please add an active tutoring area before scheduling.'
+      });
+    }
+    const roomConflict = await isRoomDoubleBooked(tutoringAreaId, d, normalizedStartTime);
     if (roomConflict) {
       return res.status(400).json({
         success: false,
-        message: 'Room is already occupied at this time. Choose another slot.'
+        message: 'That room is already at capacity for this time. Choose another slot.'
       });
     }
 
-    // For one-on-one, check for duplicate assignment
-    if (sessionType === 'one-on-one') {
+    // For one-on-one, check for duplicate assignment only when student is provided
+    if (sessionType === 'one-on-one' && finalStudentId) {
       const duplicateClassAssignment = await Schedule.findOne({
         student: finalStudentId,
-        tutor: tutorId,
+        tutor: finalTutorIds[0],
         subject: subjectId,
         date: d,
         startTime: normalizedStartTime
@@ -1076,17 +1245,21 @@ const createSchedule = async (req, res) => {
     // Create schedule
     const scheduleData = {
       sessionType,
-      tutor: tutorId,
+      tutor: finalTutorIds[0],
+      tutors: finalTutorIds,
       subject: subjectId,
       date: d,
       startTime: normalizedStartTime,
       endTime: normalizedEndTime,
-      maxCapacity
+      maxCapacity,
+      tutoringAreaId,
+      isEnrollableByStudents: true,
+      sessionSource: 'manual'
     };
 
     if (sessionType === 'one-on-one') {
-      scheduleData.student = finalStudentId;
-     scheduleData.students = [];
+      scheduleData.student = finalStudentId || null;
+      scheduleData.students = [];
     } else {
       scheduleData.student = null;
       scheduleData.students = validatedStudents;
@@ -1098,6 +1271,7 @@ const createSchedule = async (req, res) => {
       .populate('student', 'firstName lastName middleName')
       .populate('students', 'firstName lastName middleName')
       .populate('tutor', 'firstName lastName middleName')
+      .populate('tutors', 'firstName lastName middleName')
       .populate('subject', 'name code')
       .lean();
 
@@ -1127,20 +1301,17 @@ const createSchedule = async (req, res) => {
 const enrollStudentInSession = async (req, res) => {
   try {
     const { id: scheduleId } = req.params;
-    const { studentId } = req.body;
+    const {
+      studentId: studentIdRaw,
+      enrollmentId,
+      overridePreference = false,
+      overrideReason = '',
+    } = req.body || {};
 
-    if (!studentId) {
-      return res.status(400).json({
-        success: false,
-        message: 'studentId is required'
-      });
-    }
-
-    // Get session and validate it exists
     const schedule = await Schedule.findById(scheduleId)
       .populate('tutor', '_id')
-      .populate('subject', '_id code name')
-      .lean();
+      .populate('tutors', '_id')
+      .populate('subject', '_id code name');
 
     if (!schedule) {
       return res.status(404).json({
@@ -1149,7 +1320,8 @@ const enrollStudentInSession = async (req, res) => {
       });
     }
 
-    const sessionTypeConfig = getSessionType(schedule.sessionType);
+    const sessionType = schedule.sessionType || 'one-on-one';
+    const sessionTypeConfig = getSessionType(sessionType);
     if (!sessionTypeConfig) {
       return res.status(500).json({
         success: false,
@@ -1157,11 +1329,10 @@ const enrollStudentInSession = async (req, res) => {
       });
     }
 
-    // Get current enrollment count
-    const currentEnrollment = getCurrentEnrollment(schedule.students);
-
-    // Check if at capacity
-    const capacityCheck = canAddStudent(currentEnrollment, schedule.maxCapacity);
+    const currentEnrollment = sessionType === 'one-on-one'
+      ? (schedule.student ? 1 : 0)
+      : getCurrentEnrollment(schedule.students);
+    const capacityCheck = canAddStudent(currentEnrollment, schedule.maxCapacity || sessionTypeConfig.maxCapacity);
     if (!capacityCheck.ok) {
       return res.status(400).json({
         success: false,
@@ -1169,40 +1340,96 @@ const enrollStudentInSession = async (req, res) => {
       });
     }
 
-    // Check if student already enrolled
+    // For playgroup: warn the admin if the new child count exceeds what the assigned tutors can cover
+    if (sessionType === 'playgroup') {
+      const newChildCount = currentEnrollment + 1;
+      const assignedTutorCount = Array.isArray(schedule.tutors) && schedule.tutors.length > 0
+        ? schedule.tutors.length
+        : (schedule.tutor ? 1 : 0);
+      if (newChildCount >= 2) {
+        const req2 = calculatePlaygroupTutorRequirement(newChildCount);
+        if (assignedTutorCount < req2.min) {
+          return res.status(400).json({
+            success: false,
+            code: 'INSUFFICIENT_TUTORS',
+            message: `Insufficient tutor coverage. ${newChildCount} children require at least ${req2.min} tutor${req2.min !== 1 ? 's' : ''}, but this session has only ${assignedTutorCount}. Please add more tutors to this session before enrolling additional children.`,
+            required: req2,
+            assignedTutorCount,
+            newChildCount,
+          });
+        }
+      }
+    }
+
+    if (!enrollmentId && !studentIdRaw) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select a child to assign.',
+      });
+    }
+
+    const enrollment = await Enrollment.findOne(enrollmentId
+      ? { _id: enrollmentId }
+      : {
+          $or: [{ student: studentIdRaw }, { studentId: studentIdRaw }],
+          status: { $nin: ['cancelled', 'rejected', 'draft'] },
+        })
+      .populate('selectedSubjects', 'name code')
+      .populate('parent', 'firstName lastName email');
+
+    if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This child does not have an approved enrollment yet.'
+      });
+    }
+
+    if (!enrollmentCoversSubject(enrollment, schedule.subject)) {
+      return res.status(400).json({
+        success: false,
+        message: `This child is not enrolled in ${schedule.subject?.name || 'this program'}.`
+      });
+    }
+
+    const studentUser = await ensureStudentUserForEnrollment(enrollment);
+    const studentId = String(studentUser._id);
+
     const alreadyEnrolled = await isStudentEnrolled(scheduleId, studentId);
     if (alreadyEnrolled) {
       return res.status(400).json({
         success: false,
-        message: 'Student is already enrolled in this session'
+        message: 'This child is already assigned to this session.'
       });
     }
 
-    // Validate student has active enrollment
-    const enrollment = await Enrollment.findOne({
-      student: studentId,
-      status: 'active'
-    }).populate('selectedSubjects').lean();
-
-    if (!enrollment) {
+    const preferenceCheck = matchesParentPreference({
+      preferredStartDate: enrollment.preferredStartDate,
+      preferredTime: enrollment.preferredTime,
+      date: schedule.date,
+      startTime: schedule.startTime,
+    });
+    if (!preferenceCheck.ok && !overridePreference) {
+      const compatibleSlots = await findCompatibleOpenSlots({
+        subjectId: schedule.subject._id,
+        sessionType,
+        enrollment,
+        excludeScheduleId: scheduleId,
+      });
+      return res.status(409).json({
+        success: false,
+        code: 'PARENT_PREFERENCE_CONFLICT',
+        message: preferenceCheck.reason,
+        requiresOverride: true,
+        compatibleSlots,
+      });
+    }
+    if (!preferenceCheck.ok && overridePreference && !String(overrideReason || '').trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Student has no active enrollment'
+        message: 'Please enter a reason before overriding the parent preferred date or time.',
       });
     }
 
-    // Validate student is enrolled in subject
-    const hasSubject = (enrollment.selectedSubjects || []).some(
-      s => (s._id || s).toString() === schedule.subject._id.toString()
-    );
-    if (!hasSubject) {
-      return res.status(400).json({
-        success: false,
-        message: 'Student is not enrolled in this subject'
-      });
-    }
-
-    // Validate no student schedule conflicts
     const studentConflict = await hasStudentScheduleConflict({
       studentId,
       date: schedule.date,
@@ -1212,45 +1439,61 @@ const enrollStudentInSession = async (req, res) => {
     if (studentConflict) {
       return res.status(400).json({
         success: false,
-        message: 'Student has a conflicting schedule at this time'
+        message: 'This child already has another session at this time.'
       });
     }
 
-    // Enroll student
-    await Schedule.findByIdAndUpdate(
-      scheduleId,
-      { $addToSet: { students: studentId } },
-      { new: true }
-    );
+    if (sessionType === 'one-on-one') {
+      schedule.student = studentId;
+      schedule.students = [];
+    } else {
+      if (!Array.isArray(schedule.students)) schedule.students = [];
+      const alreadyInGroup = schedule.students.some((id) => String(id) === studentId);
+      if (!alreadyInGroup) schedule.students.push(studentId);
+    }
+    await schedule.save();
 
-    // Log audit
     logAudit({
       req,
       userId: req.user.id,
       action: 'Enroll Student in Session',
       module: 'Academic',
-      description: 'Admin enrolled student in group session',
+      description: overridePreference
+        ? `Admin assigned student with parent-preference override: ${String(overrideReason).trim()}`
+        : `Admin assigned student to ${sessionType} session`,
       status: 'SUCCESS',
       metadata: {
         scheduleId,
         studentId,
-        sessionType: schedule.sessionType
+        enrollmentId: enrollment._id,
+        sessionType,
+        overridePreference: !!overridePreference,
+        overrideReason: String(overrideReason || '').trim() || undefined,
       }
     }).catch(() => {});
 
-    const updated = await Schedule.findById(scheduleId)
-      .populate('student', 'firstName lastName middleName')
-      .populate('students', 'firstName lastName middleName')
-      .populate('tutor', 'firstName lastName middleName')
+    const populated = await Schedule.findById(scheduleId)
+      .populate('student', 'firstName lastName middleName email profileImage')
+      .populate('students', 'firstName lastName middleName email profileImage')
+      .populate('tutor', 'firstName lastName middleName email profileImage')
+      .populate('tutors', 'firstName lastName middleName email profileImage')
       .populate('subject', 'name code')
       .lean();
 
+    notifyAssignmentSaved({ schedule: populated, enrollment, studentUser }).catch(() => {});
+
+    const enrollmentCount = sessionType === 'one-on-one'
+      ? (populated.student ? 1 : 0)
+      : (populated.students?.length || 0);
+
     res.status(200).json({
       success: true,
-      message: 'Student enrolled successfully',
-      schedule: updated,
-      enrollmentCount: updated.students?.length || 0,
-      capacity: updated.maxCapacity
+      message: sessionType === 'one-on-one'
+        ? 'Child assigned to this tutor session.'
+        : 'Child added to this playgroup session.',
+      schedule: populated,
+      enrollmentCount,
+      capacity: populated.maxCapacity
     });
   } catch (error) {
     res.status(500).json({
@@ -1327,6 +1570,7 @@ const removeStudentFromSession = async (req, res) => {
       .populate('student', 'firstName lastName middleName')
       .populate('students', 'firstName lastName middleName')
       .populate('tutor', 'firstName lastName middleName')
+      .populate('tutors', 'firstName lastName middleName')
       .populate('subject', 'name code')
       .lean();
 
@@ -1544,6 +1788,13 @@ const createMonthlySchedules = async (req, res) => {
 
     const daySlots = normalizeDaySlots(daySlotsRaw);
 
+    const subject = await Subject.findById(subjectId).select('name code').lean();
+    if (!subject) return res.status(404).json({ success: false, message: 'Subject or program not found' });
+    const policy = getProgramPolicy(subject);
+    if (policy?.sessionType !== 'one-on-one') {
+      return res.status(400).json({ success: false, message: 'Monthly recurring schedules currently support one-on-one programs only.' });
+    }
+
     if (daySlots.length === 0) {
       return res.status(400).json({
         success: false,
@@ -1561,6 +1812,9 @@ const createMonthlySchedules = async (req, res) => {
           success: false,
           message: 'Each session must be exactly 2 hours'
         });
+      }
+      if (startM < 8 * 60 || endM > 17 * 60 || (startM < 13 * 60 && endM > 12 * 60)) {
+        return res.status(400).json({ success: false, message: 'Sessions must be within 8:00 AM-5:00 PM and cannot overlap lunch.' });
       }
     }
 
@@ -1597,10 +1851,19 @@ const createMonthlySchedules = async (req, res) => {
     const tutor = await User.findOne({
       _id: tutorId,
       role: 'tutor',
-      subjectsTaught: subjectId
+      isActive: true,
+      deletedAt: null
     });
     if (!tutor) {
       return res.status(400).json({ success: false, message: 'Tutor cannot teach this subject or not found' });
+    }
+
+    const tutoringAreaId = await getDefaultTutoringAreaId('one-on-one');
+    if (!tutoringAreaId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tutoring Area is not configured yet. Please add an active tutoring area before scheduling.'
+      });
     }
 
     const toInsert = [];
@@ -1614,6 +1877,8 @@ const createMonthlySchedules = async (req, res) => {
         d.setUTCDate(d.getUTCDate() + 1);
       }
       for (const date of datesThisDay) {
+        const timeError = validateTimeWindow({ date, startTime, endTime, policy });
+        if (timeError) return res.status(400).json({ success: false, message: timeError });
         const tutorCheck = await canTutorHandleSchedule({
           tutorId,
           subjectId,
@@ -1627,11 +1892,7 @@ const createMonthlySchedules = async (req, res) => {
             message: tutorCheck.reason
           });
         }
-        const roomConflict = await hasRoomScheduleConflict({
-          date,
-          startTime,
-          endTime
-        });
+        const roomConflict = await isRoomDoubleBooked(tutoringAreaId, date, startTime);
         if (roomConflict) {
           return res.status(400).json({
             success: false,
@@ -1640,11 +1901,16 @@ const createMonthlySchedules = async (req, res) => {
         }
         toInsert.push({
           student: studentId,
+          students: [],
           tutor: tutorId,
+          tutors: [tutorId],
           subject: subjectId,
           date,
           startTime: normalizeTime(startTime),
-          endTime: normalizeTime(endTime)
+          endTime: normalizeTime(endTime),
+          sessionType: 'one-on-one',
+          maxCapacity: 1,
+          tutoringAreaId
         });
       }
     }
@@ -1719,6 +1985,7 @@ const listSchedules = async (req, res) => {
       .populate('student', 'firstName lastName middleName email gradeLevel profileImage')
       .populate('students', 'firstName lastName middleName email gradeLevel profileImage')
       .populate('tutor', 'firstName lastName middleName email profileImage')
+      .populate('tutors', 'firstName lastName middleName email profileImage')
       .populate('originalTutor', 'firstName lastName middleName email profileImage')
       .populate('subject', 'name code')
       .sort({ date: 1, startTime: 1 })
@@ -1748,8 +2015,10 @@ const getMySessions = async (req, res) => {
         message: 'Only tutors can access my sessions'
       });
     }
-    const schedulesRaw = await Schedule.find({ tutor: req.user.id })
+    const schedulesRaw = await Schedule.find({ $or: [{ tutor: req.user.id }, { tutors: req.user.id }] })
       .populate('student', 'firstName lastName middleName email gradeLevel phone profileImage')
+      .populate('students', 'firstName lastName middleName email gradeLevel phone profileImage')
+      .populate('tutors', 'firstName lastName middleName email profileImage')
       .populate('subject', 'name code')
       .sort({ date: 1, startTime: 1 })
       .lean();
@@ -1786,6 +2055,7 @@ const getStudentClasses = async (req, res) => {
       ]
     })
       .populate('tutor', 'firstName lastName middleName email profileImage')
+      .populate('tutors', 'firstName lastName middleName email profileImage')
       .populate('student', 'firstName lastName middleName email profileImage')
       .populate('students', 'firstName lastName middleName email profileImage')
       .populate('subject', 'name code')
@@ -1827,7 +2097,7 @@ const markAttendance = async (req, res) => {
         message: 'status must be "present" or "absent"'
       });
     }
-    const schedule = await Schedule.findOne({ _id: scheduleId, tutor: req.user.id });
+    const schedule = await Schedule.findOne({ _id: scheduleId, $or: [{ tutor: req.user.id }, { tutors: req.user.id }] });
     if (!schedule) {
       return res.status(404).json({
         success: false,
@@ -2355,6 +2625,56 @@ const cleanupDuplicates = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Compute required tutor count for a Toddlers Playgroup session.
+ *          Returns min, max, recommended tutor counts and an explanatory message.
+ *          Also indicates whether there are enough active tutors available.
+ * @route   GET /api/schedules/playgroup-tutor-requirement?childCount=N
+ * @access  Private (Admin)
+ */
+const getPlaygroupTutorRequirement = async (req, res) => {
+  try {
+    const childCount = parseInt(req.query.childCount, 10);
+    if (!Number.isFinite(childCount) || childCount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'childCount must be a non-negative integer.'
+      });
+    }
+
+    const { validatePlaygroupChildCount: validateCount, calculatePlaygroupTutorRequirement: calcReq, PLAYGROUP_MIN_CHILDREN, PLAYGROUP_MAX_CHILDREN } = require('../utils/schedulingPolicy');
+
+    const childError = validateCount(childCount);
+    if (childError) {
+      return res.status(400).json({ success: false, message: childError });
+    }
+
+    const req2 = calcReq(childCount);
+
+    // Count how many active tutors exist
+    const availableTutorCount = await User.countDocuments({
+      role: 'tutor',
+      isActive: true,
+      deletedAt: null,
+    });
+
+    const hasSufficient = availableTutorCount >= req2.min;
+
+    res.status(200).json({
+      success: true,
+      childCount,
+      tutorRequirement: req2,
+      availableTutorCount,
+      hasSufficient,
+      message: hasSufficient
+        ? `${childCount} children require ${req2.recommended} tutor${req2.recommended !== 1 ? 's' : ''}. ${availableTutorCount} active tutor${availableTutorCount !== 1 ? 's' : ''} available.`
+        : `Insufficient tutors. ${childCount} children require at least ${req2.min} tutor${req2.min !== 1 ? 's' : ''}, but only ${availableTutorCount} active tutor${availableTutorCount !== 1 ? 's' : ''} available.`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to compute tutor requirement' });
+  }
+};
+
 module.exports = {
   getScheduleOptions,
   getTutorsBySubject,
@@ -2376,6 +2696,7 @@ module.exports = {
   triggerAttendanceTimeoutSubstitution,
   markTutorUnavailability,
   cleanupDuplicates,
+  getPlaygroupTutorRequirement,
   timeRangesOverlap,
   getMinutesSinceMidnight,
   getSessionEndTime

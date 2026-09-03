@@ -15,7 +15,7 @@ const Pricing = require('../models/Pricing');
 const EnrollmentVerification = require('../models/EnrollmentVerification');
 const { logAudit } = require('../utils/auditService');
 const { validateName, validatePhoneNoLetters } = require('../utils/validation');
-const { computeAge } = require('../utils/ageEligibility');
+const { computeAge, checkProgramEligibility } = require('../utils/ageEligibility');
 const {
   generateEnrollmentId,
   computeAmounts,
@@ -195,6 +195,33 @@ const submitEnrollment = async (req, res) => {
     if (packages.length === 0)
       return res.status(400).json({ success: false, message: 'At least one program package must be selected.' });
 
+    // Resolve packages and prices from the database; never trust browser-supplied billing values.
+    const packageKeys = packages.map((item) => `${item.programCode}:${item.packageSlug}`);
+    const pricedPackages = await Pricing.find({
+      active: true,
+      $expr: { $in: [{ $concat: ['$programCode', ':', '$packageSlug'] }, packageKeys] },
+    }).lean();
+    const pricedByKey = new Map(pricedPackages.map((item) => [`${item.programCode}:${item.packageSlug}`, item]));
+    const canonicalPackages = packages.map((item) => {
+      const priced = pricedByKey.get(`${item.programCode}:${item.packageSlug}`);
+      if (!priced) throw Object.assign(new Error('One or more selected packages are no longer available.'), { statusCode: 400 });
+      return {
+        programCode: priced.programCode,
+        packageSlug: priced.packageSlug,
+        displayName: priced.displayName,
+        price: priced.priceFull,
+        paymentOption: 'down',
+      };
+    });
+
+    const childAge = computeAge(body.birthdate);
+    for (const item of canonicalPackages) {
+      const eligibility = checkProgramEligibility(item.programCode, childAge);
+      if (!eligibility.eligible) {
+        throw Object.assign(new Error(eligibility.reason), { statusCode: 400 });
+      }
+    }
+
     // ── Validate payment method ──
     const paymentMethod = String(body.paymentMethod || 'gcash').toLowerCase();
     if (!VALID_PAYMENT_METHODS.includes(paymentMethod))
@@ -234,12 +261,22 @@ const submitEnrollment = async (req, res) => {
     const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
     const preferredTime = VALID_PREFERRED_TIMES.includes(body.preferredTime) ? body.preferredTime : 'no_preference';
 
+    // Validate and sanitise preferredDays — only Mon-Sat values accepted
+    const VALID_PREFERRED_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const preferredDays = Array.isArray(body.preferredDays)
+      ? body.preferredDays
+          .map((d) => String(d || '').trim())
+          .filter((d) => VALID_PREFERRED_DAYS.includes(d))
+          // Remove duplicates while preserving order
+          .filter((d, i, arr) => arr.indexOf(d) === i)
+      : [];
+
     // ── Pre-enrollment assessment (required only when a matching template exists) ──
-    const selectedProgramCodes = packages.map((p) => p.programCode).filter(Boolean);
+    const selectedProgramCodes = canonicalPackages.map((p) => p.programCode).filter(Boolean);
     const { assessment } = await validateAndBuildAssessment(body, selectedProgramCodes);
 
     // ── Compute amounts ──
-    const { totalFee, amountDue } = computeAmounts(packages, paymentOption);
+    const { totalFee, amountDue } = computeAmounts(canonicalPackages, paymentOption);
 
     // ── Generate enrollment ID ──
     const enrollmentId = await generateEnrollmentId();
@@ -249,9 +286,10 @@ const submitEnrollment = async (req, res) => {
       enrollmentId,
       parent: parentId,
       studentSnapshot: snapshot,
-      packages,
+      packages: canonicalPackages,
       preferredStartDate,
       preferredTime,
+      preferredDays,
       healthInfo,
       paymentOption,
       totalFee,
@@ -499,6 +537,8 @@ const getAllEnrollments = async (req, res) => {
       Enrollment.find(filter)
         .sort({ createdAt: -1 }).skip(skip).limit(Number(limit))
         .populate('parent', 'firstName lastName email phone')
+        .populate('student', 'firstName lastName middleName email phone profileImage')
+        .populate('selectedSubjects', 'name code')
         .populate('approvedBy', 'firstName lastName')
         .lean(),
       Enrollment.countDocuments(filter),

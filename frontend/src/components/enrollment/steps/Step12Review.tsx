@@ -38,6 +38,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         birthdate: data.birthdate,
         preferredStartDate: data.preferredStartDate || undefined,
         preferredTime: data.preferredTime,
+        preferredDays: (data.preferredDays ?? []).length > 0 ? data.preferredDays : undefined,
         allergies: data.allergies || undefined,
         medications: data.medications || undefined,
         specialNeeds: data.specialNeeds,
@@ -146,6 +147,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
 
         <Section title="Schedule Preference">
           <Row label="Preferred Start" value={data.preferredStartDate ? new Date(data.preferredStartDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'} />
+          <Row label="Available Days" value={(data.preferredDays ?? []).length > 0 ? data.preferredDays!.join(', ') : 'Any available weekday'} />
           <Row label="Time" value={TIME_LABELS[data.preferredTime] || '—'} />
         </Section>
 

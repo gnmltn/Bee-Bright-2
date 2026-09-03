@@ -1,9 +1,13 @@
 /**
  * Program categories and their subject items for grading.
- * Matches backend validation (programCategory + subjectItem).
+ * ONLY the 3 active programs — TPG101, ACT102, EXP106.
+ * Matches backend/controllers/subjectController.js ACTIVE_PROGRAMS
+ * and backend/utils/schedulingPolicy.js PROGRAM_POLICIES.
  */
 export interface ProgramCategoryOption {
   id: string;
+  /** Program code matching Subject.code in the database */
+  programCode: string;
   label: string;
   description: string;
   subjectItems: string[];
@@ -11,86 +15,46 @@ export interface ProgramCategoryOption {
 
 export const PROGRAM_CATEGORIES: ProgramCategoryOption[] = [
   {
-    id: "toddlers_playgroup",
-    label: "👶 Toddlers Playgroup",
-    description: "Socialization, sensory play, early development",
+    id: 'toddlers_playgroup',
+    programCode: 'TPG101',
+    label: '👶 Toddlers Playgroup',
+    description: 'Socialization, sensory play, early development (group sessions, age 1.5–3)',
     subjectItems: [
-      "Basic Communication (simple words, greetings)",
-      "Colors & Shapes Recognition",
-      "Numbers 1–10 (oral counting)",
-      "Alphabet Exposure (letter sounds through songs)",
-      "Fine Motor Skills (coloring, tracing, puzzles)",
-      "Gross Motor Activities (movement, coordination play)",
-      "Social Skills (sharing, turn-taking)",
+      'Basic Communication (simple words, greetings)',
+      'Colors & Shapes Recognition',
+      'Numbers 1–10 (oral counting)',
+      'Alphabet Exposure (letter sounds through songs)',
+      'Fine Motor Skills (coloring, tracing, puzzles)',
+      'Gross Motor Activities (movement, coordination play)',
+      'Social Skills (sharing, turn-taking)',
     ],
   },
   {
-    id: "prek_readiness",
-    label: "🎨 Pre-Kindergarten Readiness Program",
-    description: "Foundational academic skills",
+    id: 'academic_tutorial',
+    programCode: 'ACT102',
+    label: '💡 Academic Tutorial',
+    description: 'Subject-based support – Grade 1 to Junior High (1-on-1, age 2+)',
     subjectItems: [
-      "Phonics (letter sounds & blending)",
-      "Alphabet Writing (uppercase & lowercase)",
-      "Basic Reading (CVC words)",
-      "Basic Writing (name writing, simple sentences)",
-      "Numbers 1–20 (counting, number recognition)",
-      "Basic Addition & Subtraction (using objects)",
-      "Shapes, Colors & Patterns",
-      "Listening & Following Instructions",
+      'English (Reading Comprehension, Grammar, Writing)',
+      'Mathematics (Basic Math to Algebra/Geometry)',
+      'Science (General Science, Biology, Physics, Chemistry basics)',
+      'Filipino (Reading, Grammar, Writing)',
+      'Araling Panlipunan / Social Studies',
+      'Homework Assistance & Project Guidance',
     ],
   },
   {
-    id: "kindergarten_readiness",
-    label: "💡 Kindergarten Readiness Program",
-    description: "Structured school-entry preparation",
+    id: 'exam_prep',
+    programCode: 'EXP106',
+    label: '📝 Examination Preparation',
+    description: 'Test mastery & strategy (1-on-1, age 3+)',
     subjectItems: [
-      "Reading Readiness (phonics & sight words)",
-      "Writing Skills (sentence writing & spacing)",
-      "Numbers 1–50 (counting & simple operations)",
-      "Basic Story Comprehension",
-      "Classroom Behavior & Routine Training",
-      "Basic Science Concepts (plants, animals, weather)",
-      "Social & Emotional Readiness",
-    ],
-  },
-  {
-    id: "academic_tutorial",
-    label: "💡 Academic Tutorial",
-    description: "Subject-based support – Grade 1 to Junior High",
-    subjectItems: [
-      "English (Reading Comprehension, Grammar, Writing)",
-      "Mathematics (Basic Math to Algebra/Geometry)",
-      "Science (General Science, Biology, Physics, Chemistry basics)",
-      "Filipino (Reading, Grammar, Writing)",
-      "Araling Panlipunan / Social Studies",
-      "Homework Assistance & Project Guidance",
-    ],
-  },
-  {
-    id: "sped_tutorial",
-    label: "💡 SPED Tutorial",
-    description: "Individualized learning support",
-    subjectItems: [
-      "Functional Reading Skills",
-      "Basic Numeracy Skills",
-      "Communication Skills (verbal & non-verbal)",
-      "Life Skills (daily routines, independence skills)",
-      "Behavior & Social Skills Training",
-      "Sensory & Fine Motor Activities",
-      "Individualized Academic Support (based on learner's IEP)",
-    ],
-  },
-  {
-    id: "exam_prep",
-    label: "💡 Examination Preparation",
-    description: "Test mastery & strategy",
-    subjectItems: [
-      "English Proficiency (Vocabulary, Grammar, Reading)",
-      "Mathematics Problem Solving",
-      "Science Concepts Review",
-      "Logical & Abstract Reasoning",
-      "Test-Taking Strategies & Time Management",
-      "Mock Exams & Practice Drills",
+      'English Proficiency (Vocabulary, Grammar, Reading)',
+      'Mathematics Problem Solving',
+      'Science Concepts Review',
+      'Logical & Abstract Reasoning',
+      'Test-Taking Strategies & Time Management',
+      'Mock Exams & Practice Drills',
     ],
   },
 ];
@@ -101,4 +65,8 @@ export function getProgramByCategoryId(id: string): ProgramCategoryOption | unde
 
 export function getProgramByCategoryLabel(label: string): ProgramCategoryOption | undefined {
   return PROGRAM_CATEGORIES.find((p) => p.label === label);
+}
+
+export function getProgramByCode(code: string): ProgramCategoryOption | undefined {
+  return PROGRAM_CATEGORIES.find((p) => p.programCode === code);
 }

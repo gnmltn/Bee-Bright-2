@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { User, Phone, Lock, GraduationCap, BookOpen, Shield, X, Pencil, Construction } from "lucide-react";
-import { subjectService, authService, settingsService } from "@/services/api";
+import { authService, settingsService } from "@/services/api";
 import { Switch } from "@/components/ui/switch";
 import { sanitizeName, sanitizePhoneInput } from "@/utils/validation";
 import { PasswordSecuritySection } from "@/components/auth/PasswordSecuritySection";
@@ -129,18 +129,12 @@ export default function ProfileSettings() {
   const [guardianName, setGuardianName] = useState(user?.guardianName || "");
   const [guardianPhone, setGuardianPhone] = useState(user?.guardianPhone || "");
 
-  // Tutor fields - store subject IDs (from API); same programs as enrollment/scheduling
-  const tutorSubjectIds = Array.isArray(user?.subjectsTaught)
-    ? (user.subjectsTaught as { _id: string }[]).map((s) => (typeof s === "object" && s?._id ? s._id : String(s)))
-    : [];
-  const [subjectsTaught, setSubjectsTaught] = useState<string[]>(tutorSubjectIds);
   const [employmentType, setEmploymentType] = useState<'full-time' | 'part-time'>(
     (user as { employmentType?: 'full-time' | 'part-time' })?.employmentType || 'full-time'
   );
   const [availabilitySlots, setAvailabilitySlots] = useState<AvailabilitySlot[]>(() =>
     parseAvailabilityString((user as { availability?: string })?.availability || "")
   );
-  const [subjectOptions, setSubjectOptions] = useState<SubjectOption[]>([]);
   const [profileImageUploading, setProfileImageUploading] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
@@ -155,27 +149,12 @@ export default function ProfileSettings() {
     setGradeLevel(user?.gradeLevel || "");
     setGuardianName(user?.guardianName || "");
     setGuardianPhone(user?.guardianPhone || "");
-    const ids = Array.isArray(user?.subjectsTaught)
-      ? (user.subjectsTaught as { _id: string }[]).map((s) => (typeof s === "object" && s?._id ? s._id : String(s)))
-      : [];
-    setSubjectsTaught(ids);
     setEmploymentType((user as { employmentType?: "full-time" | "part-time" })?.employmentType || "full-time");
     setAvailabilitySlots(parseAvailabilityString((user as { availability?: string })?.availability || ""));
   };
 
   useEffect(() => {
-    subjectService.getAllSubjects().then((res) => {
-      if (res.data?.success && Array.isArray(res.data.subjects)) {
-        setSubjectOptions(res.data.subjects);
-      }
-    }).catch(() => {});
-  }, []);
-  useEffect(() => {
     if (!user || user.role !== "tutor") return;
-    const ids = Array.isArray(user.subjectsTaught)
-      ? (user.subjectsTaught as { _id: string }[]).map((s) => (typeof s === "object" && s?._id ? s._id : String(s)))
-      : [];
-    setSubjectsTaught(ids);
     setEmploymentType((user as { employmentType?: 'full-time' | 'part-time' }).employmentType || "full-time");
     setAvailabilitySlots(parseAvailabilityString((user as { availability?: string }).availability || ""));
   }, [user?.id, user?.role]);
@@ -312,7 +291,6 @@ export default function ProfileSettings() {
         updates.guardianName = guardianName.trim();
         updates.guardianPhone = guardianPhone.trim();
       } else if (user.role === "tutor") {
-        updates.subjectsTaught = subjectsTaught;
         updates.employmentType = employmentType;
         updates.availability = employmentType === "part-time" ? availabilitySummary : "";
       }
@@ -331,7 +309,6 @@ export default function ProfileSettings() {
           gradeLevel: u.gradeLevel,
           guardianName: u.guardianName,
           guardianPhone: u.guardianPhone,
-          subjectsTaught: u.subjectsTaught || [],
           employmentType: u.employmentType,
           availability: u.availability || "",
           profileImageUrl: (u as { profileImageUrl?: string | null }).profileImageUrl ?? user.profileImageUrl ?? null,
@@ -357,14 +334,6 @@ export default function ProfileSettings() {
         variant: "destructive",
       });
     }
-  };
-
-  const toggleSubject = (subjectId: string) => {
-    setSubjectsTaught((prev) =>
-      prev.includes(subjectId)
-        ? prev.filter((id) => id !== subjectId)
-        : [...prev, subjectId]
-    );
   };
 
   const handleProfileImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -576,37 +545,9 @@ export default function ProfileSettings() {
                 <BookOpen className="h-5 w-5" />
                 Tutor Information
               </CardTitle>
-              <CardDescription>Programs you can teach (same as enrollment; used for scheduling)</CardDescription>
+              <CardDescription>Employment and availability used for scheduling</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Subjects / Programs You Can Teach</Label>
-                <div className="flex flex-wrap gap-2">
-                  {subjectOptions.map((subject) => (
-                    <Button
-                      key={subject._id}
-                      type="button"
-                      variant={subjectsTaught.includes(subject._id) ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => toggleSubject(subject._id)}
-                      className="gap-1"
-                    >
-                      {subject.name}
-                      {subjectsTaught.includes(subject._id) && (
-                        <X className="h-3 w-3" />
-                      )}
-                    </Button>
-                  ))}
-                </div>
-                {subjectOptions.length === 0 && (
-                  <p className="text-sm text-muted-foreground">Loading programs...</p>
-                )}
-                {subjectsTaught.length > 0 && subjectOptions.length > 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Selected: {subjectsTaught.length} program(s)
-                  </p>
-                )}
-              </div>
               <div className="space-y-2">
                 <Label>Employment Type</Label>
                 <Select value={employmentType} onValueChange={(v) => setEmploymentType(v as 'full-time' | 'part-time')}>

@@ -21,13 +21,15 @@ import {
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, scheduleService, materialService, gradeService, announcementService, auditLogService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { enrollmentService, assessmentService, scheduleService, materialService, gradeService, announcementService, auditLogService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import { AITab } from "@/components/ai/AITab";
@@ -46,6 +48,21 @@ function formatSlotTime(hhmm: string) {
   const h12 = h % 12 || 12;
   const ampm = h < 12 ? "AM" : "PM";
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function formatClassTutorNames(session: {
+  tutor?: { firstName?: string; lastName?: string; middleName?: string } | null;
+  tutors?: Array<{ firstName?: string; lastName?: string; middleName?: string }>;
+}) {
+  const tutors = Array.isArray(session.tutors) && session.tutors.length > 0
+    ? session.tutors
+    : session.tutor
+      ? [session.tutor]
+      : [];
+  const names = tutors
+    .map((tutor) => [tutor.firstName, tutor.lastName].filter(Boolean).join(" "))
+    .filter(Boolean);
+  return names.length ? names.join(", ") : "—";
 }
 
 const SCHOOL_WEEK_DAYS = [
@@ -121,11 +138,13 @@ export default function StudentDashboard() {
     _id: string;
     enrollmentId?: string;
     status?: string;
-    studentSnapshot?: { firstName?: string; lastName?: string };
+    studentSnapshot?: { firstName?: string; lastName?: string; birthdate?: string };
     studentId?: string;
     selectedSubjects?: { _id: string; name: string }[];
     packages?: { displayName?: string }[];
     preEnrollmentAssessment?: PreEnrollmentAssessment | null;
+    rejectionReason?: string | null;
+    allowResubmission?: boolean;
   }[]>([]);
   const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
   const [schedules, setSchedules] = useState<{
@@ -134,8 +153,10 @@ export default function StudentDashboard() {
     startTime: string;
     endTime: string;
     attendanceStatus?: 'unmarked' | 'present' | 'absent';
+    sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
     subject?: { name: string };
     tutor?: { firstName?: string; lastName?: string; middleName?: string; email?: string };
+    tutors?: Array<{ firstName?: string; lastName?: string; middleName?: string; email?: string }>;
   }[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(true);
   const [assignedMaterials, setAssignedMaterials] = useState<LearningMaterialItem[]>([]);
@@ -148,6 +169,21 @@ export default function StudentDashboard() {
   const [activityLogs, setActivityLogs] = useState<AuditLogItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [weekStart, setWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
+  const [isAddChildOpen, setIsAddChildOpen] = useState(false);
+  const [isAddingChild, setIsAddingChild] = useState(false);
+  const [addChildStep, setAddChildStep] = useState(1);
+  const [expandedPrograms, setExpandedPrograms] = useState<string[]>([]);
+  const [pricing, setPricing] = useState<{ programCode: string; packageSlug: string; displayName: string; durationDesc?: string; priceFull: number; priceDown?: number | null; ageMin?: number | null; ageMax?: number | null }[]>([]);
+  const [assessmentTemplates, setAssessmentTemplates] = useState<{ _id: string; title: string; sections?: { title?: string; items?: { key: string; label: string }[] }[]; ratingScale?: { value: string; label: string }[]; infoFields?: { key: string; label: string }[] }[]>([]);
+  const [assessmentRatings, setAssessmentRatings] = useState<Record<string, string>>({});
+  const [assessmentInfo, setAssessmentInfo] = useState<Record<string, string>>({});
+  const [assessmentTemplateId, setAssessmentTemplateId] = useState("");
+  const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
+  const [paymentReference, setPaymentReference] = useState("");
+  const [hasAllergies, setHasAllergies] = useState<"yes" | "no" | "">("");
+  const [hasMedicalConditions, setHasMedicalConditions] = useState<"yes" | "no" | "">("");
+  const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", preferredTime: "no_preference", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
+  const [newChildConsent, setNewChildConsent] = useState(false);
 
   // ─── Schedule view controls ────────────────────────────────────────────────────
   const [scheduleViewMode, setScheduleViewMode] = useState<"monthly" | "weekly" | "daily">("monthly");
@@ -357,15 +393,14 @@ export default function StudentDashboard() {
           : d.toDateString() === new Date(Date.now() + 86400000).toDateString()
             ? "Tomorrow"
             : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-        const tutorName = s.tutor
-          ? [s.tutor.firstName, s.tutor.middleName, s.tutor.lastName].filter(Boolean).join(" ")
-          : "—";
+        const tutorName = formatClassTutorNames(s);
         return {
           _id: s._id,
           subject: s.subject?.name ?? "—",
           time: `${formatTime12h(s.startTime)} – ${formatTime12h(s.endTime)}`,
           date: dateLabel,
           tutor: tutorName,
+          isPlaygroup: s.sessionType === "playgroup",
         };
       });
   }, [uniqueSchedules, today]);
@@ -383,7 +418,7 @@ export default function StudentDashboard() {
 
   const weekSchedule = useMemo(() => {
     const slotSet = new Set<string>();
-    const map = new Map<string, { subject: string; tutor: string }[]>();
+    const map = new Map<string, { subject: string; tutor: string; isPlaygroup?: boolean }[]>();
 
     uniqueSchedules.forEach((s) => {
       const sessionDate = new Date(s.date);
@@ -396,12 +431,10 @@ export default function StudentDashboard() {
       const slotKey = `${start}|${end}`;
       slotSet.add(slotKey);
 
-      const tutor = s.tutor
-        ? [s.tutor.firstName, s.tutor.middleName, s.tutor.lastName].filter(Boolean).join(" ")
-        : "—";
+      const tutor = formatClassTutorNames(s);
       const cellKey = `${dayOffset}|${slotKey}`;
       const list = map.get(cellKey) || [];
-      list.push({ subject: s.subject?.name ?? "—", tutor });
+      list.push({ subject: s.subject?.name ?? "—", tutor, isPlaygroup: s.sessionType === "playgroup" });
       map.set(cellKey, list);
     });
 
@@ -652,9 +685,148 @@ export default function StudentDashboard() {
     navigate(nextHash ? `/student-dashboard#${nextHash}` : "/student-dashboard", { replace: true });
   };
 
-  const handleAddChild = () => {
-    navigate("/enroll?mode=add-child");
+  const handleAddChild = (resubmission?: typeof enrollments[number]) => {
+    if (pricing.length === 0) {
+      enrollmentService.getPricing().then((response) => {
+        if (response.data?.success) {
+          setPricing(response.data.pricing);
+          if (resubmission) {
+            const packageItem = resubmission.packages?.[0];
+            const matchingPackage = response.data.pricing.find((item) => item.displayName === packageItem?.displayName);
+            setNewChild((current) => ({
+              ...current,
+              firstName: resubmission.studentSnapshot?.firstName || "",
+              lastName: resubmission.studentSnapshot?.lastName || "",
+              birthdate: resubmission.studentSnapshot?.birthdate?.slice(0, 10) || "",
+              packageKey: matchingPackage ? `${matchingPackage.programCode}:${matchingPackage.packageSlug}` : "",
+            }));
+          }
+        }
+      }).catch(() => toast.error("Unable to load programs. Please try again."));
+    } else if (resubmission) {
+      const packageItem = resubmission.packages?.[0];
+      const matchingPackage = pricing.find((item) => item.displayName === packageItem?.displayName);
+      setNewChild((current) => ({
+        ...current,
+        firstName: resubmission.studentSnapshot?.firstName || "",
+        lastName: resubmission.studentSnapshot?.lastName || "",
+        birthdate: resubmission.studentSnapshot?.birthdate?.slice(0, 10) || "",
+        packageKey: matchingPackage ? `${matchingPackage.programCode}:${matchingPackage.packageSlug}` : "",
+      }));
+    }
+    assessmentService.getTemplates(["ACT102"]).then((response) => {
+      if (response.data?.success) setAssessmentTemplates(response.data.templates);
+    }).catch(() => setAssessmentTemplates([]));
+    setAddChildStep(1);
+    setExpandedPrograms([]);
+    setIsAddChildOpen(true);
   };
+
+  const statusBadgeClass = (status: string) => {
+    if (status === "approved" || status === "active") return "bg-emerald-100 text-emerald-700";
+    if (status === "rejected" || status === "cancelled") return "bg-red-100 text-red-700";
+    if (status === "pending_approval" || status === "payment_under_verification") return "bg-amber-100 text-amber-800";
+    return "bg-muted text-muted-foreground";
+  };
+
+  const handleAddChildSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!newChild.firstName.trim() || !newChild.lastName.trim() || !newChild.birthdate || !newChild.packageKey || !newChildConsent) {
+      toast.error("Please complete the child information and accept the agreement.");
+      return;
+    }
+
+    const selectedProgram = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey);
+    if (!selectedProgram) { toast.error("Please select an available package."); return; }
+    setIsAddingChild(true);
+    try {
+      const submission = await enrollmentService.submitWizard({
+          packages: [{
+          programCode: selectedProgram.programCode,
+          packageSlug: selectedProgram.packageSlug,
+          displayName: selectedProgram.displayName,
+          price: selectedProgram.priceFull,
+          paymentOption: "down",
+        }],
+        paymentOption: "down",
+        paymentMethod: newChild.paymentMethod as "gcash" | "seabank" | "bdo",
+        studentFirstName: newChild.firstName.trim(),
+        studentMiddleName: newChild.middleName.trim(),
+        studentLastName: newChild.lastName.trim(),
+        birthdate: newChild.birthdate,
+        preferredStartDate: newChild.preferredStartDate || undefined,
+        preferredTime: newChild.preferredTime as "morning" | "afternoon" | "no_preference",
+        // preferredDays not collected in the quick add-child flow — defaults to no preference
+        allergies: hasAllergies === "no" ? "None" : newChild.allergies.trim(),
+        medications: hasMedicalConditions === "no" ? "None" : newChild.medications.trim(),
+        specialNeeds: newChild.specialNeeds,
+        specialNeedsDetails: newChild.specialNeedsDetails.trim(),
+        emergencyContact: newChild.emergencyContact.trim(),
+        consentVersion: "1.0",
+        consentItems: [{ name: "participation_agreement", accepted: true, version: "1.0" }],
+        assessment: newChild.assessmentApplicable && assessmentTemplateId ? { applicable: true, templateId: assessmentTemplateId, ratings: assessmentRatings, infoValues: assessmentInfo, remarks: newChild.assessmentRemarks.trim() } : { applicable: false, skipReason: "Not applicable" },
+      });
+      if (paymentProofFile && submission?.data?.paymentId) {
+        const proofDataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(paymentProofFile); });
+        await paymentService.submitPaymentProof(submission.data.paymentId, { proofDataUrl, payerReference: paymentReference.trim(), paymentMethod: newChild.paymentMethod });
+      }
+      toast.success("Child added", { description: "The enrollment was submitted for admin review." });
+      setNewChild({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", preferredTime: "no_preference", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
+      setNewChildConsent(false);
+      setHasAllergies("");
+      setHasMedicalConditions("");
+      setAssessmentTemplateId("");
+      setAssessmentRatings({});
+      setAssessmentInfo({});
+      setPaymentProofFile(null);
+      setPaymentReference("");
+      setIsAddChildOpen(false);
+      const response = await enrollmentService.getMyEnrollments();
+      if (response.data?.success && Array.isArray(response.data.enrollments)) setEnrollments(response.data.enrollments);
+    } catch (error) {
+      const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(message || "Unable to add child. Please try again.");
+    } finally {
+      setIsAddingChild(false);
+    }
+  };
+
+  const handleAddChildNext = () => {
+    const requiredByStep: Record<number, boolean> = {
+      1: Boolean(newChild.firstName.trim() && newChild.lastName.trim() && newChild.birthdate),
+      2: Boolean(newChild.packageKey),
+      3: true,
+      4: Boolean(hasAllergies && hasMedicalConditions && newChild.emergencyContact.trim() && (hasAllergies === "no" || newChild.allergies.trim()) && (hasMedicalConditions === "no" || newChild.medications.trim())),
+      7: Boolean(newChild.paymentMethod && paymentProofFile),
+      8: newChildConsent,
+    };
+    if (addChildStep === 2) {
+      const selectedPackage = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey);
+      if (!selectedPackage || !isPackageEligible(selectedPackage)) {
+        toast.error("Please choose a package that is available for the child’s age.");
+        return;
+      }
+    }
+    if (requiredByStep[addChildStep] === false) {
+      toast.error(addChildStep === 7 ? "Choose a payment method and upload your payment proof." : addChildStep === 8 ? "Please accept the agreement." : "Please complete the required fields before continuing.");
+      return;
+    }
+    if (addChildStep === 6 && newChild.assessmentApplicable) {
+      const assessmentItems = (activeAssessmentTemplate?.sections || []).flatMap((section) => section.items || []);
+      if (!activeAssessmentTemplate || assessmentItems.some((item) => !assessmentRatings[item.key])) {
+        toast.error("Please complete every assessment rating.");
+        return;
+      }
+    }
+    setAddChildStep((step) => Math.min(9, step + 1));
+  };
+
+  const childAge = newChild.birthdate
+    ? (Date.now() - new Date(`${newChild.birthdate}T00:00:00`).getTime()) / (365.25 * 24 * 60 * 60 * 1000)
+    : null;
+  const isPackageEligible = (item: { ageMin?: number | null; ageMax?: number | null }) =>
+    childAge !== null && (item.ageMin == null || childAge >= item.ageMin) && (item.ageMax == null || childAge <= item.ageMax);
+  const activeAssessmentTemplate = assessmentTemplates.find((template) => template._id === assessmentTemplateId);
 
   const handleQuickAction = (action: string) => {
     switch (action) {
@@ -895,7 +1067,7 @@ export default function StudentDashboard() {
                               </div>
                               <div className="flex flex-wrap gap-2">
                                 {child.statuses.length > 0 ? child.statuses.map((status) => (
-                                  <span key={`${child.childName}-${status}`} className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                                  <span key={`${child.childName}-${status}`} className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(status)}`}>
                                     {status}
                                   </span>
                                 )) : (
@@ -923,10 +1095,21 @@ export default function StudentDashboard() {
                                 <div className="mt-2 space-y-2">
                                   {child.enrollments.map((enrollment) => (
                                     <div key={enrollment._id} className="rounded-lg border border-dashed border-border bg-muted/30 p-2">
-                                      <p className="text-sm font-medium text-foreground">
-                                        {enrollment.enrollmentId || "Enrollment"}
-                                      </p>
-                                      <p className="text-xs text-muted-foreground">Status: {enrollment.status || "Pending"}</p>
+                                      <div className="flex items-center justify-between gap-2">
+                                        <p className="text-sm font-medium text-foreground">{enrollment.enrollmentId || "Enrollment"}</p>
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusBadgeClass(enrollment.status || "pending")}`}>{enrollment.status || "Pending"}</span>
+                                      </div>
+                                      {enrollment.status === "rejected" && enrollment.rejectionReason && (
+                                        <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                                          <p className="font-semibold">Admin feedback</p>
+                                          <p>{enrollment.rejectionReason}</p>
+                                        </div>
+                                      )}
+                                      {enrollment.status === "rejected" && enrollment.allowResubmission && (
+                                        <Button type="button" size="sm" variant="outline" className="mt-2 w-full border-red-200 text-red-700 hover:bg-red-50" onClick={() => handleAddChild(enrollment)}>
+                                          Review and Resubmit
+                                        </Button>
+                                      )}
                                     </div>
                                   ))}
                                 </div>
@@ -1048,7 +1231,7 @@ export default function StudentDashboard() {
                                 <span className={`text-sm font-medium ${cell.isToday ? "text-primary" : "text-foreground"}`}>{cell.date.getDate()}</span>
                                 <div className="mt-1 space-y-1 flex-1 overflow-auto">
                                   {daySchedules.map((s) => {
-                                    const tutorName = s.tutor ? [s.tutor.firstName, s.tutor.lastName].filter(Boolean).join(" ") : "—";
+                                    const tutorName = formatClassTutorNames(s);
                                     return (
                                       <div
                                         key={s._id}
@@ -1104,7 +1287,7 @@ export default function StudentDashboard() {
                                       return (
                                         <div key={`${slotKey}-${day.key}`} className="p-2 border-r border-border last:border-r-0 space-y-1">
                                           {schedulesSessions.length === 0 ? null : schedulesSessions.map((session) => {
-                                            const tutorName = session.tutor ? [session.tutor.firstName, session.tutor.lastName].filter(Boolean).join(" ") : "—";
+                                            const tutorName = formatClassTutorNames(session);
                                             return (
                                               <div
                                                 key={session._id}
@@ -1134,7 +1317,7 @@ export default function StudentDashboard() {
                           <p className="text-sm text-muted-foreground">No sessions for this day.</p>
                         ) : (
                           schedulesInDailyView.map((s) => {
-                            const tutorName = s.tutor ? [s.tutor.firstName, s.tutor.lastName].filter(Boolean).join(" ") : "—";
+                            const tutorName = formatClassTutorNames(s);
                             return (
                               <div
                                 key={s._id}
@@ -1144,7 +1327,7 @@ export default function StudentDashboard() {
                                   <div className="min-w-0 flex-1">
                                     <p className="font-medium text-foreground">{s.subject?.name ?? "—"}</p>
                                     <p className="text-sm text-muted-foreground">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
-                                    <p className="text-xs text-muted-foreground">Tutor: {tutorName}</p>
+                                    <p className="text-xs text-muted-foreground">{s.sessionType === "playgroup" ? "Tutors" : "Tutor"}: {tutorName}</p>
                                   </div>
                                 </div>
                               </div>
@@ -1510,6 +1693,51 @@ export default function StudentDashboard() {
           </div>
         </div>
       </div>
+      <Dialog open={isAddChildOpen} onOpenChange={setIsAddChildOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add Child</DialogTitle>
+            <DialogDescription>Step {addChildStep + 3} of 12. This creates an enrollment under your account, not another login account.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddChildSubmit} className="space-y-4">
+            {addChildStep === 1 && <div className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="child-first-name">First name</Label>
+                <Input id="child-first-name" value={newChild.firstName} onChange={(event) => setNewChild((current) => ({ ...current, firstName: event.target.value }))} required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="child-middle-name">Middle name</Label>
+                <Input id="child-middle-name" value={newChild.middleName} onChange={(event) => setNewChild((current) => ({ ...current, middleName: event.target.value }))} />
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="child-last-name">Last name</Label>
+                <Input id="child-last-name" value={newChild.lastName} onChange={(event) => setNewChild((current) => ({ ...current, lastName: event.target.value }))} required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="child-birthdate">Birthdate</Label>
+                <Input id="child-birthdate" type="date" value={newChild.birthdate} onChange={(event) => setNewChild((current) => ({ ...current, birthdate: event.target.value }))} required />
+              </div>
+            </div>
+            </div>}
+            {addChildStep === 2 && <div className="space-y-2"><Label>Choose a program package</Label><p className="text-xs text-muted-foreground">Enter the birthdate first. Programs outside the child&apos;s age range are disabled.</p><div className="max-h-64 space-y-2 overflow-y-auto">{["TPG101", "ACT102", "EXP106"].map((programCode) => { const items = pricing.filter((item) => item.programCode === programCode); if (!items.length) return null; const eligibleItems = items.filter(isPackageEligible); const expanded = expandedPrograms.includes(programCode); const programName = programCode === "TPG101" ? "Toddlers Playgroup" : programCode === "ACT102" ? "Academic Tutorial" : "Examination Preparation"; return <div key={programCode} className="rounded-lg border border-border"><button type="button" disabled={eligibleItems.length === 0} onClick={() => setExpandedPrograms((current) => current.includes(programCode) ? current.filter((code) => code !== programCode) : [...current, programCode])} className={`flex w-full items-center justify-between p-3 text-left ${eligibleItems.length === 0 ? "cursor-not-allowed opacity-50" : "hover:bg-muted/50"}`}><span><span className="block text-sm font-semibold">{programName}</span><span className="text-xs text-muted-foreground">{eligibleItems.length === 0 ? (childAge === null ? "Enter birthdate to check eligibility" : "Not available for this age") : `${items.length} package${items.length === 1 ? "" : "s"}`}</span></span><span className="text-muted-foreground">{expanded ? "−" : "+"}</span></button>{expanded && eligibleItems.length > 0 && <div className="space-y-2 border-t border-border p-2">{eligibleItems.map((item) => <button type="button" key={`${item.programCode}:${item.packageSlug}`} onClick={() => setNewChild((current) => ({ ...current, packageKey: `${item.programCode}:${item.packageSlug}` }))} className={`w-full rounded-lg border p-3 text-left ${newChild.packageKey === `${item.programCode}:${item.packageSlug}` ? "border-primary bg-primary/5" : "border-border"}`}><span className="block text-sm font-medium">{item.displayName}</span><span className="text-xs text-muted-foreground">{item.durationDesc || "Package"} - PHP {item.priceFull.toLocaleString()}</span></button>)}</div>}</div>; })}</div></div>}
+            {addChildStep === 3 && <div className="space-y-2"><Label htmlFor="child-start-date">Preferred start date <span className="font-normal text-muted-foreground">(optional)</span></Label><Input id="child-start-date" type="date" value={newChild.preferredStartDate} onChange={(event) => setNewChild((current) => ({ ...current, preferredStartDate: event.target.value }))} /><Label htmlFor="child-time">Preferred time</Label><select id="child-time" value={newChild.preferredTime} onChange={(event) => setNewChild((current) => ({ ...current, preferredTime: event.target.value }))} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"><option value="no_preference">No preference</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option></select></div>}
+            {addChildStep === 4 && <div className="space-y-4"><div className="space-y-2"><Label>Does the child have allergies?</Label><div className="flex gap-2"><Button type="button" variant={hasAllergies === "yes" ? "default" : "outline"} onClick={() => setHasAllergies("yes")}>Yes</Button><Button type="button" variant={hasAllergies === "no" ? "default" : "outline"} onClick={() => { setHasAllergies("no"); setNewChild((current) => ({ ...current, allergies: "" })); }}>No</Button></div>{hasAllergies === "yes" && <Input aria-label="Allergy details" value={newChild.allergies} onChange={(event) => setNewChild((current) => ({ ...current, allergies: event.target.value }))} placeholder="List allergies" required />}</div><div className="space-y-2"><Label>Does the child have medical conditions or take medication?</Label><div className="flex gap-2"><Button type="button" variant={hasMedicalConditions === "yes" ? "default" : "outline"} onClick={() => setHasMedicalConditions("yes")}>Yes</Button><Button type="button" variant={hasMedicalConditions === "no" ? "default" : "outline"} onClick={() => { setHasMedicalConditions("no"); setNewChild((current) => ({ ...current, medications: "" })); }}>No</Button></div>{hasMedicalConditions === "yes" && <Input aria-label="Medical condition details" value={newChild.medications} onChange={(event) => setNewChild((current) => ({ ...current, medications: event.target.value }))} placeholder="List conditions or medications" required />}</div><div className="space-y-2"><Label htmlFor="child-emergency">Emergency contact</Label><Input id="child-emergency" value={newChild.emergencyContact} onChange={(event) => setNewChild((current) => ({ ...current, emergencyContact: event.target.value }))} required /></div></div>}
+            {addChildStep === 5 && <div className="space-y-3"><Label className="flex items-center gap-3"><Checkbox checked={newChild.specialNeeds} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, specialNeeds: checked === true }))} /> Does the child have special learning or medical needs?</Label>{newChild.specialNeeds && <Input value={newChild.specialNeedsDetails} onChange={(event) => setNewChild((current) => ({ ...current, specialNeedsDetails: event.target.value }))} placeholder="Please provide details" />}</div>}
+            {addChildStep === 6 && <div className="max-h-72 space-y-3 overflow-y-auto"><p className="text-sm text-muted-foreground">Complete the assessment when it applies to the child. If it does not apply, leave this unchecked.</p><Label className="flex items-center gap-3"><Checkbox checked={newChild.assessmentApplicable} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, assessmentApplicable: checked === true }))} /> Assessment is applicable</Label>{newChild.assessmentApplicable && assessmentTemplates.length > 0 && <><Label htmlFor="assessment-template">Assessment form</Label><select id="assessment-template" value={assessmentTemplateId} onChange={(event) => { setAssessmentTemplateId(event.target.value); setAssessmentRatings({}); setAssessmentInfo({}); }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select assessment form</option>{assessmentTemplates.map((template) => <option key={template._id} value={template._id}>{template.title}</option>)}</select>{activeAssessmentTemplate && <><p className="font-medium">{activeAssessmentTemplate.title}</p>{(activeAssessmentTemplate.infoFields || []).map((field) => <div key={field.key} className="space-y-1"><Label htmlFor={`assessment-info-${field.key}`}>{field.label}</Label><Input id={`assessment-info-${field.key}`} value={assessmentInfo[field.key] || ""} onChange={(event) => setAssessmentInfo((current) => ({ ...current, [field.key]: event.target.value }))} /></div>)}{(activeAssessmentTemplate.sections || []).map((section) => <div key={section.title} className="space-y-2"><p className="text-sm font-semibold">{section.title}</p>{(section.items || []).map((item) => <div key={item.key} className="space-y-1"><Label htmlFor={`assessment-rating-${item.key}`}>{item.label}</Label><select id={`assessment-rating-${item.key}`} value={assessmentRatings[item.key] || ""} onChange={(event) => setAssessmentRatings((current) => ({ ...current, [item.key]: event.target.value }))} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select rating</option>{(activeAssessmentTemplate.ratingScale || []).map((rating) => <option key={rating.value} value={rating.value}>{rating.label}</option>)}</select></div>)}</div>)}<Input value={newChild.assessmentRemarks} onChange={(event) => setNewChild((current) => ({ ...current, assessmentRemarks: event.target.value }))} placeholder="Assessment remarks" /></>}</>}{newChild.assessmentApplicable && assessmentTemplates.length === 0 && <p className="text-sm text-muted-foreground">No assessment is configured for this program.</p>}</div>}
+            {addChildStep === 7 && <div className="space-y-3"><Label>Billing and payment method</Label>{(() => { const selected = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey); const down = selected?.priceDown ?? Math.ceil((selected?.priceFull || 0) * 0.5); return <div className="rounded-lg bg-muted p-3 text-sm"><p className="font-medium">{selected?.displayName || "Select a package first"}</p><p>Full price: PHP {(selected?.priceFull || 0).toLocaleString()}</p><p className="font-semibold text-primary">Amount due now (50%): PHP {down.toLocaleString()}</p></div>; })()}<Label htmlFor="child-payment-method">Payment method</Label><select id="child-payment-method" value={newChild.paymentMethod} onChange={(event) => setNewChild((current) => ({ ...current, paymentMethod: event.target.value }))} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" required><option value="gcash">GCash</option><option value="seabank">SeaBank</option><option value="bdo">BDO</option></select><Label htmlFor="child-payment-proof">Payment proof</Label><Input id="child-payment-proof" type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => setPaymentProofFile(event.target.files?.[0] || null)} required /><Input aria-label="Payment reference" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Payment reference number (optional)" /><p className="text-xs text-muted-foreground">Upload a screenshot or PDF showing the 50% payment.</p></div>}
+            {addChildStep === 8 && <label className="flex items-start gap-3 text-sm text-muted-foreground"><Checkbox checked={newChildConsent} onCheckedChange={(checked) => setNewChildConsent(checked === true)} /><span>I confirm that the child information is accurate and agree to submit this enrollment for admin review.</span></label>}
+            {addChildStep === 9 && <div className="space-y-2 rounded-lg bg-muted p-4 text-sm"><p className="font-semibold">Ready to submit</p><p>{[newChild.firstName, newChild.middleName, newChild.lastName].filter(Boolean).join(" ")} - {pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey)?.displayName || "No package selected"}</p><p className="text-muted-foreground">Payment instructions will be provided after submission.</p></div>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setIsAddChildOpen(false)}>Cancel</Button>
+              {addChildStep > 1 && <Button type="button" variant="outline" onClick={() => setAddChildStep((step) => step - 1)}>Back</Button>}
+              {addChildStep < 9 ? <Button type="button" onClick={handleAddChildNext}>Next</Button> : <Button type="submit" disabled={isAddingChild || !newChildConsent}>{isAddingChild ? "Submitting..." : "Submit Enrollment"}</Button>}
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!selectedAnnouncement} onOpenChange={(open) => { if (!open) setSelectedAnnouncement(null); }}>
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           {selectedAnnouncement && (

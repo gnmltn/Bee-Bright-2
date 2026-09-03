@@ -30,13 +30,14 @@ const RETIRED_CODES = ['PKR105', 'KRP104', 'SPT103', 'EXAM'];
 const PRICING = [
   // ══════════════════════════════════════════════════════════════════════
   //  TODDLERS PLAYGROUP
-  //  Age: 1.5 – 3 years old | Group sessions
+  //  Age: 1.5 – 3 years old | Group sessions (2 hrs each)
   // ══════════════════════════════════════════════════════════════════════
   {
     programCode: 'TPG101',
     packageSlug: '16h',
     displayName: 'Toddlers Playgroup – 16 Hours',
     durationDesc: '16 hours (8 sessions / 2× per week)',
+    sessionCount: 8,
     priceFull: 2800,
     currency: 'PHP',
     displayOrder: 1,
@@ -49,6 +50,7 @@ const PRICING = [
     packageSlug: '24h',
     displayName: 'Toddlers Playgroup – 24 Hours',
     durationDesc: '24 hours (12 sessions / 3× per week)',
+    sessionCount: 12,
     priceFull: 4080,
     currency: 'PHP',
     displayOrder: 2,
@@ -61,6 +63,7 @@ const PRICING = [
     packageSlug: '32h',
     displayName: 'Toddlers Playgroup – 32 Hours',
     durationDesc: '32 hours (16 sessions / 4× per week)',
+    sessionCount: 16,
     priceFull: 5280,
     currency: 'PHP',
     displayOrder: 3,
@@ -73,6 +76,7 @@ const PRICING = [
     packageSlug: '40h',
     displayName: 'Toddlers Playgroup – 40 Hours',
     durationDesc: '40 hours (20 sessions / 5× per week)',
+    sessionCount: 20,
     priceFull: 6400,
     currency: 'PHP',
     displayOrder: 4,
@@ -83,7 +87,7 @@ const PRICING = [
 
   // ══════════════════════════════════════════════════════════════════════
   //  ACADEMIC TUTORIAL
-  //  Age: 2+ | 1-on-1 sessions
+  //  Age: 2+ | 1-on-1 sessions (2 hrs each)
   //  Brochure packages: Premier, Elite, Prestige, Royalty
   //  Each has two price tiers: Pre-School/Elementary and Junior/Senior High School
   // ══════════════════════════════════════════════════════════════════════
@@ -92,6 +96,7 @@ const PRICING = [
     packageSlug: 'premier-elementary',
     displayName: 'Academic Tutorial – Premier (Pre-School / Elementary)',
     durationDesc: '12 sessions (3× per week)',
+    sessionCount: 12,
     priceFull: 2400,
     currency: 'PHP',
     displayOrder: 1,
@@ -104,6 +109,7 @@ const PRICING = [
     packageSlug: 'premier-highschool',
     displayName: 'Academic Tutorial – Premier (Junior / Senior High School)',
     durationDesc: '12 sessions (3× per week)',
+    sessionCount: 12,
     priceFull: 2600,
     currency: 'PHP',
     displayOrder: 2,
@@ -116,9 +122,10 @@ const PRICING = [
     packageSlug: 'elite-elementary',
     displayName: 'Academic Tutorial – Elite (Pre-School / Elementary)',
     durationDesc: '20 sessions (5× per week)',
+    sessionCount: 20,
     priceFull: 3800,
     currency: 'PHP',
-    displayOrder: 1,
+    displayOrder: 3,
     ageMin: 2,
     ageMax: null,
     active: true,
@@ -128,6 +135,7 @@ const PRICING = [
     packageSlug: 'elite-highschool',
     displayName: 'Academic Tutorial – Elite (Junior / Senior High School)',
     durationDesc: '20 sessions (5× per week)',
+    sessionCount: 20,
     priceFull: 4000,
     currency: 'PHP',
     displayOrder: 4,
@@ -140,6 +148,7 @@ const PRICING = [
     packageSlug: 'prestige-elementary',
     displayName: 'Academic Tutorial – Prestige (Pre-School / Elementary)',
     durationDesc: '16 sessions (4× per week)',
+    sessionCount: 16,
     priceFull: 3120,
     currency: 'PHP',
     displayOrder: 5,
@@ -152,6 +161,7 @@ const PRICING = [
     packageSlug: 'prestige-highschool',
     displayName: 'Academic Tutorial – Prestige (Junior / Senior High School)',
     durationDesc: '16 sessions (4× per week)',
+    sessionCount: 16,
     priceFull: 3320,
     currency: 'PHP',
     displayOrder: 6,
@@ -164,6 +174,7 @@ const PRICING = [
     packageSlug: 'royalty-elementary',
     displayName: 'Academic Tutorial – Royalty (Pre-School / Elementary)',
     durationDesc: '60 sessions / 3 months',
+    sessionCount: 60,
     priceFull: 11000,
     currency: 'PHP',
     displayOrder: 7,
@@ -176,6 +187,7 @@ const PRICING = [
     packageSlug: 'royalty-highschool',
     displayName: 'Academic Tutorial – Royalty (Junior / Senior High School)',
     durationDesc: '60 sessions / 3 months',
+    sessionCount: 60,
     priceFull: 11200,
     currency: 'PHP',
     displayOrder: 8,
@@ -193,6 +205,7 @@ const PRICING = [
     packageSlug: 'bright',
     displayName: 'Exam Prep – Bright Package',
     durationDesc: '5 sessions',
+    sessionCount: 5,
     priceFull: 1250,
     currency: 'PHP',
     displayOrder: 1,
@@ -205,6 +218,7 @@ const PRICING = [
     packageSlug: 'smart',
     displayName: 'Exam Prep – Smart Package',
     durationDesc: '6 sessions',
+    sessionCount: 6,
     priceFull: 1450,
     currency: 'PHP',
     displayOrder: 2,
@@ -217,6 +231,7 @@ const PRICING = [
     packageSlug: 'brilliant',
     displayName: 'Exam Prep – Brilliant Package',
     durationDesc: '8 sessions',
+    sessionCount: 8,
     priceFull: 1850,
     currency: 'PHP',
     displayOrder: 3,
@@ -229,6 +244,7 @@ const PRICING = [
     packageSlug: 'genius',
     displayName: 'Exam Prep – Genius Package',
     durationDesc: '10 sessions',
+    sessionCount: 10,
     priceFull: 2200,
     currency: 'PHP',
     displayOrder: 4,

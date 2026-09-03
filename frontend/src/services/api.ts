@@ -107,6 +107,8 @@ export interface PricingPackage {
   packageSlug: string;
   displayName: string;
   durationDesc: string;
+  /** Explicit session count for this package — how many sessions to generate. */
+  sessionCount: number | null;
   priceFull: number;
   priceDown: number;
   currency: string;
@@ -270,6 +272,11 @@ export interface AdminPaymentItem {
 
 // Enrollment Service
 export const enrollmentService = {
+  getPricing: () => api.get<{ success: boolean; pricing: {
+    programCode: string; packageSlug: string; displayName: string;
+    durationDesc?: string; priceFull: number; priceDown?: number | null;
+    ageMin?: number | null; ageMax?: number | null;
+  }[] }>('/enrollments/pricing'),
   sendVerificationCode: (email: string) =>
     api.post<{ success: boolean; message: string }>('/enrollments/send-verification-code', { email }),
   verifyEmailCode: (email: string, code: string) =>
@@ -286,6 +293,8 @@ export const enrollmentService = {
     birthdate: string;
     preferredStartDate?: string;
     preferredTime?: 'morning' | 'afternoon' | 'no_preference';
+    /** Days the child is available — Mon to Sat. Empty = no preference. */
+    preferredDays?: string[];
     allergies?: string;
     medications?: string;
     specialNeeds?: boolean;
@@ -352,6 +361,7 @@ export const enrollmentService = {
   resubmitPayment: (paymentId: string, data: { proofDataUrl: string; payerReference?: string }) =>
     api.put(`/payments/${paymentId}/resubmit`, data),
 };
+
 export interface AdminEnrollment {
   _id: string;
   enrollmentId?: string;
@@ -364,6 +374,8 @@ export interface AdminEnrollment {
   packages?: { programCode?: string; packageSlug?: string; displayName?: string; price?: number; paymentOption?: string }[];
   preferredStartDate?: string | null;
   preferredTime?: string | null;
+  /** Days the child is available — Mon to Sat values. Empty = no preference. */
+  preferredDays?: string[];
   rejectionReason?: string | null;
   allowResubmission?: boolean;
   statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
@@ -402,7 +414,7 @@ export interface AdminEnrollment {
 export const userService = {
   /** Admin: get all users from database */
   getAllUsers: () => api.get('/users'),
-  /** Admin: create tutor (firstName, middleName?, lastName, email, password, phone, subjectsTaught ids[], employmentType, availability?) */
+  /** Admin: create tutor with employment type and availability. */
   createTutor: (data: {
     firstName: string;
     middleName?: string;
@@ -410,7 +422,6 @@ export const userService = {
     email: string;
     password: string;
     phone: string;
-    subjectsTaught: string[];
     employmentType: 'full-time' | 'part-time';
     availability?: string;
   }) => api.post('/users/tutors', data),
@@ -476,6 +487,7 @@ export interface AdminSchedule {
   sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
   maxCapacity?: number;
   students?: Array<{ _id: string; firstName?: string; middleName?: string; lastName?: string; profileImage?: string; email?: string }>;
+  tutors?: Array<{ _id: string; firstName?: string; middleName?: string; lastName?: string; email?: string }>;
   dayOfWeek?: number;
   tutoringAreaId?: { _id: string; name?: string; areaType?: 'tutoring_area' | 'toddler_room' } | string | null;
   isSubstitution?: boolean;
@@ -507,14 +519,16 @@ export interface WeeklyScheduleTutorOption {
   lastName: string;
   email?: string;
   isActive?: boolean;
-  subjectsTaught?: WeeklyScheduleSubjectOption[];
+  employmentType?: 'full-time' | 'part-time';
+  availability?: string;
 }
 
 export interface WeeklyScheduleTemplateEntryPayload {
   dayOfWeek: number;
   startTime: string;
   endTime: string;
-  tutorId: string;
+  tutorId?: string;
+  tutorIds?: string[];
   sessionType: 'one-on-one' | 'small-group' | 'playgroup';
   tutoringAreaId: string;
   subjectId: string;
@@ -531,6 +545,19 @@ export const subjectService = {
 export const scheduleService = {
   getOptions: () => api.get('/schedules/options'),
   getTutorsBySubject: (subjectId: string) => api.get('/schedules/tutors', { params: { subjectId } }),
+  /**
+   * Returns the required tutor count for a Toddlers Playgroup session based on child count.
+   * Uses the variable ratio: ceil(childCount / 3), capped at 4.
+   */
+  getPlaygroupTutorRequirement: (childCount: number) =>
+    api.get<{
+      success: boolean;
+      childCount: number;
+      tutorRequirement: { min: number; max: number; recommended: number };
+      availableTutorCount: number;
+      hasSufficient: boolean;
+      message: string;
+    }>('/schedules/playgroup-tutor-requirement', { params: { childCount } }),
   getAvailableSlots: (tutorId: string, date: string) =>
     api.get('/schedules/available-slots', { params: { tutorId, date } }),
   getSlotsTemplate: (tutorId: string) =>
@@ -543,7 +570,7 @@ export const scheduleService = {
     api.get('/schedules/available-slots-by-day', {
       params: { tutorId, monthStart, ...(studentId ? { studentId } : {}) },
     }),
-  create: (data: { studentId: string; tutorId: string; subjectId: string; date: string; startTime: string; endTime: string }) =>
+  create: (data: { studentId?: string; students?: string[]; tutorId?: string; tutorIds?: string[]; subjectId: string; date: string; startTime: string; endTime: string; sessionType?: 'one-on-one' | 'small-group' | 'playgroup' }) =>
     api.post('/schedules', data),
   createMonthly: (data: {
     studentId: string;
@@ -563,7 +590,8 @@ export const scheduleService = {
   cleanupDuplicates: () => api.post('/schedules/cleanup-duplicates'),
   list: () => api.get('/schedules', { params: { _t: Date.now() } }),
   delete: (scheduleId: string) => api.delete(`/schedules/${scheduleId}`),
-  enrollStudent: (scheduleId: string, studentId: string) => api.post(`/schedules/${scheduleId}/enroll-student`, { studentId }),
+  enrollStudent: (scheduleId: string, data: { studentId?: string; enrollmentId?: string; overridePreference?: boolean; overrideReason?: string }) =>
+    api.post(`/schedules/${scheduleId}/enroll-student`, data),
   removeStudent: (scheduleId: string, studentId: string) => api.post(`/schedules/${scheduleId}/remove-student`, { studentId }),
   getMySessions: () => api.get('/schedules/my-sessions'),
   getMyClasses: () => api.get('/schedules/student/my-classes'),

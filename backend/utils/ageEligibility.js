@@ -62,7 +62,7 @@ function checkProgramEligibility(programCode, ageYears) {
     };
   }
 
-  if (rule.max !== null && ageYears > rule.max + 0.5) {
+  if (rule.max !== null && ageYears > rule.max) {
     return {
       eligible: false,
       reason: `${rule.label} is designed for children up to ${rule.max} years old.`,

@@ -11,6 +11,8 @@ export interface SelectedPackage {
   priceDown: number;   // 50% down
   paymentOption: 'full' | 'down';
   durationDesc: string;
+  /** How many sessions this package covers — used by scheduler for slot generation. */
+  sessionCount: number | null;
 }
 
 export interface ConsentItem {
@@ -56,6 +58,12 @@ export interface WizardData {
   // ── Step 7 – Preferred schedule ───────────────────────────────────────
   preferredStartDate: string;
   preferredTime: 'morning' | 'afternoon' | 'no_preference';
+  /**
+   * Days of the week the child is available.
+   * Values: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday'
+   * Empty array = no preference (any weekday).
+   */
+  preferredDays: string[];
 
   // ── Step 8 – Guardian info ────────────────────────────────────────────
   guardianName: string;
@@ -123,7 +131,7 @@ export const INITIAL_WIZARD_DATA: WizardData = {
   selectedPackages: [], paymentOption: 'down' as const,
 
   // Step 7
-  preferredStartDate: '', preferredTime: 'no_preference',
+  preferredStartDate: '', preferredTime: 'no_preference', preferredDays: [],
 
   // Step 8
   guardianName: '', guardianPhone: '', guardianEmail: '',

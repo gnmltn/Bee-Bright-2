@@ -30,6 +30,11 @@ const scheduleSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // Shared playgroup tutors. The singular tutor field remains for legacy records.
+  tutors: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   // Preserves the originally assigned tutor when a substitute takes over.
   originalTutor: {
     type: mongoose.Schema.Types.ObjectId,
@@ -150,6 +155,7 @@ scheduleSchema.index({ date: 1, startTime: 1 });
 
 // Prevent tutor double-booking for the same slot
 scheduleSchema.index({ tutor: 1, date: 1, startTime: 1 }, { unique: true });
+scheduleSchema.index({ tutors: 1, date: 1, startTime: 1 });
 
 // Prevent accidental duplicate class assignment rows for the same session details (for one-on-one).
 scheduleSchema.index({ student: 1, tutor: 1, subject: 1, date: 1, startTime: 1 }, { unique: true, sparse: true });

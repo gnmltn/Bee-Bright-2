@@ -6,6 +6,10 @@ const pricingSchema = new mongoose.Schema({
   displayName: { type: String, required: true },
   // Description of the package duration (e.g. "16 hours (8 sessions / 2x per week)")
   durationDesc: { type: String, default: '' },
+  // Explicit session count — the number of sessions the package covers.
+  // Used by the scheduler to know exactly how many slots to generate.
+  // Parseable from durationDesc as a fallback, but canonical value lives here.
+  sessionCount: { type: Number, default: null },
   priceFull: { type: Number, required: true },
   // 50% down payment – auto-computed if null
   priceDown: {

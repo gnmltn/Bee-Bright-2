@@ -1,5 +1,4 @@
 const User = require('../models/User');
-const Subject = require('../models/Subject');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
@@ -109,7 +108,6 @@ const createTutor = async (req, res) => {
       email,
       password,
       phone,
-      subjectsTaught,
       employmentType,
       availability
     } = req.body;
@@ -163,17 +161,6 @@ const createTutor = async (req, res) => {
       });
     }
 
-    const subjectIds = Array.isArray(subjectsTaught) ? subjectsTaught : [];
-    if (subjectIds.length > 0) {
-      const found = await Subject.countDocuments({ _id: { $in: subjectIds }, isActive: true });
-      if (found !== subjectIds.length) {
-        return res.status(400).json({
-          success: false,
-          message: 'One or more selected subjects are invalid'
-        });
-      }
-    }
-
     const employment = employmentType === 'part-time' ? 'part-time' : 'full-time';
     const user = await User.create({
       firstName: firstName.trim(),
@@ -184,8 +171,7 @@ const createTutor = async (req, res) => {
       phone: (phone || '').trim(),
       role: 'tutor',
       employmentType: employment,
-      availability: (availability || '').trim(),
-      subjectsTaught: subjectIds
+      availability: (availability || '').trim()
     });
 
     const created = await User.findById(user._id).select('-password').populate('subjectsTaught', 'name code').lean();

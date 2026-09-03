@@ -1,3 +1,12 @@
+# Current Scheduling Policy
+
+- Operating days: Monday-Saturday, 8:00 AM-5:00 PM.
+- Lunch is blocked from 12:00 PM-1:00 PM.
+- Academic Tutorial and Examination Preparation are one-on-one sessions of exactly two hours (8-10, 10-12, 1-3, or 3-5).
+- Toddlers Playgroup is one shared session from 8:00 AM-10:00 AM or 1:00 PM-3:00 PM, with 1-10 children and 5-6 co-tutors stored on a single schedule.
+- Parent preferred start date/time is respected during manual and recurring schedule creation.
+- All active tutors are eligible for every program; legacy `subjectsTaught` values are retained for compatibility only.
+
 # BeeBright Scheduling System - Quick Reference Guide
 
 ## Session Types at a Glance
@@ -40,16 +49,16 @@ POST /api/schedules
 }
 ```
 
-### Create Playgroup Session (NEW)
+### Create Playgroup Session (shared tutors)
 ```
 POST /api/schedules
 {
   "students": ["s1", "s2", "s3", "s4", "s5"],
-  "tutorId": "tutor456",
+  "tutorIds": ["tutor1", "tutor2", "tutor3", "tutor4", "tutor5"],
   "subjectId": "playgroup_subject",
   "date": "2026-03-29",
-  "startTime": "09:00",
-  "endTime": "11:00",
+  "startTime": "08:00",
+  "endTime": "10:00",
   "sessionType": "playgroup"
 }
 ```

@@ -1,3 +1,7 @@
+# Scheduling Policy Update
+
+Use the central scheduling policy for all new schedules. Academic Tutorial and Examination Preparation are one-on-one only. Toddlers Playgroup is one shared session with up to 10 children and 5-6 co-tutors at 8:00 AM-10:00 AM or 1:00 PM-3:00 PM, Monday-Saturday. The 12:00 PM-1:00 PM lunch period and all times outside 8:00 AM-5:00 PM are unavailable. Parent preferred date/time must be respected. Legacy subject-qualification fields are readable only.
+
 # BeeBright Scheduling System - Upgrade Guide
 
 ## Overview

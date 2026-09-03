@@ -46,7 +46,7 @@ async function validateRoomAssignment(sessionType, tutoringAreaId) {
  */
 async function isTutorDoubleBooked(tutorId, date, startTime, excludeScheduleId = null) {
   const query = {
-    tutor: tutorId,
+    $or: [{ tutor: tutorId }, { tutors: tutorId }],
     date,
     startTime: normalizeTime(startTime)
   };
@@ -74,7 +74,7 @@ async function isRoomDoubleBooked(tutoringAreaId, date, startTime, excludeSchedu
 
   // Tutor-slot capacity per room type.
   const slotCapacity = area.areaType === 'toddler_room'
-    ? 2
+    ? 1
     : Math.max(1, Number(area.capacity) || 15);
 
   const query = {

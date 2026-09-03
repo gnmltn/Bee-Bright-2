@@ -20,11 +20,14 @@ const {
   announceTutorAbsence,
   triggerAttendanceTimeoutSubstitution,
   markTutorUnavailability,
-  cleanupDuplicates
+  cleanupDuplicates,
+  getPlaygroupTutorRequirement,
 } = require('../controllers/scheduleController');
 const { protect, authorize } = require('../middleware/auth');
 
 router.get('/options', protect, authorize('admin'), getScheduleOptions);
+// Playgroup tutor requirement — must come before /:id routes
+router.get('/playgroup-tutor-requirement', protect, authorize('admin'), getPlaygroupTutorRequirement);
 router.get('/tutors', protect, authorize('admin'), getTutorsBySubject);
 router.get('/available-slots', protect, authorize('admin'), getAvailableSlots);
 router.get('/slots-template', protect, authorize('admin'), getSlotsTemplate);

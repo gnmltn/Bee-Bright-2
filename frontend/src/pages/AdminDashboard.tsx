@@ -29,6 +29,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
+import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -57,6 +58,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -76,20 +78,21 @@ import {
 import { sanitizeName, sanitizePhoneInput } from "@/utils/validation";
 
 /** Program names by grade level (matches Enrollment page). Used to filter programs in Add Student. */
+/** Program names by grade level — only the 3 active programs. Used to filter programs in Add Student. */
 const PROGRAMS_BY_GRADE: Record<string, string[]> = {
-  Toddler: ["Toddlers Playgroup", "SPED Tutorial"],
-  "Pre-Kindergarten": ["Pre-Kindergarten Readiness Program", "Kindergarten Readiness Program", "SPED Tutorial"],
-  Kindergarten: ["Kindergarten Readiness Program", "SPED Tutorial"],
-  "Grade 1": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 2": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 3": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 4": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 5": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 6": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 7": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 8": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 9": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
-  "Grade 10": ["Academic Tutorial", "SPED Tutorial", "Examination Preparation"],
+  Toddler:          ["Toddlers Playgroup"],
+  "Pre-Kindergarten": ["Toddlers Playgroup", "Academic Tutorial"],
+  Kindergarten:     ["Toddlers Playgroup", "Academic Tutorial"],
+  "Grade 1":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 2":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 3":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 4":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 5":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 6":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 7":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 8":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 9":        ["Academic Tutorial", "Examination Preparation"],
+  "Grade 10":       ["Academic Tutorial", "Examination Preparation"],
 };
 
 /** Returns true if subject name matches any program name for the grade (case-insensitive, allows partial match). */
@@ -376,6 +379,7 @@ type WeeklyAssignmentDraft = {
   id: string;
   dayKey: number;
   tutorId: string;
+  tutorIds: string[];
   tutorName: string;
   subjectId: string;
   subjectName: string;
@@ -397,6 +401,91 @@ const addTwoHours = (start: string) => {
   if (Number.isNaN(hour) || Number.isNaN(minute)) return start;
   const endHour = Math.min(23, hour + 2);
   return `${String(endHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+};
+
+const personDisplayName = (person?: { firstName?: string; middleName?: string; lastName?: string } | null) =>
+  person ? [person.firstName, person.middleName, person.lastName].filter(Boolean).join(" ") : "";
+
+const formatScheduleTutorNames = (schedule: AdminSchedule) => {
+  const tutors = Array.isArray(schedule.tutors) && schedule.tutors.length > 0
+    ? schedule.tutors
+    : schedule.tutor
+      ? [schedule.tutor]
+      : [];
+  const names = tutors.map((tutor) => personDisplayName(tutor)).filter(Boolean);
+  return names.length ? names.join(", ") : "—";
+};
+
+const formatScheduleStudentNames = (schedule: AdminSchedule) => {
+  const students = [
+    ...(schedule.student ? [schedule.student] : []),
+    ...((schedule.students || [])),
+  ].filter((item, index, arr) => arr.findIndex((other) => other?._id === item?._id) === index);
+  if (students.length === 0) {
+    return schedule.sessionType === "playgroup" ? "No children enrolled yet" : "—";
+  }
+  if (students.length <= 3) return students.map((student) => personDisplayName(student)).filter(Boolean).join(", ");
+  return `${students.length} children`;
+};
+
+const enrollmentIsReadyToSchedule = (enrollment: AdminEnrollment) => {
+  const status = enrollment.status || "";
+  return ["active", "approved"].includes(status) || (enrollment.paymentStatus === "paid" && status !== "cancelled" && status !== "rejected");
+};
+
+const enrollmentMatchesSessionProgram = (
+  enrollment: AdminEnrollment,
+  subject?: { _id?: string; name?: string; code?: string } | null
+) => {
+  if (!subject?._id) return false;
+  if ((enrollment.selectedSubjects || []).some((item) => item._id === subject._id)) return true;
+  const code = (subject.code || "").toUpperCase();
+  if (code && (enrollment.packages || []).some((pkg) => (pkg.programCode || "").toUpperCase() === code)) return true;
+  const name = (subject.name || "").toLowerCase();
+  const packageText = (enrollment.packages || []).map((pkg) => `${pkg.programCode || ""} ${pkg.displayName || ""}`).join(" ").toLowerCase();
+  if (name.includes("playgroup") && (packageText.includes("playgroup") || packageText.includes("tpg"))) return true;
+  if (name.includes("academic") && packageText.includes("academic")) return true;
+  if ((name.includes("exam") || name.includes("examination")) && (packageText.includes("exam") || packageText.includes("exp"))) return true;
+  return false;
+};
+
+const childNameFromEnrollment = (enrollment: AdminEnrollment) => {
+  if (enrollment.student) return personDisplayName(enrollment.student);
+  const snap = enrollment.studentSnapshot;
+  const snapshotName = [snap?.firstName, snap?.middleName, snap?.lastName].filter(Boolean).join(" ");
+  return snapshotName || enrollment.studentId || "Child";
+};
+
+const parentPreferenceSummary = (enrollment: AdminEnrollment) => {
+  const dateLabel = enrollment.preferredStartDate
+    ? new Date(enrollment.preferredStartDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : "any start date";
+  const timeLabel = enrollment.preferredTime === "morning"
+    ? "morning"
+    : enrollment.preferredTime === "afternoon"
+      ? "afternoon"
+      : "no time preference";
+  return `${dateLabel}, ${timeLabel}`;
+};
+
+const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: string, startTime?: string) => {
+  if (enrollment.preferredStartDate && dateValue) {
+    const preferred = new Date(enrollment.preferredStartDate);
+    const scheduled = new Date(dateValue);
+    if (!Number.isNaN(preferred.getTime()) && !Number.isNaN(scheduled.getTime()) && scheduled < preferred) {
+      return { ok: false, reason: "Earlier than the parent preferred start date." };
+    }
+  }
+  if (enrollment.preferredTime && enrollment.preferredTime !== "no_preference" && startTime) {
+    const [hours, minutes] = startTime.split(":").map(Number);
+    const startMinutes = (hours || 0) * 60 + (minutes || 0);
+    const morning = startMinutes >= 8 * 60 && startMinutes < 12 * 60;
+    const afternoon = startMinutes >= 13 * 60 && startMinutes < 17 * 60;
+    if ((enrollment.preferredTime === "morning" && !morning) || (enrollment.preferredTime === "afternoon" && !afternoon)) {
+      return { ok: false, reason: `Does not match the parent ${enrollment.preferredTime} preference.` };
+    }
+  }
+  return { ok: true, reason: "" };
 };
 
 export default function AdminDashboard() {
@@ -476,8 +565,10 @@ export default function AdminDashboard() {
   const [selectedScheduleIds, setSelectedScheduleIds] = useState<string[]>([]);
   const [scheduleBulkDeleting, setScheduleBulkDeleting] = useState(false);
   const [scheduleEnrollmentSelectedStudentIds, setScheduleEnrollmentSelectedStudentIds] = useState<string[]>([]);
-  const [scheduleEnrollmentProgramId, setScheduleEnrollmentProgramId] = useState<string>("");
   const [scheduleEnrollmentSaving, setScheduleEnrollmentSaving] = useState(false);
+  const [scheduleEnrollmentOverride, setScheduleEnrollmentOverride] = useState(false);
+  const [scheduleEnrollmentOverrideReason, setScheduleEnrollmentOverrideReason] = useState("");
+  const [scheduleCompatibleSlots, setScheduleCompatibleSlots] = useState<Array<{ _id: string; date: string; startTime: string; endTime: string; tutorName?: string }>>([]);
   const [scheduleViewMode, setScheduleViewMode] = useState<"monthly" | "weekly" | "daily">(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem(SCHEDULE_VIEW_STORAGE_KEY) : null;
     if (saved === "monthly" || saved === "weekly" || saved === "daily") {
@@ -518,12 +609,14 @@ export default function AdminDashboard() {
   const [weeklyPlannerSubjects, setWeeklyPlannerSubjects] = useState<{ _id: string; name: string; code?: string }[]>([]);
   const [weeklyPlannerForm, setWeeklyPlannerForm] = useState<{
     tutorId: string;
+    tutorIds: string[];
     subjectId: string;
     sessionType: SessionTypeValue;
     startTime: string;
     endTime: string;
   }>({
     tutorId: "",
+    tutorIds: [],
     subjectId: "",
     sessionType: "one-on-one",
     startTime: "08:00",
@@ -1064,7 +1157,9 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     setScheduleEnrollmentSelectedStudentIds([]);
-    setScheduleEnrollmentProgramId(selectedSchedule?.subject?._id || "");
+    setScheduleEnrollmentOverride(false);
+    setScheduleEnrollmentOverrideReason("");
+    setScheduleCompatibleSlots([]);
   }, [selectedSchedule?._id]);
 
   useEffect(() => {
@@ -1215,13 +1310,17 @@ export default function AdminDashboard() {
 
   const handleEnrollStudentToSelectedSchedule = async () => {
     if (!selectedSchedule?._id || scheduleEnrollmentSelectedStudentIds.length === 0) {
-      toast.error("Select student(s) to enroll.");
+      toast.error("Select a child first.");
       return;
     }
 
     const isOneOnOneSession = selectedSchedule.sessionType === "one-on-one" || !selectedSchedule.sessionType;
     if (isOneOnOneSession && scheduleEnrollmentSelectedStudentIds.length > 1) {
-      toast.error("1-on-1 sessions can only enroll one student.");
+      toast.error("A 1-on-1 session can have only one child.");
+      return;
+    }
+    if (scheduleEnrollmentOverride && !scheduleEnrollmentOverrideReason.trim()) {
+      toast.error("Enter a reason before overriding the parent preferred date or time.");
       return;
     }
 
@@ -1230,22 +1329,35 @@ export default function AdminDashboard() {
       : [...scheduleEnrollmentSelectedStudentIds];
 
     setScheduleEnrollmentSaving(true);
+    setScheduleCompatibleSlots([]);
     try {
       let successCount = 0;
       let failedCount = 0;
       let lastUpdated: AdminSchedule | undefined;
+      let lastError = "";
 
-      for (const studentId of idsToEnroll) {
+      for (const enrollmentId of idsToEnroll) {
         try {
-          const res = await scheduleService.enrollStudent(selectedSchedule._id, studentId);
+          const res = await scheduleService.enrollStudent(selectedSchedule._id, {
+            enrollmentId,
+            overridePreference: scheduleEnrollmentOverride,
+            overrideReason: scheduleEnrollmentOverrideReason.trim(),
+          });
           if (res.data?.success) {
             successCount += 1;
             lastUpdated = (res.data as { schedule?: AdminSchedule }).schedule;
           } else {
             failedCount += 1;
+            lastError = res.data?.message || lastError;
           }
-        } catch {
+        } catch (err: unknown) {
           failedCount += 1;
+          const data = (err as { response?: { data?: { message?: string; code?: string; compatibleSlots?: Array<{ _id: string; date: string; startTime: string; endTime: string; tutorName?: string }> } } })?.response?.data;
+          lastError = data?.message || lastError;
+          if (data?.code === "PARENT_PREFERENCE_CONFLICT") {
+            setScheduleCompatibleSlots(Array.isArray(data.compatibleSlots) ? data.compatibleSlots : []);
+            setScheduleEnrollmentOverride(true);
+          }
         }
       }
 
@@ -1256,17 +1368,22 @@ export default function AdminDashboard() {
         fetchSchedules();
       }
 
-      setScheduleEnrollmentSelectedStudentIds([]);
+      if (successCount > 0) {
+        setScheduleEnrollmentSelectedStudentIds([]);
+        setScheduleEnrollmentOverride(false);
+        setScheduleEnrollmentOverrideReason("");
+        setScheduleCompatibleSlots([]);
+      }
 
       if (successCount > 0 && failedCount === 0) {
-        toast.success(`${successCount} student${successCount > 1 ? "s" : ""} enrolled to session.`);
+        toast.success(isOneOnOneSession ? "Child assigned to this tutor session." : `${successCount} child${successCount > 1 ? "ren" : ""} added to this playgroup.`);
       } else if (successCount > 0 && failedCount > 0) {
-        toast.error(`${successCount} enrolled, ${failedCount} failed.`);
+        toast.error(`${successCount} assigned, ${failedCount} could not be assigned. ${lastError}`.trim());
       } else {
-        toast.error("Failed to enroll selected students.");
+        toast.error(lastError || "Could not assign the selected child.");
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to enroll student.";
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Could not assign the selected child.";
       toast.error(msg);
     } finally {
       setScheduleEnrollmentSaving(false);
@@ -1969,44 +2086,44 @@ export default function AdminDashboard() {
     [weeklyPlannerForm.subjectId, weeklyPlannerSubjects]
   );
 
-  const selectedWeeklyPlannerTutor = useMemo(
-    () => weeklyPlannerTutors.find((tutor) => tutor._id === weeklyPlannerForm.tutorId),
-    [weeklyPlannerForm.tutorId, weeklyPlannerTutors]
-  );
+  const selectedWeeklyPlannerTutors = useMemo(() => {
+    const ids = weeklyPlannerForm.sessionType === "playgroup"
+      ? weeklyPlannerForm.tutorIds
+      : (weeklyPlannerForm.tutorId ? [weeklyPlannerForm.tutorId] : []);
+    return weeklyPlannerTutors.filter((tutor) => ids.includes(tutor._id));
+  }, [weeklyPlannerForm.sessionType, weeklyPlannerForm.tutorId, weeklyPlannerForm.tutorIds, weeklyPlannerTutors]);
 
   const availableDaysForSelectedTutor = useMemo(() => {
-    if (!selectedWeeklyPlannerTutor) {
+    if (selectedWeeklyPlannerTutors.length === 0) {
       return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     }
-    return getAvailableDaysForTutor(
-      selectedWeeklyPlannerTutor.employmentType,
-      selectedWeeklyPlannerTutor.availability
-    );
-  }, [selectedWeeklyPlannerTutor]);
+    return selectedWeeklyPlannerTutors.reduce<string[]>((days, tutor, index) => {
+      const tutorDays = getAvailableDaysForTutor(tutor.employmentType, tutor.availability);
+      return index === 0 ? tutorDays : days.filter((day) => tutorDays.includes(day));
+    }, []);
+  }, [selectedWeeklyPlannerTutors]);
 
   const availableSchedulingDayKeys = useMemo(() => {
     return getAvailableSchedulingDayKeys(availableDaysForSelectedTutor);
   }, [availableDaysForSelectedTutor]);
 
   const availableTimeSlotsForSelectedTutor = useMemo(() => {
-    if (!selectedWeeklyPlannerTutor || weeklyPlannerSelectedDays.size === 0) {
-      return AVAILABILITY_TIME_SLOTS;
+    const validStarts = weeklyPlannerForm.sessionType === "playgroup" ? ["08:00", "13:00"] : ["08:00", "10:00", "13:00", "15:00"];
+    if (selectedWeeklyPlannerTutors.length === 0 || weeklyPlannerSelectedDays.length === 0) {
+      return validStarts;
     }
-    const [firstDay] = Array.from(weeklyPlannerSelectedDays).sort();
+    const [firstDay] = [...weeklyPlannerSelectedDays].sort((a, b) => a - b);
     const dayInfo = SCHEDULING_DAYS.find((d) => d.key === firstDay);
-    if (!dayInfo) return AVAILABILITY_TIME_SLOTS;
-    
-    const dayName = dayInfo.name.slice(0, 3); // "Monday" -> "Mon"
-    const availability = getAvailabilityForDay(
-      selectedWeeklyPlannerTutor.employmentType,
-      selectedWeeklyPlannerTutor.availability,
-      dayName
+    if (!dayInfo) return validStarts;
+
+    const dayName = dayInfo.name.slice(0, 3);
+    return validStarts.filter((time) =>
+      selectedWeeklyPlannerTutors.every((tutor) => {
+        const availability = getAvailabilityForDay(tutor.employmentType, tutor.availability, dayName);
+        return availability ? isTimeInRange(time, availability.start, availability.end) : false;
+      })
     );
-    if (!availability) {
-      return [];
-    }
-    return AVAILABILITY_TIME_SLOTS.filter((time) => isTimeInRange(time, availability.start, availability.end));
-  }, [selectedWeeklyPlannerTutor, weeklyPlannerSelectedDays]);
+  }, [selectedWeeklyPlannerTutors, weeklyPlannerSelectedDays, weeklyPlannerForm.sessionType]);
 
   const isToddlerPlaygroupSubject = useMemo(() => {
     const subjectName = (selectedWeeklyPlannerSubject?.name || "").toLowerCase();
@@ -2017,7 +2134,7 @@ export default function AdminDashboard() {
     if (isToddlerPlaygroupSubject) {
       return SESSION_TYPE_OPTIONS.filter((sessionType) => sessionType.value === "playgroup");
     }
-    return SESSION_TYPE_OPTIONS.filter((sessionType) => sessionType.value !== "playgroup");
+    return SESSION_TYPE_OPTIONS.filter((sessionType) => sessionType.value === "one-on-one");
   }, [isToddlerPlaygroupSubject]);
 
   const getPlannerRoomForSessionType = (sessionType: SessionTypeValue) => {
@@ -2047,19 +2164,32 @@ export default function AdminDashboard() {
 
   const addWeeklyPlannerAssignment = () => {
     const nextErrors: string[] = [];
-    const { tutorId, subjectId, sessionType, startTime, endTime } = weeklyPlannerForm;
+    const { tutorId, tutorIds: selectedTutorIds, subjectId, sessionType, startTime, endTime } = weeklyPlannerForm;
+    const tutorIds = (sessionType === "playgroup" ? selectedTutorIds : [tutorId]).filter(Boolean);
+    const primaryTutorId = tutorIds[0] || tutorId;
     const targetDayKeys = [...weeklyPlannerSelectedDays].sort((a, b) => a - b);
 
-    if (!tutorId || !subjectId || !startTime || !endTime) {
-      nextErrors.push("Please select tutor, subject, and time slot.");
+    if (!subjectId) nextErrors.push("Choose a program first.");
+    if (!startTime || !endTime) nextErrors.push("Choose a start time. End time is filled automatically.");
+    if (sessionType === "playgroup") {
+      // For playgroup slot creation (before children are enrolled):
+      // require at least 1 tutor; max 4 (the absolute max for 10 children at ratio ceil(10/3)=4).
+      // The exact required count is validated again at enrollment time based on actual child count.
+      if (tutorIds.length < 1) {
+        nextErrors.push("Select at least 1 tutor for this Toddlers Playgroup slot. Required tutors will be validated when children are enrolled.");
+      } else if (tutorIds.length > 4) {
+        nextErrors.push(`Maximum 4 tutors for a Toddlers Playgroup session (${tutorIds.length} selected).`);
+      }
+    } else if (!tutorIds.length) {
+      nextErrors.push("Choose 1 tutor for this 1-on-1 session.");
     }
 
     if (targetDayKeys.length === 0) {
       nextErrors.push("Please select at least one day (Mon-Sat).");
     }
 
-    if (startTime >= endTime) {
-      nextErrors.push("Time conflict detected");
+    if (startTime && endTime && startTime >= endTime) {
+      nextErrors.push("End time must be after start time.");
     }
 
     const assignedRoom = getPlannerRoomForSessionType(sessionType);
@@ -2071,17 +2201,11 @@ export default function AdminDashboard() {
       );
     }
 
-    const selectedTutor = weeklyPlannerTutors.find((tutor) => tutor._id === tutorId);
-    const canTeachSelectedSubject = !!selectedTutor?.subjectsTaught?.some((subject) => subject._id === subjectId);
-    if (selectedTutor && !canTeachSelectedSubject) {
-      nextErrors.push("Selected tutor cannot teach the selected subject");
-    }
-
     for (const dayKey of targetDayKeys) {
       const dayLabel = SCHEDULING_DAYS.find((day) => day.key === dayKey)?.name || "selected day";
       const localDayDraft = weeklyPlannerDraft[dayKey] || [];
 
-      if (localDayDraft.some((entry) => entry.tutorId === tutorId && overlapsTimeRange(startTime, endTime, entry.startTime, entry.endTime))) {
+      if (localDayDraft.some((entry) => entry.tutorIds.some((assignedTutorId) => tutorIds.includes(assignedTutorId)) && overlapsTimeRange(startTime, endTime, entry.startTime, entry.endTime))) {
         nextErrors.push(`Tutor already scheduled at this time for ${dayLabel}`);
       }
 
@@ -2094,21 +2218,13 @@ export default function AdminDashboard() {
         }
       }
 
-      if (assignedRoom?.areaType === "toddler_room") {
-        const toddlerTutorCount = localDayDraft.filter(
-          (entry) => entry.roomType === "toddler_room" && overlapsTimeRange(startTime, endTime, entry.startTime, entry.endTime)
-        ).length;
-        if (toddlerTutorCount >= 2) {
-          nextErrors.push(`Toddler room allows only 1-2 tutors for ${dayLabel}`);
-        }
-      }
-
       const selectedDateKey = weeklyPlannerDateByDay[dayKey];
       const existingDaySchedules = selectedDateKey ? schedulesByDate[selectedDateKey] || [] : [];
 
       const hasExistingTutorConflict = existingDaySchedules.some((session) => {
         const existingTutorId = typeof session.tutor === "object" ? session.tutor?._id : undefined;
-        return existingTutorId === tutorId && overlapsTimeRange(startTime, endTime, session.startTime || "", session.endTime || "");
+        const existingTutorIds = session.tutors?.map((tutor) => typeof tutor === "object" ? tutor._id : tutor) || (existingTutorId ? [existingTutorId] : []);
+        return existingTutorIds.some((existingId) => tutorIds.includes(existingId || "")) && overlapsTimeRange(startTime, endTime, session.startTime || "", session.endTime || "");
       });
 
       if (hasExistingTutorConflict) {
@@ -2122,9 +2238,6 @@ export default function AdminDashboard() {
       if (assignedRoom?.areaType === "tutoring_area" && existingSameRoomCount >= 15) {
         nextErrors.push(`Maximum tutoring-area capacity reached on ${dayLabel}`);
       }
-      if (assignedRoom?.areaType === "toddler_room" && existingSameRoomCount >= 2) {
-        nextErrors.push(`Toddler room capacity reached on ${dayLabel}`);
-      }
     }
 
     if (nextErrors.length > 0) {
@@ -2136,10 +2249,11 @@ export default function AdminDashboard() {
       const next = { ...prev };
       for (const dayKey of targetDayKeys) {
         const newEntry: WeeklyAssignmentDraft = {
-          id: `${dayKey}-${tutorId}-${subjectId}-${startTime}-${endTime}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `${dayKey}-${primaryTutorId}-${subjectId}-${startTime}-${endTime}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           dayKey,
-          tutorId,
-          tutorName: weeklyPlannerTutorNameById[tutorId] || "Tutor",
+          tutorId: primaryTutorId,
+          tutorIds,
+          tutorName: tutorIds.map((id) => weeklyPlannerTutorNameById[id] || "Tutor").join(", "),
           subjectId,
           subjectName: weeklyPlannerSubjectNameById[subjectId] || "Subject",
           sessionType,
@@ -2173,10 +2287,11 @@ export default function AdminDashboard() {
     const weekStartDate = toDateKey(scheduleWeekStart);
     const templateName = `Weekly Plan ${weekStartDate}`;
     const scheduleEntries = allAssignments.map((entry) => ({
-      dayOfWeek: entry.dayKey - 1,
+      dayOfWeek: SCHEDULING_DAYS.find((day) => day.key === entry.dayKey)?.templateDay ?? entry.dayKey - 1,
       startTime: entry.startTime,
       endTime: entry.endTime,
-      tutorId: entry.tutorId,
+      tutorId: entry.tutorIds[0] || entry.tutorId,
+      tutorIds: entry.tutorIds.length ? entry.tutorIds : [entry.tutorId],
       sessionType: entry.sessionType,
       tutoringAreaId: entry.roomId,
       subjectId: entry.subjectId,
@@ -2306,25 +2421,15 @@ export default function AdminDashboard() {
     const mappedSessions = schedules
       .map((session) => {
         const startAt = parseStartAt(session);
-        const primaryStudentName = [session.student?.firstName, session.student?.middleName, session.student?.lastName]
-          .filter(Boolean)
-          .join(" ");
-        const groupStudentLabel = (session.students || [])
-          .map((studentItem) => [studentItem?.firstName, studentItem?.lastName].filter(Boolean).join(" "))
-          .filter(Boolean)
-          .slice(0, 2)
-          .join(", ");
+        const tutorLabel = formatScheduleTutorNames(session);
+        const studentLabel = formatScheduleStudentNames(session);
 
         return {
           _id: session._id,
           startAt,
           subject: session.subject?.name ?? "Session",
-          tutor: [session.tutor?.firstName, session.tutor?.middleName, session.tutor?.lastName]
-            .filter(Boolean)
-            .join(" ") || "Unassigned tutor",
-          student:
-            primaryStudentName ||
-            (groupStudentLabel ? `${groupStudentLabel}${(session.students || []).length > 2 ? "..." : ""}` : "Unassigned student"),
+          tutor: tutorLabel === "—" ? "Unassigned tutor" : tutorLabel,
+          student: studentLabel === "—" ? "Unassigned student" : studentLabel,
           timeLabel: `${formatSlotTime(session.startTime)} - ${formatSlotTime(session.endTime)}`,
           dateLabel: startAt
             ? startAt.toLocaleDateString("en-US", {
@@ -3106,15 +3211,16 @@ export default function AdminDashboard() {
                   <div>
                     <h3 className="font-display font-bold text-lg text-foreground">Scheduling Tab</h3>
                     <p className="text-sm text-muted-foreground">
-                      Admin-first workflow: select day(s), assign tutors, room is auto-mapped by session type, then generate sessions for the selected month span.
+                      First create tutor time slots here. After you generate them, open the calendar below and assign children to those slots.
                     </p>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Rule set: 1-on-1=1 student, Small Group=3 students, Toddler Playgroup=10 students.
+                    1-on-1: 1 tutor + 1 child, 2 hours. Playgroup: 1–4 tutors (scales with child count) + 2–10 children, 8–10 AM or 1–3 PM only.
                   </div>
                 </div>
 
                 <div className="p-4 space-y-4">
+                  <p className="text-xs text-muted-foreground">Step 1: Choose the days this slot should repeat.</p>
                   <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
                     {SCHEDULING_DAYS.filter((day) => availableSchedulingDayKeys.has(day.key)).map((day) => (
                       <Button
@@ -3182,37 +3288,14 @@ export default function AdminDashboard() {
                   <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
                       <div className="space-y-1">
-                        <Label>Step 2: Tutor</Label>
-                        <Select
-                          value={weeklyPlannerForm.tutorId}
-                          onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, tutorId: value }))}
-                          disabled={weeklyPlannerOptionsLoading}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder={weeklyPlannerOptionsLoading ? "Loading tutors..." : "Select tutor"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {weeklyPlannerTutors.map((tutor) => {
-                              const tutorName = [tutor.firstName, tutor.middleName, tutor.lastName].filter(Boolean).join(" ");
-                              return (
-                                <SelectItem key={tutor._id} value={tutor._id}>
-                                  {tutorName}
-                                </SelectItem>
-                              );
-                            })}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-1">
-                        <Label>Subject</Label>
+                        <Label>Step 2: Program</Label>
                         <Select
                           value={weeklyPlannerForm.subjectId}
                           onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, subjectId: value }))}
                           disabled={weeklyPlannerOptionsLoading}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder={weeklyPlannerOptionsLoading ? "Loading subjects..." : "Select subject"} />
+                            <SelectValue placeholder={weeklyPlannerOptionsLoading ? "Loading programs..." : "Select Academic Tutorial, Exam Prep, or Playgroup"} />
                           </SelectTrigger>
                           <SelectContent>
                             {weeklyPlannerSubjects.map((subject) => (
@@ -3228,8 +3311,8 @@ export default function AdminDashboard() {
                         <Label>Session type</Label>
                         <Select
                           value={weeklyPlannerForm.sessionType}
-                          onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, sessionType: value as SessionTypeValue }))}
-                          disabled={isToddlerPlaygroupSubject}
+                          onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, sessionType: value as SessionTypeValue, tutorIds: value === "playgroup" ? prev.tutorIds : (prev.tutorId ? [prev.tutorId] : []) }))}
+                          disabled={!weeklyPlannerForm.subjectId || isToddlerPlaygroupSubject || availableSessionTypeOptions.length === 1}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select type" />
@@ -3242,10 +3325,74 @@ export default function AdminDashboard() {
                             ))}
                           </SelectContent>
                         </Select>
+                        <p className="text-[11px] text-muted-foreground">
+                          {weeklyPlannerForm.sessionType === "playgroup"
+                            ? "Playgroup is one shared session. Tutors required: 1 per 3 children (max 4). Assign children from the calendar."
+                            : "1-on-1 uses one tutor. Assign the child later from the calendar."}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1 lg:col-span-1">
+                        <Label>{weeklyPlannerForm.sessionType === "playgroup" ? `Step 3: Tutors (${weeklyPlannerForm.tutorIds.length}/1-4)` : "Step 3: Tutor"}</Label>
+                        {weeklyPlannerForm.sessionType === "playgroup" ? (
+                          <div className="rounded-md border border-border bg-background p-2">
+                            {weeklyPlannerTutors.length < 1 ? (
+                              <p className="text-xs text-destructive">
+                                No active tutors found. Add tutors in the Users tab first.
+                              </p>
+                            ) : (
+                              <p className="mb-2 text-xs text-muted-foreground">
+                                Select 1–4 tutors. The required count is determined by the number of children enrolled (1 tutor per 3 children, max 4).
+                              </p>
+                            )}
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {weeklyPlannerTutors.map((tutor) => {
+                                const tutorName = [tutor.firstName, tutor.middleName, tutor.lastName].filter(Boolean).join(" ");
+                                const selected = weeklyPlannerForm.tutorIds.includes(tutor._id);
+                                return (
+                                  <Button
+                                    key={tutor._id}
+                                    type="button"
+                                    size="sm"
+                                    variant={selected ? "default" : "outline"}
+                                    onClick={() => setWeeklyPlannerForm((prev) => {
+                                      const nextIds = selected
+                                        ? prev.tutorIds.filter((id) => id !== tutor._id)
+                                        : [...prev.tutorIds, tutor._id];
+                                      return { ...prev, tutorId: nextIds[0] || "", tutorIds: nextIds };
+                                    })}
+                                  >
+                                    {tutorName}
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : (
+                          <Select
+                            value={weeklyPlannerForm.tutorId}
+                            onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, tutorId: value, tutorIds: [value] }))}
+                            disabled={weeklyPlannerOptionsLoading}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder={weeklyPlannerOptionsLoading ? "Loading tutors..." : "Select 1 tutor"} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {weeklyPlannerTutors.map((tutor) => {
+                                const tutorName = [tutor.firstName, tutor.middleName, tutor.lastName].filter(Boolean).join(" ");
+                                return (
+                                  <SelectItem key={tutor._id} value={tutor._id}>
+                                    {tutorName}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </div>
 
                       <div className="space-y-1">
-                        <Label>Start</Label>
+                        <Label>Step 4: Start</Label>
                         <Select
                           value={weeklyPlannerForm.startTime}
                           onValueChange={(value) =>
@@ -3261,7 +3408,9 @@ export default function AdminDashboard() {
                           </SelectTrigger>
                           <SelectContent>
                             {availableTimeSlotsForSelectedTutor.length === 0 ? (
-                              <div className="p-2 text-xs text-muted-foreground">No available times for this tutor on selected days</div>
+                              <div className="p-2 text-xs text-muted-foreground">
+                                {weeklyPlannerForm.sessionType === "playgroup" ? "Playgroup times are 8:00 AM or 1:00 PM." : "No overlapping times for the selected tutor on these days."}
+                              </div>
                             ) : (
                               availableTimeSlotsForSelectedTutor.map((time) => (
                                 <SelectItem key={time} value={time}>
@@ -3275,34 +3424,23 @@ export default function AdminDashboard() {
 
                       <div className="space-y-1">
                         <Label>End</Label>
-                        <Select
-                          value={weeklyPlannerForm.endTime}
-                          onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, endTime: value }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="End time" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableTimeSlotsForSelectedTutor.length === 0 ? (
-                              <div className="p-2 text-xs text-muted-foreground">No available times for this tutor on selected days</div>
-                            ) : (
-                              availableTimeSlotsForSelectedTutor.map((time) => (
-                                <SelectItem key={`end-${time}`} value={time}>
-                                  {formatSlotTime(time)}
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
+                        <div className="flex h-10 items-center rounded-md border border-input bg-muted/40 px-3 text-sm text-foreground">
+                          {weeklyPlannerForm.endTime ? formatSlotTime(weeklyPlannerForm.endTime) : "Automatically 2 hours after start"}
+                        </div>
                       </div>
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <p className="text-sm text-muted-foreground">
-                        Step 3: Room assignment is automatic. {weeklyPlannerForm.sessionType === "playgroup" ? "Toddler Playgroup goes to Toddler Room only." : "1-on-1 and Small Group go to Tutoring Area."}
+                        Room is assigned automatically. {weeklyPlannerForm.sessionType === "playgroup" ? "Playgroup always uses the Toddler Room." : "1-on-1 always uses the Tutoring Area."}
                       </p>
-                      <Button type="button" size="sm" onClick={addWeeklyPlannerAssignment}>
-                        Add Tutor Assignment To Selected Day(s)
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={addWeeklyPlannerAssignment}
+                        disabled={weeklyPlannerForm.sessionType === "playgroup" && weeklyPlannerTutors.length < 1}
+                      >
+                        Add to selected day(s)
                       </Button>
                     </div>
 
@@ -3319,7 +3457,7 @@ export default function AdminDashboard() {
                     <div className="rounded-lg border border-border overflow-hidden">
                       <div className="p-3 border-b border-border bg-muted/30">
                         <h4 className="font-semibold text-foreground">Tutoring Area</h4>
-                        <p className="text-xs text-muted-foreground">Max 15 tutors per time slot</p>
+                        <p className="text-xs text-muted-foreground">Up to 15 concurrent 1-on-1 sessions</p>
                       </div>
                       <div className="p-3 space-y-2 min-h-[180px]">
                         {(weeklyPlannerDraft[weeklyPlannerDay] || []).filter((item) => item.roomType === "tutoring_area").length === 0 ? (
@@ -3346,7 +3484,7 @@ export default function AdminDashboard() {
                     <div className="rounded-lg border border-border overflow-hidden">
                       <div className="p-3 border-b border-border bg-muted/30">
                         <h4 className="font-semibold text-foreground">Toddler Room</h4>
-                        <p className="text-xs text-muted-foreground">1-2 tutors only, max 10 students</p>
+                        <p className="text-xs text-muted-foreground">1–4 tutors (scales with children), 2–10 children, 8–10 AM or 1–3 PM</p>
                       </div>
                       <div className="p-3 space-y-2 min-h-[180px]">
                         {(weeklyPlannerDraft[weeklyPlannerDay] || []).filter((item) => item.roomType === "toddler_room").length === 0 ? (
@@ -3570,7 +3708,7 @@ export default function AdminDashboard() {
                               <span className={`text-sm font-medium ${cell.isToday ? "text-primary" : "text-foreground"}`}>{cell.date.getDate()}</span>
                               <div className="mt-1 space-y-1 flex-1 overflow-auto">
                                 {daySchedules.map((s) => {
-                                  const studentName = s.student ? [s.student.firstName, s.student.lastName].filter(Boolean).join(" ") : "—";
+                                  const studentName = formatScheduleStudentNames(s);
                                   const isDetailsSelected = selectedSchedule?._id === s._id;
                                   const isChecked = selectedScheduleIds.includes(s._id);
                                   return (
@@ -3645,7 +3783,7 @@ export default function AdminDashboard() {
                                     return (
                                       <div key={`${slotKey}-${day.key}`} className="p-2 border-r border-border last:border-r-0 space-y-1">
                                         {sessions.length === 0 ? null : sessions.map((session) => {
-                                          const studentName = session.student ? [session.student.firstName, session.student.lastName].filter(Boolean).join(" ") : "—";
+                                          const studentName = formatScheduleStudentNames(session);
                                           const isDetailsSelected = selectedSchedule?._id === session._id;
                                           const isChecked = selectedScheduleIds.includes(session._id);
                                           return (
@@ -3694,8 +3832,8 @@ export default function AdminDashboard() {
                         <p className="text-sm text-muted-foreground">No sessions for this day.</p>
                       ) : (
                         schedulesInDailyView.map((s) => {
-                          const studentName = s.student ? [s.student.firstName, s.student.lastName].filter(Boolean).join(" ") : "—";
-                          const tutorName = s.tutor ? [s.tutor.firstName, s.tutor.lastName].filter(Boolean).join(" ") : "—";
+                          const studentName = formatScheduleStudentNames(s);
+                          const tutorName = formatScheduleTutorNames(s);
                           const isDetailsSelected = selectedSchedule?._id === s._id;
                           const isChecked = selectedScheduleIds.includes(s._id);
                           return (
@@ -3723,7 +3861,7 @@ export default function AdminDashboard() {
                                   <p className="font-medium text-foreground">{s.subject?.name ?? "—"}</p>
                                   <p className="text-sm text-muted-foreground">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
                                   <p className="text-xs text-muted-foreground">Student: {studentName}</p>
-                                  <p className="text-xs text-muted-foreground">Tutor: {tutorName}</p>
+                                  <p className="text-xs text-muted-foreground">{s.sessionType === "playgroup" ? "Tutors" : "Tutor"}: {tutorName}</p>
                                 </div>
                               </div>
                             </div>
@@ -3750,8 +3888,8 @@ export default function AdminDashboard() {
                     ) : (
                       (() => {
                         const s = selectedSchedule;
-                        const studentName = s.student ? [s.student.firstName, s.student.middleName, s.student.lastName].filter(Boolean).join(" ") : "—";
-                        const tutorName = s.tutor ? [s.tutor.firstName, s.tutor.middleName, s.tutor.lastName].filter(Boolean).join(" ") : "—";
+                        const studentName = formatScheduleStudentNames(s);
+                        const tutorName = formatScheduleTutorNames(s);
                         const dateLabel = s.date ? new Date(s.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "—";
                         const timeLabel = s.startTime && s.endTime ? `${formatSlotTime(s.startTime)} – ${formatSlotTime(s.endTime)}` : "—";
                         const isDeleting = scheduleDeletingId === s._id;
@@ -3763,37 +3901,17 @@ export default function AdminDashboard() {
                           ...((s.students || []) as Array<{ _id: string; firstName?: string; middleName?: string; lastName?: string; profileImage?: string }>)
                         ].filter((value, index, arr) => arr.findIndex((item) => item?._id === value?._id) === index);
                         const enrolledStudentIds = new Set(enrolledStudents.map((item) => item._id));
-                        const selectedSubjectId = typeof s.subject === "object" && s.subject ? s.subject._id : "";
-                        const assignedTutorId = typeof s.tutor === "object" && s.tutor ? s.tutor._id : "";
-                        const assignedTutorUser = activeUsers.find((userItem) => userItem.role === "tutor" && userItem._id === assignedTutorId);
-                        const tutorHandledProgramOptions = (assignedTutorUser?.subjectsTaught || [])
-                          .filter((subjectItem) => !!subjectItem?._id)
-                          .map((subjectItem) => ({ _id: String(subjectItem._id), name: subjectItem.name || "Program" }));
-                        const sessionProgramOption = selectedSubjectId ? { _id: selectedSubjectId, name: s.subject?.name || "Session program" } : null;
-                        const programOptionsMap = new Map<string, { _id: string; name: string }>();
-                        tutorHandledProgramOptions.forEach((option) => {
-                          programOptionsMap.set(option._id, option);
+                        const programCandidates = enrollments.filter((enrollmentItem) => {
+                          if (!enrollmentIsReadyToSchedule(enrollmentItem)) return false;
+                          return enrollmentMatchesSessionProgram(enrollmentItem, s.subject);
                         });
-                        if (sessionProgramOption && !programOptionsMap.has(sessionProgramOption._id)) {
-                          programOptionsMap.set(sessionProgramOption._id, sessionProgramOption);
-                        }
-                        const availableProgramOptions = Array.from(programOptionsMap.values());
-                        const effectiveProgramId = scheduleEnrollmentProgramId || selectedSubjectId;
-                        const activeStudentIds = new Set(activeUsers.filter((userItem) => userItem.role === "student").map((userItem) => userItem._id));
-                        const studentsEnrolledInProgram = enrollments
-                          .filter((enrollmentItem) => {
-                            if (enrollmentItem.status !== "active") return false;
-                            if (!enrollmentItem.student?._id || !activeStudentIds.has(enrollmentItem.student._id)) return false;
-                            return (enrollmentItem.selectedSubjects || []).some((subjectItem) => {
-                              const subjectId = String((subjectItem as { _id?: string } | undefined)?._id || "");
-                              return subjectId === String(effectiveProgramId || "");
-                            });
-                          })
-                          .map((enrollmentItem) => enrollmentItem.student)
-                          .filter((studentItem, index, arr) => arr.findIndex((value) => value?._id === studentItem?._id) === index);
-                        const availableStudentsForSession = studentsEnrolledInProgram.filter(
-                          (studentItem) => !!studentItem?._id && !enrolledStudentIds.has(studentItem._id)
-                        );
+                        const availableEnrollmentCandidates = programCandidates.filter((enrollmentItem) => {
+                          const linkedStudentId = enrollmentItem.student?._id;
+                          if (linkedStudentId && enrolledStudentIds.has(linkedStudentId)) return false;
+                          return true;
+                        });
+                        const matchingPreference = availableEnrollmentCandidates.filter((enrollmentItem) => matchesParentPreferenceClient(enrollmentItem, s.date, s.startTime).ok);
+                        const needsOverride = availableEnrollmentCandidates.filter((enrollmentItem) => !matchesParentPreferenceClient(enrollmentItem, s.date, s.startTime).ok);
                         const currentEnrollment = enrolledStudents.length;
                         const hasOpenSlot = currentEnrollment < maxCapacity;
                         return (
@@ -3804,27 +3922,61 @@ export default function AdminDashboard() {
                               <p className="text-sm text-muted-foreground">{dateLabel} | {timeLabel}</p>
                             </div>
                             <div>
-                              <p className="text-xs font-medium text-muted-foreground">Tutor</p>
-                              <div className="flex items-center gap-2 mt-1">
-                                <UserAvatar
-                                  src={s.tutor?.profileImage ? `${uploadsBaseUrl}/uploads/${s.tutor.profileImage}` : null}
-                                  fallback={tutorName !== "—" ? tutorName.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—"}
-                                  size={8}
-                                />
-                                <p className="text-sm text-foreground">{tutorName}</p>
-                              </div>
+                              <p className="text-xs font-medium text-muted-foreground">{s.sessionType === "playgroup" ? `Tutors (${(s.tutors && s.tutors.length > 0 ? s.tutors : s.tutor ? [s.tutor] : []).length}/1-4)` : "Tutor"}</p>
+                              {s.sessionType === "playgroup" ? (
+                                (() => {
+                                  const allTutors = (Array.isArray(s.tutors) && s.tutors.length > 0)
+                                    ? s.tutors
+                                    : s.tutor ? [s.tutor] : [];
+                                  if (allTutors.length === 0) {
+                                    return <p className="text-sm text-muted-foreground mt-1">No tutors assigned.</p>;
+                                  }
+                                  return (
+                                    <div className="mt-1 space-y-1.5">
+                                      {allTutors.map((t) => {
+                                        const tName = [t.firstName, t.middleName, t.lastName].filter(Boolean).join(" ") || "Tutor";
+                                        return (
+                                          <div key={t._id} className="flex items-center gap-2">
+                                            <UserAvatar
+                                              src={null}
+                                              fallback={tName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
+                                              size={7}
+                                            />
+                                            <p className="text-sm text-foreground">{tName}</p>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()
+                              ) : (
+                                <div className="flex items-center gap-2 mt-1">
+                                  <UserAvatar
+                                    src={s.tutor?.profileImage ? `${uploadsBaseUrl}/uploads/${s.tutor.profileImage}` : null}
+                                    fallback={tutorName !== "—" ? tutorName.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—"}
+                                    size={8}
+                                  />
+                                  <p className="text-sm text-foreground">{tutorName}</p>
+                                </div>
+                              )}
                             </div>
+                            {isOneOnOneSession && (
                             <div>
                               <p className="text-xs font-medium text-muted-foreground">Student</p>
-                              <div className="flex items-center gap-2 mt-1">
-                                <UserAvatar
-                                  src={s.student?.profileImage ? `${uploadsBaseUrl}/uploads/${s.student.profileImage}` : null}
-                                  fallback={studentName !== "—" ? studentName.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—"}
-                                  size={8}
-                                />
-                                <p className="text-sm text-foreground">{studentName}</p>
-                              </div>
+                              {s.student ? (
+                                <div className="flex items-center gap-2 mt-1">
+                                  <UserAvatar
+                                    src={s.student?.profileImage ? `${uploadsBaseUrl}/uploads/${s.student.profileImage}` : null}
+                                    fallback={studentName !== "—" ? studentName.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—"}
+                                    size={8}
+                                  />
+                                  <p className="text-sm text-foreground">{studentName}</p>
+                                </div>
+                              ) : (
+                                <p className="text-sm text-muted-foreground mt-1">No child assigned yet.</p>
+                              )}
                             </div>
+                            )}
                             <div className="rounded-md border border-border p-3 space-y-3">
                               <div className="flex items-center justify-between gap-2">
                                 <p className="text-xs font-medium text-muted-foreground">Session Enrollment</p>
@@ -3868,29 +4020,16 @@ export default function AdminDashboard() {
 
                               {hasOpenSlot && (
                                 <div className="space-y-2">
-                                  <p className="text-xs text-muted-foreground">Students by assigned tutor program</p>
-                                  {availableProgramOptions.length > 0 && (
-                                    <Select
-                                      value={effectiveProgramId || ""}
-                                      onValueChange={(value) => {
-                                        setScheduleEnrollmentProgramId(value);
-                                        setScheduleEnrollmentSelectedStudentIds([]);
-                                      }}
-                                    >
-                                      <SelectTrigger className="h-8">
-                                        <SelectValue placeholder="Select tutor program" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {availableProgramOptions.map((programOption) => (
-                                          <SelectItem key={`program-${programOption._id}`} value={programOption._id}>
-                                            {programOption.name}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  )}
-                                  {availableStudentsForSession.length === 0 ? (
-                                    <p className="text-xs text-muted-foreground">No eligible students for this program.</p>
+                                  <p className="text-xs font-medium text-foreground">
+                                    {isOneOnOneSession ? "Assign 1 child to this tutor" : `Add children to this playgroup (${Math.max(0, maxCapacity - currentEnrollment)} open)`}
+                                  </p>
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Only approved children in {s.subject?.name || "this program"} are listed. Parent preferred date and time are checked automatically.
+                                  </p>
+                                  {availableEnrollmentCandidates.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      No approved children are enrolled in {s.subject?.name || "this program"} yet. Approve the enrollment first, then assign the child here.
+                                    </p>
                                   ) : (
                                     <>
                                       <DropdownMenu>
@@ -3899,14 +4038,16 @@ export default function AdminDashboard() {
                                             <span className="truncate">
                                               {scheduleEnrollmentSelectedStudentIds.length > 0
                                                 ? `${scheduleEnrollmentSelectedStudentIds.length} selected`
-                                                : "Select student(s)"}
+                                                : isOneOnOneSession ? "Choose 1 child" : "Choose children"}
                                             </span>
                                             <ChevronDown className="h-4 w-4 opacity-70" />
                                           </Button>
                                         </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="start" className="w-[260px] max-h-56 overflow-auto">
-                                          {availableStudentsForSession.map((candidate) => {
-                                            const candidateName = [candidate?.firstName, candidate?.lastName].filter(Boolean).join(" ") || "Student";
+                                        <DropdownMenuContent align="start" className="w-[280px] max-h-64 overflow-auto">
+                                          {matchingPreference.length > 0 && (
+                                            <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">Matches this slot</p>
+                                          )}
+                                          {matchingPreference.map((candidate) => {
                                             const checked = scheduleEnrollmentSelectedStudentIds.includes(candidate._id);
                                             return (
                                               <DropdownMenuCheckboxItem
@@ -3914,17 +4055,42 @@ export default function AdminDashboard() {
                                                 checked={checked}
                                                 onCheckedChange={(nextValue) => {
                                                   setScheduleEnrollmentSelectedStudentIds((prev) => {
-                                                    if (!nextValue) {
-                                                      return prev.filter((id) => id !== candidate._id);
-                                                    }
-                                                    if (isOneOnOneSession) {
-                                                      return [candidate._id];
-                                                    }
+                                                    if (!nextValue) return prev.filter((id) => id !== candidate._id);
+                                                    if (isOneOnOneSession) return [candidate._id];
                                                     return prev.includes(candidate._id) ? prev : [...prev, candidate._id];
                                                   });
                                                 }}
                                               >
-                                                {candidateName}
+                                                <span className="flex flex-col">
+                                                  <span>{childNameFromEnrollment(candidate)}</span>
+                                                  <span className="text-[10px] text-muted-foreground font-normal">{parentPreferenceSummary(candidate)}</span>
+                                                </span>
+                                              </DropdownMenuCheckboxItem>
+                                            );
+                                          })}
+                                          {needsOverride.length > 0 && (
+                                            <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">Needs override</p>
+                                          )}
+                                          {needsOverride.map((candidate) => {
+                                            const checked = scheduleEnrollmentSelectedStudentIds.includes(candidate._id);
+                                            const mismatch = matchesParentPreferenceClient(candidate, s.date, s.startTime).reason;
+                                            return (
+                                              <DropdownMenuCheckboxItem
+                                                key={candidate._id}
+                                                checked={checked}
+                                                onCheckedChange={(nextValue) => {
+                                                  setScheduleEnrollmentSelectedStudentIds((prev) => {
+                                                    if (!nextValue) return prev.filter((id) => id !== candidate._id);
+                                                    if (isOneOnOneSession) return [candidate._id];
+                                                    return prev.includes(candidate._id) ? prev : [...prev, candidate._id];
+                                                  });
+                                                  if (nextValue) setScheduleEnrollmentOverride(true);
+                                                }}
+                                              >
+                                                <span className="flex flex-col">
+                                                  <span>{childNameFromEnrollment(candidate)}</span>
+                                                  <span className="text-[10px] text-muted-foreground font-normal">{mismatch || parentPreferenceSummary(candidate)}</span>
+                                                </span>
                                               </DropdownMenuCheckboxItem>
                                             );
                                           })}
@@ -3932,11 +4098,45 @@ export default function AdminDashboard() {
                                       </DropdownMenu>
                                       {scheduleEnrollmentSelectedStudentIds.length > 0 && (
                                         <p className="text-[11px] text-muted-foreground">
-                                          Selected: {availableStudentsForSession
+                                          Selected: {availableEnrollmentCandidates
                                             .filter((candidate) => scheduleEnrollmentSelectedStudentIds.includes(candidate._id))
-                                            .map((candidate) => [candidate?.firstName, candidate?.lastName].filter(Boolean).join(" ") || "Student")
+                                            .map((candidate) => childNameFromEnrollment(candidate))
                                             .join(", ")}
                                         </p>
+                                      )}
+                                      {(scheduleEnrollmentOverride || needsOverride.some((candidate) => scheduleEnrollmentSelectedStudentIds.includes(candidate._id))) && (
+                                        <div className="space-y-1">
+                                          <p className="text-[11px] text-muted-foreground">This assignment does not match the parent preferred date/time. Enter a reason to continue.</p>
+                                          <Textarea
+                                            value={scheduleEnrollmentOverrideReason}
+                                            onChange={(event) => {
+                                              setScheduleEnrollmentOverride(true);
+                                              setScheduleEnrollmentOverrideReason(event.target.value);
+                                            }}
+                                            placeholder="Override reason for audit"
+                                            className="min-h-[72px] text-sm"
+                                          />
+                                        </div>
+                                      )}
+                                      {scheduleCompatibleSlots.length > 0 && (
+                                        <div className="rounded-md border border-border p-2 space-y-1">
+                                          <p className="text-[11px] font-medium text-foreground">Compatible slots</p>
+                                          {scheduleCompatibleSlots.map((slot) => (
+                                            <Button
+                                              key={slot._id}
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="w-full justify-start h-auto py-1 text-left"
+                                              onClick={() => {
+                                                const match = schedules.find((item) => item._id === slot._id);
+                                                if (match) setSelectedSchedule(match);
+                                              }}
+                                            >
+                                              {new Date(slot.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} {formatSlotTime(slot.startTime)}–{formatSlotTime(slot.endTime)} {slot.tutorName ? `· ${slot.tutorName}` : ""}
+                                            </Button>
+                                          ))}
+                                        </div>
                                       )}
                                     </>
                                   )}
@@ -3944,11 +4144,11 @@ export default function AdminDashboard() {
                                     type="button"
                                     size="sm"
                                     className="w-full"
-                                    disabled={scheduleEnrollmentSaving || scheduleEnrollmentSelectedStudentIds.length === 0 || availableStudentsForSession.length === 0}
+                                    disabled={scheduleEnrollmentSaving || scheduleEnrollmentSelectedStudentIds.length === 0}
                                     onClick={handleEnrollStudentToSelectedSchedule}
                                   >
                                     {scheduleEnrollmentSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                                    Enroll selected student(s)
+                                    {isOneOnOneSession ? "Assign child to this tutor" : "Add children to playgroup"}
                                   </Button>
                                 </div>
                               )}
@@ -4521,7 +4721,6 @@ export default function AdminDashboard() {
                   email: normalizedTutorEmail,
                   password: addTutorForm.password,
                   phone: addTutorForm.phone.trim(),
-                  subjectsTaught: addTutorForm.subjectsTaught,
                   employmentType: addTutorForm.employmentType,
                   availability: availabilityStr || undefined,
                 });
@@ -4624,31 +4823,6 @@ export default function AdminDashboard() {
                   placeholder="09XX XXX XXXX"
                   required
                 />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Services they can tutor</Label>
-              <p className="text-xs text-muted-foreground">All center services. Select all that apply — used for scheduling.</p>
-              <div className="flex flex-wrap gap-2 border rounded-lg p-3 bg-muted/30 max-h-40 overflow-y-auto">
-                {subjectsList.map((s) => (
-                  <Button
-                    key={s._id}
-                    type="button"
-                    variant={addTutorForm.subjectsTaught.includes(s._id) ? "default" : "outline"}
-                    size="sm"
-                    onClick={() =>
-                      setAddTutorForm((f) => ({
-                        ...f,
-                        subjectsTaught: f.subjectsTaught.includes(s._id)
-                          ? f.subjectsTaught.filter((id) => id !== s._id)
-                          : [...f.subjectsTaught, s._id],
-                      }))
-                    }
-                  >
-                    {s.name}
-                  </Button>
-                ))}
-                {subjectsList.length === 0 && <span className="text-sm text-muted-foreground">Loading services...</span>}
               </div>
             </div>
             <div className="space-y-2">

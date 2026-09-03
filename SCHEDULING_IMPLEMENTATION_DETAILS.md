@@ -1,3 +1,7 @@
+# Scheduling Policy Update
+
+The scheduler now uses program-driven rules: Academic Tutorial and Examination Preparation require one child, one tutor, and a two-hour slot; Toddlers Playgroup is a shared two-hour session with 1-10 children and 5-6 tutors. All sessions run Monday-Saturday between 8:00 AM and 5:00 PM, excluding the 12:00 PM-1:00 PM lunch break. Parent preferred date/time is a constraint and must not be silently ignored. Playgroups are stored as one schedule row with `tutors[]`.
+
 # BeeBright Scheduling System - Implementation Details
 
 ## System Architecture Overview

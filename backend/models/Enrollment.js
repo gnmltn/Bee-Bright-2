@@ -74,6 +74,14 @@ const enrollmentSchema = new mongoose.Schema({
     enum: ['morning', 'afternoon', 'no_preference', null],
     default: null
   },
+  // Days of the week the child is available for sessions.
+  // Values match Mon-Sat: 'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'
+  // Empty array = no preference (any weekday is acceptable).
+  preferredDays: {
+    type: [String],
+    enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+    default: [],
+  },
 
   // Health and learning information
   healthInfo: {

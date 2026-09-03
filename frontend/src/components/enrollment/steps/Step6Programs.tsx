@@ -36,6 +36,26 @@ export default function Step6Programs({ data, update, onNext, onBack, toast }: P
     }
   }, []);
 
+  // When the child's age changes (e.g. user went back and updated the birthdate),
+  // drop any previously selected packages whose program is no longer age-eligible.
+  // This is the safety net for the case where Step5 didn't catch it (e.g. session restore).
+  useEffect(() => {
+    if (!data.birthdate || data.selectedPackages.length === 0) return;
+    const stalePackages = data.selectedPackages.filter((pkg) => {
+      const { eligible } = checkProgramEligibility(pkg.programCode, ageYears);
+      return !eligible;
+    });
+    if (stalePackages.length > 0) {
+      update({
+        selectedPackages: data.selectedPackages.filter((pkg) => {
+          const { eligible } = checkProgramEligibility(pkg.programCode, ageYears);
+          return eligible;
+        }),
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ageYears]);
+
   useEffect(() => {
     pricingService
       .getAll()
@@ -90,6 +110,7 @@ export default function Step6Programs({ data, update, onNext, onBack, toast }: P
         priceDown,
         paymentOption: 'down',
         durationDesc: pkg.durationDesc || '',
+        sessionCount: pkg.sessionCount ?? null,
       };
       update({ selectedPackages: [...filtered, newPkg] });
       setExpanded(null);

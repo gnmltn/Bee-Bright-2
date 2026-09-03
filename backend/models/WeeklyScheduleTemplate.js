@@ -83,8 +83,12 @@ const weeklyScheduleTemplateSchema = new mongoose.Schema({
     tutorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true
+      required: false
     },
+    tutorIds: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
 
     // Session type determines capacity
     sessionType: {

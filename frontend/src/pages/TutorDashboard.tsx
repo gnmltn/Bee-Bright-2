@@ -132,6 +132,53 @@ function toDateKey(d: Date) {
 // Use a sentinel that can never collide with a real MongoDB ObjectId.
 const ALL_STUDENTS_VALUE = "__all__";
 
+function personDisplayName(person?: { firstName?: string; middleName?: string; lastName?: string } | null) {
+  return person ? [person.firstName, person.middleName, person.lastName].filter(Boolean).join(" ") : "";
+}
+
+function formatSessionStudentLabel(session: {
+  sessionType?: string;
+  student?: { firstName?: string; middleName?: string; lastName?: string } | null;
+  students?: Array<{ firstName?: string; middleName?: string; lastName?: string }>;
+}) {
+  const group = Array.isArray(session.students) ? session.students : [];
+  if (session.sessionType === "playgroup" || group.length > 0) {
+    if (group.length === 0) return "Playgroup (no children enrolled yet)";
+    if (group.length <= 2) return group.map((student) => personDisplayName(student)).filter(Boolean).join(", ");
+    return `Playgroup (${group.length} children)`;
+  }
+  return personDisplayName(session.student) || "—";
+}
+
+function sessionStudentRecords(session: {
+  student?: {
+    _id: string;
+    firstName: string;
+    lastName: string;
+    middleName?: string;
+    email?: string;
+    gradeLevel?: string;
+    phone?: string;
+    profileImage?: string;
+  } | null;
+  students?: Array<{
+    _id: string;
+    firstName: string;
+    lastName: string;
+    middleName?: string;
+    email?: string;
+    gradeLevel?: string;
+    phone?: string;
+    profileImage?: string;
+  }>;
+}) {
+  const records = [
+    ...(session.student ? [session.student] : []),
+    ...((session.students || [])),
+  ];
+  return records.filter((item, index, arr) => arr.findIndex((other) => String(other._id) === String(item._id)) === index);
+}
+
 function normalizeProgramText(value: string): string {
   return String(value || "")
     .toLowerCase()
@@ -145,24 +192,15 @@ function inferProgramCategoryIdFromSubjectName(subjectName: string): string | nu
   const text = normalizeProgramText(subjectName);
   if (!text) return null;
 
+  // Only the 3 active programs
   if (text.includes("toddler") || text.includes("playgroup")) return "toddlers_playgroup";
-  if (
-    text.includes("pre kindergarten") ||
-    text.includes("prek") ||
-    text.includes("pre k")
-  ) return "prek_readiness";
-  if (text.includes("kindergarten") || text.includes("kinder")) return "kindergarten_readiness";
-  if (
-    text.includes("sped") ||
-    text.includes("special education") ||
-    text.includes("special ed") ||
-    text.includes("iep")
-  ) return "sped_tutorial";
   if (
     text.includes("exam") ||
     text.includes("review") ||
     text.includes("entrance") ||
-    text.includes("prep")
+    text.includes("prep") ||
+    text.includes("preparedness") ||
+    text.includes("preparation")
   ) return "exam_prep";
   if (
     text.includes("academic tutorial") ||
@@ -193,6 +231,7 @@ export default function TutorDashboard() {
       startTime: string;
       endTime: string;
       attendanceStatus?: 'unmarked' | 'present' | 'absent';
+      sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
       student?: {
         _id: string;
         firstName: string;
@@ -202,6 +241,16 @@ export default function TutorDashboard() {
         gradeLevel?: string;
         phone?: string;
       };
+      students?: Array<{
+        _id: string;
+        firstName: string;
+        lastName: string;
+        middleName?: string;
+        email?: string;
+        gradeLevel?: string;
+        phone?: string;
+        profileImage?: string;
+      }>;
       subject?: { _id: string; name: string; code?: string };
     }[]
   >([]);
@@ -422,31 +471,31 @@ export default function TutorDashboard() {
       }
     >();
     sessions.forEach((s) => {
-      if (!s.student || !s.subject) return;
-      const key = `${s.student._id}-${s.subject._id}`;
-      const name = [s.student.firstName, s.student.middleName, s.student.lastName]
-        .filter(Boolean)
-        .join(" ");
-      const existing = map.get(key);
-      if (existing) {
-        existing.sessionCount += 1;
-        existing.schedule += `; ${new Date(s.date).toLocaleDateString("en-US", {
-          weekday: "short",
-        })} ${formatTime12h(s.startTime)}`;
-      } else {
-        map.set(key, {
-          name,
-          grade: s.student.gradeLevel ?? "—",
-          subject: s.subject.name,
-          schedule: `${new Date(s.date).toLocaleDateString("en-US", {
+      if (!s.subject) return;
+      sessionStudentRecords(s).forEach((student) => {
+        const key = `${student._id}-${s.subject!._id}`;
+        const name = personDisplayName(student);
+        const existing = map.get(key);
+        if (existing) {
+          existing.sessionCount += 1;
+          existing.schedule += `; ${new Date(s.date).toLocaleDateString("en-US", {
             weekday: "short",
-          })} ${formatTime12h(s.startTime)}`,
-          email: s.student.email ?? "",
-          phone: s.student.phone ?? "",
-          sessionCount: 1,
-          profileImage: (s.student as { profileImage?: string }).profileImage,
-        });
-      }
+          })} ${formatTime12h(s.startTime)}`;
+        } else {
+          map.set(key, {
+            name,
+            grade: student.gradeLevel ?? "—",
+            subject: s.subject!.name,
+            schedule: `${new Date(s.date).toLocaleDateString("en-US", {
+              weekday: "short",
+            })} ${formatTime12h(s.startTime)}`,
+            email: student.email ?? "",
+            phone: student.phone ?? "",
+            sessionCount: 1,
+            profileImage: student.profileImage,
+          });
+        }
+      });
     });
     return Array.from(map.values());
   }, [sessions]);
@@ -494,13 +543,11 @@ export default function TutorDashboard() {
   const materialProgramOptions = PROGRAM_CATEGORIES;
 
   // Map programCategory id -> subject names used in backend Subject catalog / schedules
+  // Only the 3 active programs
   const MATERIAL_PROGRAM_SUBJECT_NAME_MAP: Record<string, string[]> = {
     toddlers_playgroup: ["Toddlers Playgroup"],
-    prek_readiness: ["Pre-Kindergarten Readiness Program"],
-    kindergarten_readiness: ["Kindergarten Readiness Program"],
-    academic_tutorial: ["Academic Tutorial"],
-    sped_tutorial: ["SPED Tutorial"],
-    exam_prep: ["Examination Preparation"],
+    academic_tutorial:  ["Academic Tutorial"],
+    exam_prep:          ["Examination Preparation"],
   };
 
   const materialProgramSubjectItems = useMemo(() => {
@@ -514,15 +561,14 @@ export default function TutorDashboard() {
     const seen = new Set<string>();
     const list: { _id: string; name: string }[] = [];
     sessions.forEach((s) => {
-      if (!s.student) return;
-      const id = s.student._id != null ? String(s.student._id) : "";
-      if (!id || seen.has(id)) return;
-      seen.add(id);
-      list.push({
-        _id: id,
-        name: [s.student.firstName, s.student.middleName, s.student.lastName]
-          .filter(Boolean)
-          .join(" "),
+      sessionStudentRecords(s).forEach((student) => {
+        const id = student._id != null ? String(student._id) : "";
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        list.push({
+          _id: id,
+          name: personDisplayName(student),
+        });
       });
     });
     return list.sort((a, b) => a.name.localeCompare(b.name));
@@ -539,20 +585,20 @@ export default function TutorDashboard() {
     const seen = new Set<string>();
     const list: { _id: string; name: string }[] = [];
     sessions.forEach((s) => {
-      if (!s.student || !s.subject || !s.subject.name) return;
+      if (!s.subject || !s.subject.name) return;
       const subjNameLower = s.subject.name.toLowerCase();
       const matchesProgram = subjectNamesLower.some((needle) =>
         subjNameLower.includes(needle)
       );
       if (!matchesProgram) return;
-      const studentId = s.student._id != null ? String(s.student._id) : "";
-      if (!studentId || seen.has(studentId)) return;
-      seen.add(studentId);
-      list.push({
-        _id: studentId,
-        name: [s.student.firstName, s.student.middleName, s.student.lastName]
-          .filter(Boolean)
-          .join(" "),
+      sessionStudentRecords(s).forEach((student) => {
+        const studentId = student._id != null ? String(student._id) : "";
+        if (!studentId || seen.has(studentId)) return;
+        seen.add(studentId);
+        list.push({
+          _id: studentId,
+          name: personDisplayName(student),
+        });
       });
     });
     return list.sort((a, b) => a.name.localeCompare(b.name));
@@ -566,8 +612,13 @@ export default function TutorDashboard() {
 
     const categoryIds = new Set<string>();
     sessions.forEach((s) => {
-      if (!s.student || !s.subject) return;
-      if (String(s.student._id) !== gradeFormStudentId) return;
+      if (!s.subject) return;
+      // Check singular student field (one-on-one) and students[] array (playgroup/group)
+      const studentIds = [
+        s.student?._id ? String(s.student._id) : null,
+        ...(Array.isArray(s.students) ? s.students.map((st) => String(st._id)) : []),
+      ].filter(Boolean) as string[];
+      if (!studentIds.includes(gradeFormStudentId)) return;
       const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
       if (inferred) categoryIds.add(inferred);
     });
@@ -913,10 +964,7 @@ export default function TutorDashboard() {
           _id: s._id,
           time: formatTime12h(s.startTime),
           endTime: formatTime12h(s.endTime),
-          student: s.student
-            ? [s.student.firstName, s.student.middleName, s.student.lastName]
-                .filter(Boolean).join(" ")
-            : "—",
+          student: formatSessionStudentLabel(s),
           subject: s.subject?.name ?? "—",
           status,
           attendanceStatus: s.attendanceStatus ?? "unmarked",
@@ -938,12 +986,9 @@ export default function TutorDashboard() {
         return {
           _id: session._id,
           startAt,
-          student: session.student
-            ? [session.student.firstName, session.student.middleName, session.student.lastName]
-                .filter(Boolean)
-                .join(" ")
-            : "—",
+          student: formatSessionStudentLabel(session),
           subject: session.subject?.name ?? "—",
+          isPlaygroup: session.sessionType === "playgroup",
           time: `${formatTime12h(session.startTime)} - ${formatTime12h(session.endTime)}`,
           date: startAt.toLocaleDateString("en-US", {
             weekday: "short",
@@ -986,10 +1031,7 @@ export default function TutorDashboard() {
       const slotKey = `${start}|${end}`;
       slotSet.add(slotKey);
 
-      const student = s.student
-        ? [s.student.firstName, s.student.middleName, s.student.lastName]
-            .filter(Boolean).join(" ")
-        : "—";
+      const student = formatSessionStudentLabel(s);
 
       const cellKey = `${dayOffset}|${slotKey}`;
       const list = map.get(cellKey) || [];
@@ -1341,18 +1383,9 @@ export default function TutorDashboard() {
                   </div>
                   <h3 className="font-display font-bold text-lg text-foreground">{user?.name}</h3>
                   <p className="text-sm text-muted-foreground">{user?.email}</p>
-                  <div className="flex flex-wrap gap-2 justify-center mt-3">
-                    {(user?.subjectsTaught ?? []).map((s) => (
-                      <span
-                        key={typeof s === "object" ? (s as { _id: string })._id : s}
-                        className="px-3 py-1 bg-primary/10 text-primary text-xs rounded-full font-medium"
-                      >
-                        {typeof s === "object" && s && "name" in s
-                          ? (s as { name: string }).name
-                          : String(s)}
-                      </span>
-                    ))}
-                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {(user as { employmentType?: string })?.employmentType === "part-time" ? "Part-time tutor" : "Full-time tutor"}
+                  </p>
                 </div>
               </div>
 
@@ -1458,8 +1491,8 @@ export default function TutorDashboard() {
                       variant="success"
                     />
                     <StatCard
-                      title="Subjects"
-                      value={user?.subjectsTaught?.length ?? 0}
+                      title="Employment"
+                      value={(user as { employmentType?: string })?.employmentType === "part-time" ? "Part-time" : "Full-time"}
                       icon={FileText}
                       variant="warning"
                     />
@@ -1527,7 +1560,7 @@ export default function TutorDashboard() {
                           <div key={session._id} className="p-4 flex items-center justify-between gap-4 hover:bg-muted/40 transition-colors">
                             <div className="min-w-0">
                               <p className="font-semibold text-foreground">{session.subject}</p>
-                              <p className="text-sm text-muted-foreground">Student: {session.student}</p>
+                              <p className="text-sm text-muted-foreground">{session.isPlaygroup ? "Children" : "Student"}: {session.student}</p>
                             </div>
                             <div className="shrink-0 text-right">
                               <p className="text-sm font-medium text-foreground">{session.time}</p>
@@ -1721,7 +1754,7 @@ export default function TutorDashboard() {
                                 <span className={`text-sm font-medium ${cell.isToday ? "text-primary" : "text-foreground"}`}>{cell.date.getDate()}</span>
                                 <div className="mt-1 space-y-1 flex-1 overflow-auto">
                                   {daySchedules.map((s) => {
-                                    const studentName = s.student ? [s.student.firstName, s.student.lastName].filter(Boolean).join(" ") : "—";
+                                    const studentName = formatSessionStudentLabel(s);
                                     return (
                                       <div
                                         key={s._id}
@@ -1777,7 +1810,7 @@ export default function TutorDashboard() {
                                       return (
                                         <div key={`${slotKey}-${day.key}`} className="p-2 border-r border-border last:border-r-0 space-y-1">
                                           {schedulesSessions.length === 0 ? null : schedulesSessions.map((session) => {
-                                            const studentName = session.student ? [session.student.firstName, session.student.lastName].filter(Boolean).join(" ") : "—";
+                                            const studentName = formatSessionStudentLabel(session);
                                             return (
                                               <div
                                                 key={session._id}
@@ -1807,7 +1840,7 @@ export default function TutorDashboard() {
                           <p className="text-sm text-muted-foreground">No sessions for this day.</p>
                         ) : (
                           schedulesInDailyView.map((s) => {
-                            const studentName = s.student ? [s.student.firstName, s.student.lastName].filter(Boolean).join(" ") : "—";
+                            const studentName = formatSessionStudentLabel(s);
                             return (
                               <div
                                 key={s._id}
@@ -1817,7 +1850,12 @@ export default function TutorDashboard() {
                                   <div className="min-w-0 flex-1">
                                     <p className="font-medium text-foreground">{s.subject?.name ?? "—"}</p>
                                     <p className="text-sm text-muted-foreground">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
-                                    <p className="text-xs text-muted-foreground">Student: {studentName}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {s.sessionType === "playgroup" ? "Children" : "Student"}: {studentName}
+                                    </p>
+                                    {s.sessionType === "playgroup" && Array.isArray(s.students) && s.students.length > 0 && (
+                                      <p className="text-xs text-muted-foreground">{s.students.length} / 10 enrolled</p>
+                                    )}
                                   </div>
                                 </div>
                               </div>

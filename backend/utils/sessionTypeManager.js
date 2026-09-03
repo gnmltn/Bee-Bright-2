@@ -22,7 +22,12 @@ const SESSION_TYPES = {
     type: 'playgroup',
     name: 'Playgroup Session',
     maxCapacity: 10,
-    description: '1 tutor : up to 10 students (toddlers/early learning)'
+    // Tutor count is dynamic — use calculatePlaygroupTutorRequirement(childCount)
+    // from schedulingPolicy.js for the actual per-session requirement.
+    // These bounds reflect the absolute min/max across all valid child counts (2–10).
+    minTutors: 1,
+    maxTutors: 4,
+    description: 'Group session up to 10 children; tutors scale with child count (1 per 3 children)'
   }
 };
 

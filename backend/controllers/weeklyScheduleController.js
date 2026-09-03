@@ -23,6 +23,7 @@ const {
   DAY_INDEXES
 } = require('../utils/weeklySchedulingUtils');
 const { getSessionType, getMaxCapacity } = require('../utils/sessionTypeManager');
+const { getProgramPolicy, validateTimeWindow, validateTutorCount } = require('../utils/schedulingPolicy');
 
 /**
  * Get options needed for weekly scheduling UI
@@ -59,9 +60,8 @@ const getWeeklyScheduleOptions = async (req, res) => {
         .select('name areaType capacity isActive')
         .sort({ areaType: 1, name: 1 })
         .lean(),
-      User.find({ role: 'tutor', isArchived: { $ne: true } })
-        .select('firstName middleName lastName email subjectsTaught isActive')
-        .populate('subjectsTaught', 'name code')
+      User.find({ role: 'tutor', isArchived: { $ne: true }, isActive: true, deletedAt: null })
+        .select('firstName middleName lastName email employmentType availability isActive')
         .sort({ firstName: 1, lastName: 1 })
         .lean(),
       Subject.find({ isActive: true })
@@ -136,10 +136,13 @@ const createWeeklyScheduleTemplate = async (req, res) => {
     // Validate and normalize schedule entries
     const validatedEntries = [];
     for (const entry of scheduleEntries) {
-      const { dayOfWeek, startTime, endTime, tutorId, sessionType, tutoringAreaId, subjectId } = entry;
+      const { dayOfWeek, startTime, endTime, tutorId, tutorIds: tutorIdsRaw, sessionType, tutoringAreaId, subjectId } = entry;
+      const subject = await Subject.findById(subjectId).select('name code').lean();
+      const policy = getProgramPolicy(subject);
+      const tutorIds = Array.isArray(tutorIdsRaw) ? tutorIdsRaw.map(String).filter(Boolean) : (tutorId ? [String(tutorId)] : []);
 
       // Validate entry fields
-      if (dayOfWeek == null || !startTime || !endTime || !tutorId || !sessionType || !tutoringAreaId || !subjectId) {
+      if (dayOfWeek == null || !startTime || !endTime || !tutorIds.length || !sessionType || !tutoringAreaId || !subjectId) {
         return res.status(400).json({
           success: false,
           message: 'Each schedule entry must have: dayOfWeek, startTime, endTime, tutorId, sessionType, tutoringAreaId, subjectId'
@@ -163,19 +166,23 @@ const createWeeklyScheduleTemplate = async (req, res) => {
         });
       }
 
-      // Validate tutor exists and can teach subject
-      const tutor = await User.findOne({
-        _id: tutorId,
-        role: 'tutor',
-        subjectsTaught: subjectId
-      }).lean();
-
-      if (!tutor) {
-        return res.status(400).json({
-          success: false,
-          message: `Tutor not found or cannot teach subject`
-        });
+      if (policy && sessionType !== policy.sessionType) {
+        return res.status(400).json({ success: false, message: `This program only supports ${policy.sessionType} sessions.` });
       }
+      const entryDate = getDateForWeekDay(dow, startDate);
+      const timeError = validateTimeWindow({ date: entryDate, startTime: normalizeTime(startTime), endTime: normalizeTime(endTime), policy });
+      if (timeError) return res.status(400).json({ success: false, message: timeError });
+      if (new Set(tutorIds).size !== tutorIds.length) return res.status(400).json({ success: false, message: 'A tutor cannot be assigned more than once.' });
+      // For playgroup templates: accept 1–4 tutors (exact count validated at enrollment).
+      // For one-on-one: exactly 1 tutor.
+      const slotPolicy = policy || (sessionType === 'playgroup'
+        ? { minTutors: 1, maxTutors: 4, sessionType: 'playgroup' }
+        : { minTutors: 1, maxTutors: 1 });
+      const tutorCountError = validateTutorCount(slotPolicy, tutorIds.length);
+      if (tutorCountError) return res.status(400).json({ success: false, message: tutorCountError });
+
+      const tutors = await User.find({ _id: { $in: tutorIds }, role: 'tutor', isActive: true, deletedAt: null }).select('_id').lean();
+      if (tutors.length !== tutorIds.length) return res.status(400).json({ success: false, message: 'One or more tutors are inactive or not found.' });
 
       // Validate tutoring area
       const area = await TutoringArea.findById(tutoringAreaId).lean();
@@ -195,27 +202,28 @@ const createWeeklyScheduleTemplate = async (req, res) => {
         });
       }
 
-      // Check for template conflicts
-      const conflictCheck = await validateTemplateEntry(
-        tutorId,
-        dow,
-        normalizeTime(startTime),
-        tutoringAreaId,
-        startDate
-      );
-
-      if (!conflictCheck.ok) {
-        return res.status(400).json({
-          success: false,
-          message: conflictCheck.reason
-        });
+      for (const assignedTutorId of tutorIds) {
+        const conflictCheck = await validateTemplateEntry(
+          assignedTutorId,
+          dow,
+          normalizeTime(startTime),
+          tutoringAreaId,
+          startDate
+        );
+        if (!conflictCheck.ok) {
+          return res.status(400).json({
+            success: false,
+            message: conflictCheck.reason
+          });
+        }
       }
 
       validatedEntries.push({
         dayOfWeek: dow,
         startTime: normalizeTime(startTime),
         endTime: normalizeTime(endTime),
-        tutorId,
+        tutorId: tutorIds[0],
+        tutorIds,
         sessionType,
         tutoringAreaId,
         subjectId,
@@ -252,6 +260,7 @@ const createWeeklyScheduleTemplate = async (req, res) => {
     const populated = await WeeklyScheduleTemplate.findById(template._id)
       .populate('createdBy', 'firstName lastName email')
       .populate('scheduleEntries.tutorId', 'firstName lastName email')
+      .populate('scheduleEntries.tutorIds', 'firstName lastName email')
       .populate('scheduleEntries.tutoringAreaId', 'name areaType')
       .populate('scheduleEntries.subjectId', 'name code')
       .lean();
@@ -286,6 +295,7 @@ const listWeeklyScheduleTemplates = async (req, res) => {
     const templates = await WeeklyScheduleTemplate.find(query)
       .populate('createdBy', 'firstName lastName email')
       .populate('scheduleEntries.tutorId', 'firstName lastName')
+      .populate('scheduleEntries.tutorIds', 'firstName lastName')
       .populate('scheduleEntries.tutoringAreaId', 'name areaType')
       .populate('scheduleEntries.subjectId', 'name code')
       .skip(Number(skip))
@@ -322,6 +332,7 @@ const getWeeklyScheduleTemplate = async (req, res) => {
     const template = await WeeklyScheduleTemplate.findById(req.params.id)
       .populate('createdBy', 'firstName lastName email')
       .populate('scheduleEntries.tutorId', 'firstName lastName email')
+      .populate('scheduleEntries.tutorIds', 'firstName lastName email')
       .populate('scheduleEntries.tutoringAreaId', 'name areaType isActive')
       .populate('scheduleEntries.subjectId', 'name code')
       .lean();
@@ -502,13 +513,16 @@ const generateSessionsFromTemplate = async (req, res) => {
           const sessionDate = getDateForWeekDay(entry.dayOfWeek, generationWeekStart);
 
           // Check for conflicts again (in case things changed).
-          const tutorConflict = await isTutorDoubleBooked(
-            entry.tutorId,
+          const tutorIds = Array.isArray(entry.tutorIds) && entry.tutorIds.length > 0
+            ? entry.tutorIds
+            : [entry.tutorId];
+          const tutorConflict = await Promise.all(tutorIds.map((tutorId) => isTutorDoubleBooked(
+            tutorId,
             sessionDate,
             entry.startTime
-          );
+          )));
 
-          if (tutorConflict) {
+          if (tutorConflict.some(Boolean)) {
             errors.push(`Tutor conflict on ${DAY_INDEXES[entry.dayOfWeek]} (${sessionDate.toISOString().slice(0, 10)})`);
             continue;
           }
@@ -529,7 +543,8 @@ const generateSessionsFromTemplate = async (req, res) => {
           const maxCapacity = getMaxCapacity(sessionType);
 
           const session = await Schedule.create({
-            tutor: entry.tutorId,
+            tutor: tutorIds[0],
+            tutors: tutorIds,
             subject: entry.subjectId,
             date: sessionDate,
             startTime: normalizeTime(entry.startTime),

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const User = require('../models/User');
+const Enrollment = require('../models/Enrollment');
 const AdminEmailVerification = require('../models/AdminEmailVerification');
 const jwt = require('jsonwebtoken');
 const { validateName, validatePhoneNoLetters } = require('../utils/validation');
@@ -103,6 +104,30 @@ function getLoginOtpPurpose(role) {
   return role === 'admin' || role === 'super_admin'
     ? ADMIN_LOGIN_OTP_PURPOSE
     : USER_LOGIN_OTP_PURPOSE;
+}
+
+async function getEnrollmentLoginBlock(user) {
+  if (user?.role !== 'student' && user?.role !== 'parent') return null;
+
+  if (user.role === 'parent') {
+    const hasApprovedEnrollment = await Enrollment.exists({
+      parent: user._id,
+      status: { $in: ['approved', 'active'] },
+    });
+    if (hasApprovedEnrollment) return null;
+  }
+
+  if (user.enrollmentStatus === 'rejected') {
+    return {
+      code: 'ENROLLMENT_REJECTED',
+      message: 'Your enrollment was rejected by the admin. Please review the rejection reason and resubmit your application.'
+    };
+  }
+
+  return {
+    code: 'ENROLLMENT_PENDING_APPROVAL',
+    message: 'Enrollment is pending admin approval. You can log in once your account is approved.'
+  };
 }
 
 function getNextOtpResendCooldownMs(resendCount = 0) {
@@ -670,13 +695,16 @@ const loginStart = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Account is archived/suspended. Please contact admin.' });
     }
 
+    const enrollmentLoginBlock = await getEnrollmentLoginBlock(user);
+    if (enrollmentLoginBlock) {
+      return res.status(403).json({
+        success: false,
+        ...enrollmentLoginBlock
+      });
+    }
+
     if (!user.isActive) {
-      // Parent accounts start inactive — they must be allowed to log in to
-      // track their enrollment status and manage their application.
-      // Only block if the account is truly deactivated (not simply pending approval).
-      if (user.role === 'parent') {
-        // Allow — parent will see their enrollment tracking dashboard
-      } else if (user.role === 'student') {
+      if (user.role === 'student' || user.role === 'parent') {
         return res.status(403).json({
           success: false,
           code: 'ENROLLMENT_PENDING_APPROVAL',
@@ -955,6 +983,15 @@ const verifyLoginOtp = async (req, res) => {
       });
     }
 
+    const enrollmentLoginBlock = await getEnrollmentLoginBlock(user);
+    if (enrollmentLoginBlock) {
+      await AdminEmailVerification.deleteOne({ _id: verificationRecord._id });
+      return res.status(403).json({
+        success: false,
+        ...enrollmentLoginBlock
+      });
+    }
+
     if (!user.isActive) {
       await AdminEmailVerification.deleteOne({ _id: verificationRecord._id });
 
@@ -969,7 +1006,11 @@ const verifyLoginOtp = async (req, res) => {
       // Parent accounts are inactive until enrollment is approved —
       // they must be allowed through so they can track their application.
       if (user.role === 'parent') {
-        // Do NOT block — continue to issue the login token below.
+        return res.status(403).json({
+          success: false,
+          code: 'ENROLLMENT_PENDING_APPROVAL',
+          message: 'Enrollment is pending admin approval. You can log in once your account is approved.'
+        });
       } else {
         return res.status(401).json({
           success: false,
@@ -1160,6 +1201,14 @@ const getMe = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    const enrollmentLoginBlock = await getEnrollmentLoginBlock(user);
+    if (enrollmentLoginBlock) {
+      return res.status(403).json({
+        success: false,
+        ...enrollmentLoginBlock
+      });
+    }
    
     // Return user in frontend-friendly format
     const fullName = [user.firstName, user.middleName, user.lastName].filter(Boolean).join(' ');
@@ -1215,7 +1264,7 @@ const getMe = async (req, res) => {
 // @access  Private
 const updateProfile = async (req, res) => {
   try {
-    const { firstName, middleName, lastName, phone, gradeLevel, guardianName, guardianPhone, subjectsTaught, employmentType, availability } = req.body;
+    const { firstName, middleName, lastName, phone, gradeLevel, guardianName, guardianPhone, employmentType, availability } = req.body;
    
     const user = await User.findById(req.user.id);
    
@@ -1268,7 +1317,6 @@ const updateProfile = async (req, res) => {
     }
     // Tutor-only
     if (user.role === 'tutor') {
-      if (Array.isArray(subjectsTaught)) user.subjectsTaught = subjectsTaught;
       if (employmentType !== undefined && ['full-time', 'part-time'].includes(employmentType)) user.employmentType = employmentType;
       if (availability !== undefined) user.availability = String(availability || '').trim();
     }
