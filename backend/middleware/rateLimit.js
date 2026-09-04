@@ -77,6 +77,13 @@ const authenticatedAiChatLimiter = createLimiter(
   'Too many AI chat requests. Please try again later.'
 );
 
+// For routes that serve both authenticated and anonymous users (optionalProtect):
+// anonymous callers get the stricter public limit, authenticated users the higher one.
+// Must be mounted AFTER optionalProtect so req.user is populated.
+function aiChatLimiterByAuth(req, res, next) {
+  return (req.user ? authenticatedAiChatLimiter : publicAiChatLimiter)(req, res, next);
+}
+
 module.exports = {
   userLoginLimiter,
   adminLoginLimiter,
@@ -84,4 +91,5 @@ module.exports = {
   passwordOtpVerifyLimiter,
   publicAiChatLimiter,
   authenticatedAiChatLimiter,
+  aiChatLimiterByAuth,
 };

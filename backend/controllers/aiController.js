@@ -9,6 +9,25 @@ const Grade = require('../models/Grade');
 const LearningMaterial = require('../models/LearningMaterial');
 const { getIntentReply, getChatModelMetrics } = require('../utils/chatIntentModel');
 const AIResponseDatasets = require('../ai_training/aiResponseDatasets');
+const { logAiInteraction } = require('../utils/aiAuditService');
+const { screenMessageForDistress, getChildSafetyMessage } = require('../utils/childSafetyFilter');
+const { createEscalation } = require('../utils/escalationService');
+const { detectExplicitHandoffTrigger, isUnhelpfulReply, getHandoffAcknowledgement } = require('../utils/handoffService');
+const {
+  TUTORING_ENABLED,
+  detectTutoringIntent,
+  buildTutoringSystemPrompt,
+  getTutoringUnavailableReply,
+  getNoEnrollmentTutoringReply,
+  getTutoringFallbackReply,
+} = require('../utils/tutoringMode');
+const {
+  TUTOR_AI_ENABLED,
+  detectStudentNotesIntent,
+  detectLessonPrepIntent,
+  getLessonPrepUnavailableReply,
+} = require('../utils/tutorAi');
+const { isAccountScopedQuestion, getLoginPromptReply } = require('../utils/publicChatGuard');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'phi:latest';
@@ -329,7 +348,11 @@ function getRoleSpecificContext(userRole) {
   if (userRole === 'tutor') {
     return 'You are assisting a Bee Bright tutor. Help them with managing their tutoring sessions, uploading and organizing learning materials, student support, communication with admin, and center policies. Focus on their teaching responsibilities and student management.';
   }
-  
+
+  if (userRole === 'parent') {
+    return 'You are assisting a Bee Bright parent or guardian. Help them with their own enrolled child or children: enrollment status, payment status, class schedule, and grades or academic progress. A parent may have more than one enrolled child. Before giving schedule or grade details, if the parent has not named which child, ask them which child by name. Only discuss data for children linked to this parent account through the grounded account data provided. Never invent enrollment, payment, schedule, or grade records, and never reveal data about other families.';
+  }
+
   if (userRole === 'admin' || userRole === 'super_admin') {
     return `You are assisting a Bee Bright ${userRole === 'super_admin' ? 'Super Admin' : 'Admin'}. Help with system management: enrollment verification, payment review, schedule coordination, student and tutor management, data analysis, and administrative operations. When grounded data is available, use it to provide accurate enrollment/payment/schedule statistics. Be precise and professional in all responses.`;
   }
@@ -3331,6 +3354,19 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
     return getCredentialDisclosureReply(effectiveLanguageProfile);
   }
 
+  // Parent grounded answers (own child's enrollment, payment, schedule, grades) take
+  // priority over the admin-scoped statistic handlers below, which would otherwise
+  // return "not available in the system" for a parent.
+  if (user?.role === 'parent' && groundedContext?.fallbackReply) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
+  }
+
+  // Tutor student-notes digest (Task 7) — deterministic, before the generic grade handler
+  // that would tell a tutor to "check the Progress section".
+  if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
+    return groundedContext.fallbackReply;
+  }
+
   const roleBasedContactDetailsReply = await getRoleBasedContactDetailsReply(user, message, effectiveLanguageProfile, history);
   if (roleBasedContactDetailsReply) {
     return roleBasedContactDetailsReply;
@@ -3434,6 +3470,18 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
 
   if (isCredentialDisclosureRequest(normalized)) {
     return getCredentialDisclosureReply(effectiveLanguageProfile);
+  }
+
+  // Parent grounded answers take priority over the admin-scoped statistic handlers
+  // below, which would otherwise return "not available in the system" for a parent.
+  if (user?.role === 'parent' && groundedContext?.fallbackReply) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
+  }
+
+  // Tutor student-notes digest (Task 7) — deterministic, before the generic grade handler
+  // that would tell a tutor to "check the Progress section".
+  if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
+    return groundedContext.fallbackReply;
   }
 
   const roleBasedContactDetailsReply = await getRoleBasedContactDetailsReply(user, message, effectiveLanguageProfile, history);
@@ -3716,6 +3764,36 @@ function detectGroundedTopic(user, message) {
 
   const normalized = normalizeMessage(message);
 
+  // Parent asking about their own child's records. Self-contained: parent questions are
+  // routed only by the tight checks here (status/personal phrasing), never by the generic
+  // intent classifier below — so "how do payments work" still gets the process answer.
+  // Scoped to role 'parent' so students, tutors, and admins keep their pipeline unchanged.
+  if (user.role === 'parent') {
+    if (isPersonInfoQuery(normalized)) return null;
+    if (isParentChildProgressQuestion(normalized)) return 'grades';
+
+    const scheduleKeyword = /(schedule|class|classes|session|sessions|lesson|lessons|calendar|timetable)/.test(normalized);
+    const personalCue = /(\bnext\b|\bupcoming\b|\bmy\b|\bmine\b|\bour\b|\bhis\b|\bher\b|\btheir\b|\banak\b|\bchild\b|\bkid\b|\bson\b|\bdaughter\b|['’]s\b)/.test(normalized);
+    if (scheduleKeyword && (personalCue || !isGeneralScheduleHoursQuestion(normalized))) {
+      return 'schedule';
+    }
+    if (!isPaymentQuestion(normalized)
+      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|down ?payment.*(status|left|remaining))/.test(normalized)) {
+      return 'payments';
+    }
+    if (!isEnrollmentStepsQuestion(normalized)
+      && /(enrollment status|my enrollment|our enrollment|is my (child|son|daughter|kid) enrolled|enrolled na ba|approved na ba|pending approval|admitted|slot confirmed)/.test(normalized)) {
+      return 'enrollment';
+    }
+    return null;
+  }
+
+  // Tutor asking for a digest of what they have recorded about one of their students.
+  // Self-contained so the tutor's existing schedule/other pipeline is unchanged.
+  if (user.role === 'tutor' && detectStudentNotesIntent(normalized)) {
+    return 'student_notes';
+  }
+
   if (isGeneralScheduleHoursQuestion(normalized)) {
     return null;
   }
@@ -3896,6 +3974,108 @@ async function buildTutorScheduleContext(userId) {
   };
 }
 
+// Distinct students this tutor is assigned to (one-on-one `student` + group `students`).
+async function getTutorStudents(tutorId) {
+  const schedules = await Schedule.find({ $or: [{ tutor: tutorId }, { tutors: tutorId }] })
+    .populate('student', 'firstName lastName')
+    .populate('students', 'firstName lastName')
+    .lean();
+
+  const byId = new Map();
+  for (const s of schedules) {
+    const people = [s.student, ...(Array.isArray(s.students) ? s.students : [])].filter(Boolean);
+    for (const p of people) {
+      byId.set(String(p._id), p);
+    }
+  }
+  return [...byId.values()];
+}
+
+function personDisplayName(person) {
+  return [person?.firstName, person?.lastName].filter(Boolean).join(' ').trim() || 'the student';
+}
+
+// Match a person named in the message. Returns the single match, or null (ambiguous / none).
+function resolveNamedPerson(message, people) {
+  const normalized = normalizeMessage(message);
+  const named = people.filter((p) => {
+    const fn = String(p.firstName || '').toLowerCase().trim();
+    const ln = String(p.lastName || '').toLowerCase().trim();
+    if (fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized)) return true;
+    if (ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized)) return true;
+    return false;
+  });
+  return named.length === 1 ? named[0] : null;
+}
+
+/**
+ * Deterministic digest of a tutor's own Grade.remarks for one of their students.
+ * Organises real tutor-authored text — never generates observations. Scoped to grades
+ * this tutor recorded (Grade.tutor === tutorId), matching getGradesForStudent.
+ */
+async function buildTutorStudentNotesContext(tutorId, message) {
+  const students = await getTutorStudents(tutorId);
+  if (!students.length) {
+    return {
+      contextText: 'Role: tutor\nThis tutor has no assigned students.',
+      fallbackReply: 'I could not find any students assigned to you yet.',
+    };
+  }
+
+  const target = resolveNamedPerson(message, students);
+  if (!target) {
+    const names = students.map(personDisplayName);
+    return {
+      contextText: `Role: tutor\nAssigned students: ${names.join(', ')}\nThe tutor did not name which student.`,
+      fallbackReply: `Which student? You're assigned to: ${names.join(', ')}. Reply with the name, e.g. "summarise my remarks on ${(students[0].firstName || names[0]).trim()}".`,
+    };
+  }
+
+  const grades = await Grade.find({ tutor: tutorId, student: target._id })
+    .sort({ createdAt: 1 })
+    .lean();
+
+  if (!grades.length) {
+    return {
+      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nNo grades recorded by this tutor for this student.`,
+      fallbackReply: `You haven't recorded any grades for ${personDisplayName(target)} yet, so there are no remarks to summarise.`,
+    };
+  }
+
+  const pctOf = (g) => (g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0);
+  const bySubject = new Map();
+  for (const g of grades) {
+    const key = `${g.programCategory} / ${g.subjectItem}`;
+    if (!bySubject.has(key)) bySubject.set(key, []);
+    bySubject.get(key).push(g);
+  }
+
+  const blocks = [];
+  for (const [subject, list] of bySubject) {
+    const pcts = list.map(pctOf);
+    const avg = Math.round(pcts.reduce((s, n) => s + n, 0) / pcts.length);
+    const trend = pcts.length > 1
+      ? (pcts[pcts.length - 1] > pcts[0] ? `trending up (${pcts[0]}% → ${pcts[pcts.length - 1]}%)`
+        : pcts[pcts.length - 1] < pcts[0] ? `trending down (${pcts[0]}% → ${pcts[pcts.length - 1]}%)`
+          : 'stable')
+      : 'one entry';
+    const remarkLines = list
+      .filter((g) => g.remarks && String(g.remarks).trim())
+      .map((g) => `  • ${g.period}: "${String(g.remarks).replace(/"/g, "'")}"`);
+    blocks.push(
+      `${subject} — average ${avg}%, ${trend}`
+      + (remarkLines.length ? `\n${remarkLines.join('\n')}` : '\n  • (no written remarks)')
+    );
+  }
+
+  const digest = `Notes on ${personDisplayName(target)}, from ${grades.length} grade entr${grades.length === 1 ? 'y' : 'ies'} you recorded:\n${blocks.join('\n')}`;
+
+  return {
+    contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\n${digest}`,
+    fallbackReply: digest,
+  };
+}
+
 async function buildAdminPaymentContext() {
   const [submittedCount, latestPayments] = await Promise.all([
     Payment.countDocuments({ status: 'submitted' }),
@@ -3983,11 +4163,265 @@ async function buildAdminScheduleContext() {
   };
 }
 
+function isParentChildProgressQuestion(normalized) {
+  return /(grade|grades|grading|grado|progress|report card|marks|score|scores|failing|passing|behind|struggling|performing|performance|doing in|how is my (child|kid|son|daughter|anak)|how'?s my (child|kid|son|daughter|anak)|kumusta.*anak|anak ko.*(grade|aral|klase|marka))/.test(normalized);
+}
+
+async function getParentChildEnrollments(parentId) {
+  return Enrollment.find({ parent: parentId })
+    .populate('selectedSubjects', 'name code')
+    .sort({ createdAt: -1 })
+    .lean();
+}
+
+function childDisplayName(enrollment) {
+  const snap = enrollment?.studentSnapshot || {};
+  return [snap.firstName, snap.lastName].filter(Boolean).join(' ').trim() || 'your child';
+}
+
+// Match the child the parent named in this single message. Returns the enrollment when
+// exactly one child name matches, otherwise null (caller decides whether to disambiguate).
+// Only reads children linked to this parent via Enrollment.parent — never a broad query.
+function resolveParentChild(message, enrollments) {
+  const normalized = normalizeMessage(message);
+  const named = enrollments.filter((e) => {
+    const snap = e.studentSnapshot || {};
+    const fn = String(snap.firstName || '').toLowerCase().trim();
+    const ln = String(snap.lastName || '').toLowerCase().trim();
+    if (fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized)) return true;
+    if (ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized)) return true;
+    return false;
+  });
+  return { matched: named.length === 1 ? named[0] : null };
+}
+
+function parentDisambiguationContext(enrollments, topicLabel) {
+  const names = enrollments.map(childDisplayName);
+  const list = names.join(', ');
+  const example = `${(enrollments[0].studentSnapshot?.firstName || names[0]).trim()}'s ${topicLabel}`;
+  return {
+    contextText: [
+      'Role: parent',
+      `Linked child records: ${enrollments.length} (${list})`,
+      `The parent asked about ${topicLabel} but did not name which child. Ask them to name the child before answering. Do not reveal any child-specific detail yet.`,
+    ].join('\n'),
+    fallbackReply: enrollments.length === 1
+      ? `To make sure I pull the right records, please tell me your child's name with the request, for example "${example}".`
+      : `You have ${enrollments.length} children on record: ${list}. Whose ${topicLabel} would you like? Please reply with the child's name, for example "${example}".`,
+  };
+}
+
+async function buildParentEnrollmentContext(parentId, message) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
+      fallbackReply: 'I could not find any enrollment linked to your account yet. If you just started one, open the Enrollment page and complete the submission and payment steps.',
+    };
+  }
+
+  const { matched } = resolveParentChild(message, enrollments);
+  const targets = matched ? [matched] : enrollments;
+
+  const blocks = targets.map((e) => {
+    const programs = (e.packages || []).map((p) => p.displayName).filter(Boolean).join(', ')
+      || (e.selectedSubjects || []).map((s) => s.name).filter(Boolean).join(', ')
+      || 'No programs listed';
+    return [
+      `Child: ${childDisplayName(e)}`,
+      `Enrollment reference: ${e.enrollmentId || 'Not available'}`,
+      `Student ID: ${e.studentId || 'Not yet assigned'}`,
+      `Enrollment status: ${formatStatusLabel(e.status)}`,
+      `Payment status: ${formatStatusLabel(e.paymentStatus)}`,
+      `Programs / subjects: ${programs}`,
+      `Total fee: ${formatCurrency(e.totalFee)}`,
+      `Preferred start date: ${e.preferredStartDate ? formatDate(e.preferredStartDate) : 'Not set'}`,
+      e.rejectionReason ? `Rejection reason: ${e.rejectionReason}` : null,
+    ].filter(Boolean).join('\n');
+  });
+
+  const summary = targets
+    .map((e) => `${childDisplayName(e)}: enrollment ${formatStatusLabel(e.status)}, payment ${formatStatusLabel(e.paymentStatus)}`)
+    .join('; ');
+
+  return {
+    contextText: ['Role: parent', `Linked child enrollments: ${enrollments.length}`, ...blocks].join('\n\n'),
+    fallbackReply: `Here is the latest on your ${targets.length > 1 ? 'children' : 'child'} — ${summary}.`,
+  };
+}
+
+async function buildParentPaymentContext(parentId, message) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment or payment records are linked to this parent account.',
+      fallbackReply: 'I could not find any payment linked to your account yet. Payments are made during enrollment, after the enrollment form is submitted.',
+    };
+  }
+
+  const { matched } = resolveParentChild(message, enrollments);
+  const targets = matched ? [matched] : enrollments;
+
+  const blocks = [];
+  const summaries = [];
+  for (const e of targets) {
+    const payments = await Payment.find({ enrollment: e._id })
+      .sort({ createdAt: -1 })
+      .select('referenceNumber status paymentMethod paymentType amountDue amountPaid amount rejectionReason submittedAt verifiedAt')
+      .lean();
+    const latest = payments[0];
+    blocks.push([
+      `Child: ${childDisplayName(e)}`,
+      `Enrollment reference: ${e.enrollmentId || 'Not available'}`,
+      `Enrollment payment status: ${formatStatusLabel(e.paymentStatus)}`,
+      `Total fee: ${formatCurrency(e.totalFee)}`,
+      latest
+        ? `Latest payment: ${latest.referenceNumber || 'no reference'} — ${formatStatusLabel(latest.status)}, ${formatStatusLabel(latest.paymentType)} payment, method ${formatStatusLabel(latest.paymentMethod)}, amount due ${formatCurrency(latest.amountDue != null ? latest.amountDue : latest.amount)}${latest.amountPaid != null ? `, amount paid ${formatCurrency(latest.amountPaid)}` : ''}`
+        : 'Latest payment: no payment record yet',
+      latest && latest.status === 'rejected' && latest.rejectionReason ? `Rejection reason: ${latest.rejectionReason}` : null,
+    ].filter(Boolean).join('\n'));
+    summaries.push(latest
+      ? `${childDisplayName(e)}: payment ${formatStatusLabel(latest.status)} (${formatCurrency(latest.amountDue != null ? latest.amountDue : latest.amount)})`
+      : `${childDisplayName(e)}: no payment submitted yet`);
+  }
+
+  return {
+    contextText: ['Role: parent', ...blocks].join('\n\n'),
+    fallbackReply: `Payment status — ${summaries.join('; ')}.`,
+  };
+}
+
+async function buildParentScheduleContext(parentId, message) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
+      fallbackReply: 'I could not find any enrolled child linked to your account yet, so there is no class schedule to show.',
+    };
+  }
+
+  const { matched } = resolveParentChild(message, enrollments);
+  if (!matched) {
+    return parentDisambiguationContext(enrollments, 'schedule');
+  }
+
+  if (!matched.student) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nEnrollment status: ${formatStatusLabel(matched.status)}\nNo class schedule has been assigned to this child yet.`,
+      fallbackReply: `${childDisplayName(matched)}'s enrollment is ${formatStatusLabel(matched.status)}. Classes are not scheduled yet — the admin assigns the schedule after the enrollment is approved.`,
+    };
+  }
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const sessions = await Schedule.find({
+    $or: [{ student: matched.student }, { students: matched.student }],
+    date: { $gte: startOfToday },
+  })
+    .populate('subject', 'name code')
+    .populate('tutor', 'firstName middleName lastName')
+    .sort({ date: 1, startTime: 1 })
+    .limit(5)
+    .lean();
+
+  if (!sessions.length) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nNo upcoming sessions are scheduled.`,
+      fallbackReply: `I could not find an upcoming class for ${childDisplayName(matched)} right now. Check the Schedule section of your dashboard or ask admin if a class was just assigned.`,
+    };
+  }
+
+  return {
+    contextText: [
+      'Role: parent',
+      `Child: ${childDisplayName(matched)}`,
+      `Upcoming sessions count: ${sessions.length}`,
+      ...sessions.map((s, i) => `Upcoming session ${i + 1}: ${formatScheduleLine(s, 'tutor')}`),
+    ].join('\n'),
+    fallbackReply: `${childDisplayName(matched)}'s next class is ${formatScheduleLine(sessions[0], 'tutor')}.`,
+  };
+}
+
+async function buildParentGradesContext(parentId, message) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
+      fallbackReply: 'I could not find any enrolled child linked to your account yet, so there are no grades to show.',
+    };
+  }
+
+  const { matched } = resolveParentChild(message, enrollments);
+  if (!matched) {
+    return parentDisambiguationContext(enrollments, 'grades');
+  }
+
+  if (!matched.student) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nEnrollment status: ${formatStatusLabel(matched.status)}\nNo grades have been recorded for this child yet.`,
+      fallbackReply: `${childDisplayName(matched)}'s enrollment is ${formatStatusLabel(matched.status)}. No grades have been recorded yet.`,
+    };
+  }
+
+  const grades = await Grade.find({ student: matched.student })
+    .populate('tutor', 'firstName middleName lastName')
+    .sort({ programCategory: 1, subjectItem: 1, createdAt: -1 })
+    .lean();
+
+  if (!grades.length) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nNo grades have been recorded yet.`,
+      fallbackReply: `No grades have been recorded for ${childDisplayName(matched)} yet. Please check again later or ask the tutor for an update.`,
+    };
+  }
+
+  const pctOf = (g) => (g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0);
+  const lines = grades.map((g) => {
+    // Tutor-authored remarks are quoted to keep them clearly separated from instructions.
+    const remarks = g.remarks ? `, remarks: "${String(g.remarks).replace(/"/g, "'")}"` : '';
+    return `- ${g.programCategory} / ${g.subjectItem}: ${g.score}/${g.maxScore} (${pctOf(g)}%), period ${g.period}, tutor ${buildFullName(g.tutor)}${remarks}`;
+  });
+  const avg = Math.round(grades.reduce((s, g) => s + pctOf(g), 0) / grades.length);
+  const below = [...new Set(grades.filter((g) => pctOf(g) < 75).map((g) => g.subjectItem))];
+
+  return {
+    contextText: [
+      'Role: parent',
+      `Child: ${childDisplayName(matched)}`,
+      `Student ID: ${matched.studentId || 'Not assigned'}`,
+      `Grades recorded: ${grades.length}`,
+      `Overall average: ${avg}%`,
+      ...lines,
+    ].join('\n'),
+    fallbackReply: [
+      `${childDisplayName(matched)} — ${grades.length} recorded grade(s), overall average about ${avg}%:`,
+      ...lines.slice(0, 20),
+      below.length ? `Below the 75% mark: ${below.join(', ')}.` : 'All recorded grades are at or above the 75% mark.',
+    ].join('\n'),
+  };
+}
+
 async function getGroundedChatContext(user, message) {
   const topic = detectGroundedTopic(user, message);
 
   if (!topic) {
     return null;
+  }
+
+  const context = await resolveGroundedContextForTopic(user, message, topic);
+  if (context && !context.topic) {
+    // Attach the resolved topic so callers (audit logging) know which record type was read.
+    context.topic = topic;
+  }
+  return context;
+}
+
+async function resolveGroundedContextForTopic(user, message, topic) {
+  if (user.role === 'parent') {
+    if (topic === 'enrollment') return buildParentEnrollmentContext(user._id, message);
+    if (topic === 'payments') return buildParentPaymentContext(user._id, message);
+    if (topic === 'schedule') return buildParentScheduleContext(user._id, message);
+    if (topic === 'grades') return buildParentGradesContext(user._id, message);
   }
 
   if (user.role === 'student') {
@@ -3997,6 +4431,7 @@ async function getGroundedChatContext(user, message) {
   }
 
   if (user.role === 'tutor') {
+    if (topic === 'student_notes') return buildTutorStudentNotesContext(user._id, message);
     if (topic === 'schedule') return buildTutorScheduleContext(user._id);
     if (topic === 'payments') {
       return {
@@ -4206,21 +4641,365 @@ const getRecommendations = async (req, res) => {
 };
 
 /**
+ * Guardrails for the anonymous (not-logged-in) chat surface (Task 9). Runs first, only
+ * when there is no authenticated user. Two short-circuits:
+ *  1. Child-safety screen — applies here too, since the landing page has no login wall.
+ *     Opens an anonymous urgent Escalation, audit-logs, returns the fixed calm reply.
+ *  2. Account-scoped question — returns a fixed "please log in" reply. Never looks up
+ *     anything, never asks for identifying info.
+ * Returns null for authenticated users and for ordinary marketing/FAQ questions, so the
+ * normal pipeline (which already produces visitor answers) proceeds.
+ * Self-contained: performs its own escalation + audit writes.
+ */
+async function handleAnonymousChatGuards(req, message) {
+  if (!req || req.user) {
+    return null;
+  }
+
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+
+  const screen = screenMessageForDistress(message);
+  if (screen.flagged) {
+    const safetyReply = getChildSafetyMessage(screen.category, languageProfile);
+    await createEscalation({
+      req,
+      user: null,
+      source: 'child_safety',
+      category: screen.category,
+      trigger: `Anonymous chat message matched ${screen.category} safety pattern`,
+      severity: 'urgent',
+      snippet: String(message || ''),
+    });
+    await logAiInteraction({
+      req,
+      message,
+      reply: safetyReply,
+      groundingPath: 'safety',
+      language: languageProfile,
+      safetyCategory: screen.category,
+    });
+    return safetyReply;
+  }
+
+  if (isAccountScopedQuestion(message)) {
+    const reply = getLoginPromptReply(languageProfile);
+    await logAiInteraction({ req, message, reply, groundingPath: 'public-login-required', language: languageProfile });
+    return reply;
+  }
+
+  return null;
+}
+
+/**
+ * Child-safety pre-screen. MUST run before intent classification / grounding / LLM.
+ * For a student message that trips the high-signal filter it: opens an urgent
+ * Escalation, audit-logs the exchange, and returns the fixed calm reply string.
+ * Returns null when nothing is flagged (or the sender is not a student), so the
+ * caller proceeds with the normal pipeline.
+ *
+ * Self-contained: it performs its own escalation + audit writes. Callers must NOT
+ * additionally log the returned reply.
+ */
+async function handleChildSafetyScreen(req, message) {
+  if (!req || !req.user || req.user.role !== 'student') {
+    return null;
+  }
+
+  const screen = screenMessageForDistress(message);
+  if (!screen.flagged) {
+    return null;
+  }
+
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+  const safetyReply = getChildSafetyMessage(screen.category, languageProfile);
+
+  await createEscalation({
+    req,
+    user: req.user,
+    source: 'child_safety',
+    category: screen.category,
+    trigger: `Student message matched ${screen.category} safety pattern`,
+    severity: 'urgent',
+    snippet: String(message || ''),
+  });
+
+  await logAiInteraction({
+    req,
+    message,
+    reply: safetyReply,
+    groundingPath: 'safety',
+    language: languageProfile,
+    safetyCategory: screen.category,
+  });
+
+  return safetyReply;
+}
+
+/**
+ * Explicit human-handoff trigger (Task 4). Runs after the safety screen, before the
+ * normal pipeline. On a hit it opens a 'handoff' escalation, audit-logs the exchange,
+ * and returns the acknowledgement string. Returns null when nothing is triggered.
+ *
+ * Self-contained: performs its own escalation + audit writes. Authenticated users only;
+ * the public/landing path is handled in Task 9.
+ */
+async function handleExplicitHandoff(req, message) {
+  if (!req || !req.user) {
+    return null;
+  }
+  const trigger = detectExplicitHandoffTrigger(message);
+  if (!trigger) {
+    return null;
+  }
+
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+  const ack = getHandoffAcknowledgement(trigger.category, languageProfile);
+
+  await createEscalation({
+    req,
+    user: req.user,
+    source: 'handoff',
+    category: trigger.category,
+    trigger: `User message matched ${trigger.category} handoff pattern`,
+    severity: trigger.severity || 'normal',
+    snippet: String(message || ''),
+  });
+
+  await logAiInteraction({
+    req,
+    message,
+    reply: ack,
+    groundingPath: 'handoff',
+    language: languageProfile,
+  });
+
+  return ack;
+}
+
+/**
+ * Implicit handoff (Task 4): two consecutive "couldn't help" replies. Keeps the reply
+ * and appends a handoff note, opening a normal-severity 'handoff' escalation once.
+ * Returns the (possibly augmented) reply string.
+ */
+async function applyRepeatedNoMatchHandoff(req, message, history, reply, languageProfile) {
+  if (!req || !req.user || !isUnhelpfulReply(reply)) {
+    return reply;
+  }
+  const priorAssistant = (Array.isArray(history) ? history : [])
+    .slice()
+    .reverse()
+    .find((m) => m && m.role === 'assistant' && typeof m.content === 'string');
+
+  if (!priorAssistant || !isUnhelpfulReply(priorAssistant.content)) {
+    return reply;
+  }
+
+  await createEscalation({
+    req,
+    user: req.user,
+    source: 'handoff',
+    category: 'repeated_no_match',
+    trigger: 'Two consecutive unhelpful assistant replies',
+    severity: 'normal',
+    snippet: String(message || ''),
+  });
+
+  const note = getHandoffAcknowledgement('repeated_no_match', languageProfile);
+  return `${reply}\n\n${note}`;
+}
+
+/**
+ * Resolve the student's tutoring scope from their active enrollment. Reads only the
+ * requesting student's own enrollment (Enrollment.student === userId).
+ */
+async function buildStudentTutoringProfile(userId) {
+  const enrollment = await Enrollment.findOne({
+    student: userId,
+    status: { $in: ['approved', 'active'] },
+  })
+    .populate('selectedSubjects', 'name code')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (!enrollment) {
+    return { hasActiveEnrollment: false, subjects: [], programs: [], age: null };
+  }
+
+  const subjects = (enrollment.selectedSubjects || []).map((s) => s.name).filter(Boolean);
+  const programs = (enrollment.packages || []).map((p) => p.displayName).filter(Boolean);
+  const age = enrollment.studentSnapshot && typeof enrollment.studentSnapshot.computedAge === 'number'
+    ? enrollment.studentSnapshot.computedAge
+    : null;
+
+  return { hasActiveEnrollment: true, subjects, programs, age };
+}
+
+/**
+ * Generate a guided tutoring reply via the LLM. phi for now; Task 8 may swap the model
+ * for this path only. Falls back to a safe "try again / ask your tutor" message.
+ */
+async function generateTutoringReply(systemPrompt, message, history, languageProfile) {
+  const safeHistory = Array.isArray(history)
+    ? history
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-8)
+      .map((m) => ({ role: m.role, content: m.content.trim() }))
+    : [];
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...safeHistory,
+    { role: 'user', content: String(message || '').trim() },
+  ];
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        messages,
+        stream: false,
+        options: { temperature: 0.3, num_predict: 320, repeat_penalty: 1.15 },
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      throw new Error(`Ollama ${response.status}`);
+    }
+    const data = await response.json();
+    const text = sanitizeOllamaReply(data.message?.content?.trim() || '');
+    if (text) {
+      return text;
+    }
+  } catch (err) {
+    console.warn('Tutoring LLM unavailable:', err && err.message);
+  }
+  return getTutoringFallbackReply(languageProfile);
+}
+
+/**
+ * Homework-help / tutoring companion (Task 5). Student role only, explicit tutoring
+ * intent only. Runs after the safety screen and explicit handoff, before the normal
+ * navigation pipeline. Gated by TUTORING_ENABLED. Logs internally; returns the reply
+ * string, or null when this is not a tutoring request.
+ */
+async function handleTutoringRequest(req, message, history) {
+  if (!req || !req.user || req.user.role !== 'student') {
+    return null;
+  }
+  if (!detectTutoringIntent(message)) {
+    return null;
+  }
+
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+
+  if (!TUTORING_ENABLED) {
+    const reply = getTutoringUnavailableReply(languageProfile);
+    await logAiInteraction({ req, message, reply, groundingPath: 'tutoring-disabled', language: languageProfile });
+    return reply;
+  }
+
+  const profile = await buildStudentTutoringProfile(req.user._id);
+  const scope = profile.subjects.length ? profile.subjects : profile.programs;
+  if (!profile.hasActiveEnrollment || scope.length === 0) {
+    const reply = getNoEnrollmentTutoringReply(languageProfile);
+    await logAiInteraction({ req, message, reply, groundingPath: 'tutoring-no-enrollment', language: languageProfile });
+    return reply;
+  }
+
+  const systemPrompt = buildTutoringSystemPrompt({
+    subjects: profile.subjects,
+    programs: profile.programs,
+    age: profile.age,
+    languageProfile,
+  });
+  const reply = await generateTutoringReply(systemPrompt, message, history, languageProfile);
+  await logAiInteraction({ req, message, reply, groundingPath: 'tutoring', language: languageProfile });
+  return reply;
+}
+
+/**
+ * Lesson-prep request (Task 7, tutor role). Generation is HELD pending the model
+ * decision (Task 8) — returns a short "not available yet" reply and points the tutor
+ * at the student-notes digest, which does work. Logs internally; returns null when
+ * this is not a lesson-prep request.
+ */
+async function handleLessonPrepRequest(req, message) {
+  if (!req || !req.user || req.user.role !== 'tutor') {
+    return null;
+  }
+  if (!detectLessonPrepIntent(message)) {
+    return null;
+  }
+  const reply = getLessonPrepUnavailableReply();
+  await logAiInteraction({
+    req,
+    message,
+    reply,
+    groundingPath: TUTOR_AI_ENABLED ? 'lesson-prep-held' : 'lesson-prep-disabled',
+    language: 'english',
+  });
+  return reply;
+}
+
+/**
  * POST /api/ai/chat
  * Body: { message: string }
  * Returns a direct chatbot reply from the intent-classification model.
  */
 const chat = async (req, res) => {
+  const { message, history = [] } = req.body || {};
   try {
-    const { message, history = [] } = req.body || {};
+    // Anonymous surface (this handler also serves /public-chat, which has no `protect`).
+    const anonReply = await handleAnonymousChatGuards(req, message);
+    if (anonReply) {
+      return res.status(200).json({ success: true, reply: anonReply });
+    }
+
+    const safetyReply = await handleChildSafetyScreen(req, message);
+    if (safetyReply) {
+      return res.status(200).json({ success: true, reply: safetyReply });
+    }
+
+    const handoffReply = await handleExplicitHandoff(req, message);
+    if (handoffReply) {
+      return res.status(200).json({ success: true, reply: handoffReply });
+    }
+
+    const tutoringReply = await handleTutoringRequest(req, message, history);
+    if (tutoringReply) {
+      return res.status(200).json({ success: true, reply: tutoringReply });
+    }
+
+    const lessonPrepReply = await handleLessonPrepRequest(req, message);
+    if (lessonPrepReply) {
+      return res.status(200).json({ success: true, reply: lessonPrepReply });
+    }
+
     const languageProfile = detectLanguageProfile(message);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
     const classifierResult = getIntentReply(message);
     const groundedContext = await getGroundedChatContext(req.user, message);
-    const reply = await getResolvedReply(req.user, message, classifierResult, groundedContext, effectiveLanguageProfile, history);
+    const baseReply = await getResolvedReply(req.user, message, classifierResult, groundedContext, effectiveLanguageProfile, history);
+    const reply = await applyRepeatedNoMatchHandoff(req, message, history, baseReply, effectiveLanguageProfile);
+    await logAiInteraction({
+      req,
+      message,
+      reply,
+      groundedContext,
+      groundingPath: reply === baseReply ? (groundedContext ? 'grounded' : 'deterministic') : 'handoff',
+      language: effectiveLanguageProfile,
+    });
     res.status(200).json({ success: true, reply });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to get reply.' });
+    await logAiInteraction({ req, message, reply: null, groundingPath: 'error', status: 'FAILED' });
+    // Never surface raw error text on the anonymous/public surface.
+    const clientMessage = req.user ? (error.message || 'Failed to get reply.') : 'Sorry, something went wrong. Please try again.';
+    res.status(500).json({ success: false, message: clientMessage });
   }
 };
 
@@ -4232,10 +5011,55 @@ const publicChat = chat;
  * Proxies to Ollama (phi) with system prompt from ai_training. Public so chatbot works without login.
  */
 const ollamaChat = async (req, res) => {
+  const rawMessage = req.body && req.body.message;
+  const rawHistory = (req.body && Array.isArray(req.body.history)) ? req.body.history : [];
+  // Single exit point so every returned reply is audit-logged (Task 2) and run through
+  // the implicit repeated-no-match handoff check (Task 4).
+  const respond = async (reply, groundingPath, groundedContext = null, language = null, status = 'SUCCESS') => {
+    let finalReply = reply;
+    if (status === 'SUCCESS' && groundingPath !== 'handoff' && groundingPath !== 'safety') {
+      finalReply = await applyRepeatedNoMatchHandoff(req, rawMessage, rawHistory, reply, language || 'english');
+    }
+    const path = finalReply === reply ? groundingPath : 'handoff';
+    await logAiInteraction({ req, message: rawMessage, reply: finalReply, groundedContext, groundingPath: path, language, status });
+    return res.status(200).json({ success: true, reply: finalReply });
+  };
+
   try {
     const { message, history = [] } = req.body || {};
     if (!message || typeof message !== 'string' || !message.trim()) {
+      await logAiInteraction({ req, message: rawMessage, reply: null, groundingPath: 'rejected', status: 'FAILED' });
       return res.status(400).json({ success: false, message: 'Message is required.' });
+    }
+
+    // Anonymous surface guards (child-safety + account-question → log in). Logs internally.
+    const anonReply = await handleAnonymousChatGuards(req, message);
+    if (anonReply) {
+      return res.status(200).json({ success: true, reply: anonReply });
+    }
+
+    // Child-safety pre-screen — before language/intent/grounding/LLM. Logs internally.
+    const safetyReply = await handleChildSafetyScreen(req, message);
+    if (safetyReply) {
+      return res.status(200).json({ success: true, reply: safetyReply });
+    }
+
+    // Explicit human-handoff request — before the normal pipeline. Logs internally.
+    const handoffReply = await handleExplicitHandoff(req, message);
+    if (handoffReply) {
+      return res.status(200).json({ success: true, reply: handoffReply });
+    }
+
+    // Homework-help / tutoring companion (student role, tutoring intent). Logs internally.
+    const tutoringReply = await handleTutoringRequest(req, message, history);
+    if (tutoringReply) {
+      return res.status(200).json({ success: true, reply: tutoringReply });
+    }
+
+    // Lesson-prep request (tutor role) — generation held pending Task 8. Logs internally.
+    const lessonPrepReply = await handleLessonPrepRequest(req, message);
+    if (lessonPrepReply) {
+      return res.status(200).json({ success: true, reply: lessonPrepReply });
     }
 
     const languageOverride = detectLanguageOverrideCommand(message);
@@ -4248,7 +5072,7 @@ const ollamaChat = async (req, res) => {
           'Pakisabi kung aling Bee Bright topic ang gusto mong ipaliwanag ko sa Filipino.',
           'Pakisabi kung aling Bee Bright topic ang gusto mong ipaliwanag ko sa Filipino.'
         );
-        return res.status(200).json({ success: true, reply: promptForTopic });
+        return respond(promptForTopic, 'language-rewrite', null, languageOverride);
       }
 
       const classifierResultForPrevious = getIntentReply(previousTopicMessage);
@@ -4262,7 +5086,7 @@ const ollamaChat = async (req, res) => {
         history
       );
 
-      return res.status(200).json({ success: true, reply: rewrittenReply });
+      return respond(rewrittenReply, 'language-rewrite', groundedContextForPrevious, languageOverride);
     }
 
     const languageProfile = detectLanguageProfile(message);
@@ -4275,12 +5099,12 @@ const ollamaChat = async (req, res) => {
     const shouldForceDeterministicReply = ['english', 'filipino'].includes(effectiveLanguageProfile);
     if (shouldForceDeterministicReply && shouldUseDirectSystemReply(message, classifierResult, groundedContext)) {
       const directScopedReply = await getResolvedReply(req.user, message, classifierResult, groundedContext, effectiveLanguageProfile, history);
-      return res.status(200).json({ success: true, reply: directScopedReply });
+      return respond(directScopedReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
     }
 
     const directReply = await getOllamaBypassReply(req.user, message, groundedContext, classifierResult, effectiveLanguageProfile, history);
     if (directReply) {
-      return res.status(200).json({ success: true, reply: directReply });
+      return respond(directReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
     }
 
     const detectedLang = detectLanguage(message);
@@ -4319,6 +5143,7 @@ const ollamaChat = async (req, res) => {
     ];
 
     let reply;
+    let llmSucceeded = false;
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
@@ -4347,6 +5172,8 @@ const ollamaChat = async (req, res) => {
       reply = sanitizeOllamaReply(data.message?.content?.trim() || '');
       if (!reply) {
         reply = localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile);
+      } else {
+        llmSucceeded = true;
       }
     } catch (ollamaErr) {
       if (ollamaErr.name === 'AbortError') {
@@ -4357,16 +5184,15 @@ const ollamaChat = async (req, res) => {
       reply = localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile);
     }
 
-    res.status(200).json({
-      success: true,
-      reply: reply || localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile) || pickByLanguage(effectiveLanguageProfile, 'I can help with schedules, enrollment, payments, learning materials, and contacting your tutor. Try asking about one of these.', 'Maaari kitang tulungan sa schedule, enrollment, payments, learning materials, at pakikipag-ugnayan sa tutor. Maaari kang magtanong tungkol sa alinman sa mga ito.', 'Maaari kitang tulungan sa schedule, enrollment, payments, learning materials, at pakikipag-ugnayan sa tutor. Maaari kang magtanong tungkol sa alinman sa mga ito.'),
-    });
+    const finalReply = reply || localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile) || pickByLanguage(effectiveLanguageProfile, 'I can help with schedules, enrollment, payments, and learning materials. Try asking about one of these.', 'Maaari kitang tulungan sa schedule, enrollment, payments, learning materials, at pakikipag-ugnayan sa tutor. Maaari kang magtanong tungkol sa alinman sa mga ito.', 'Maaari kitang tulungan sa schedule, enrollment, payments, learning materials, at pakikipag-ugnayan sa tutor. Maaari kang magtanong tungkol sa alinman sa mga ito.');
+    return respond(finalReply, llmSucceeded ? 'llm' : 'llm-fallback', groundedContext, effectiveLanguageProfile);
   } catch (error) {
     console.error('Ollama chat error:', error);
     const languageProfile = detectLanguageProfile(req.body?.message);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
     const groundedContext = await getGroundedChatContext(req.user, req.body?.message);
     const fallback = localizeKnownReply(groundedContext?.fallbackReply, effectiveLanguageProfile) || getChatReply(req.body?.message, effectiveLanguageProfile);
+    await logAiInteraction({ req, message: req.body?.message, reply: fallback, groundedContext, groundingPath: 'error', language: effectiveLanguageProfile, status: 'FAILED' });
     res.status(200).json({ success: true, reply: fallback });
   }
 };
@@ -4803,5 +5629,21 @@ module.exports = {
   getRandomDatasetSample,
   getDatasetsByTopic,
   getAIDatasetStats,
+  // Exported for tests (see test/parent-grounded-chat.test.js, test/child-safety.test.js)
+  detectGroundedTopic,
+  getGroundedChatContext,
+  getRoleSpecificContext,
+  isParentChildProgressQuestion,
+  resolveParentChild,
+  childDisplayName,
+  handleChildSafetyScreen,
+  handleExplicitHandoff,
+  applyRepeatedNoMatchHandoff,
+  handleTutoringRequest,
+  buildStudentTutoringProfile,
+  handleLessonPrepRequest,
+  buildTutorStudentNotesContext,
+  getTutorStudents,
+  handleAnonymousChatGuards,
 };
 

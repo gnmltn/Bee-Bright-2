@@ -315,7 +315,7 @@ function getIntentReply(message) {
   const prediction = predictIntent(runtime.model, message);
   if (!prediction.intent || prediction.confidence < MIN_CONFIDENCE) {
     return {
-      reply: 'I can help with schedules, enrollment, payments, learning materials, and contacting your tutor. Try asking about one of those.',
+      reply: 'I can help with schedules, enrollment, payments, and learning materials. Try asking about one of those.',
       intent: 'fallback',
       confidence: prediction.confidence
     };

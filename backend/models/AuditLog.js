@@ -27,7 +27,8 @@ const auditLogSchema = new mongoose.Schema({
       'Administrative',
       'Academic',
       'Security',
-      'Announcement'
+      'Announcement',
+      'AI Assistant'
     ]
   },
   description: {
