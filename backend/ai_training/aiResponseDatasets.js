@@ -1,16 +1,25 @@
 /**
  * BeeBright AI Response Datasets
- * 2000+ Q&A combinations for comprehensive AI training
+ *
+ * Actual live contents (Task 23c — corrected from the earlier "2000+" claim):
+ *   ~80 Q&A pairs  (studentQueries + tutorQueries + adminQueries + visitorQueries + navigationQueries)
+ *    2 context-aware follow-up entries
+ *   26 intentKeywordRules (keyword -> templated reply; the `intentKeywordRules` list
+ *      was distilled from the original beebright_ai_2000_dataset.csv by collapsing it
+ *      to one rule per intent/keyword family — that CSV is the historical source, not
+ *      2000 surviving entries).
+ *   → 108 entries total (getDatasetCount() computes this from the arrays).
+ *
  * Supports: English, Filipino, Taglish
- * Covers: Student, Tutor, Admin, Visitor roles
+ * Covers:   Student, Tutor, Admin, Visitor roles
  */
 
 const AIResponseDatasets = {
   // ===============================
-  // STUDENT QUERIES (400 items)
+  // STUDENT QUERIES (45 items)
   // ===============================
   studentQueries: [
-    // Login & Authentication (40 items)
+    // Login & Authentication
     {
       id: 'S001',
       role: 'student',
@@ -86,7 +95,7 @@ const AIResponseDatasets = {
         tgl: 'Tingnan kung tama ang email at password. Kung hindi pa na-verify ng admin ang enrollment, hindi ka pa makaka-login. Kontakin ang admin kung kailangan mo ng tulong.'
       }
     },
-    // Enrollment (40 items)
+    // Enrollment
     {
       id: 'S006',
       role: 'student',
@@ -112,9 +121,9 @@ const AIResponseDatasets = {
         tgl: 'Ano ang kailangan ko para mag-enroll?'
       },
       expectedReply: {
-        en: 'You need: valid email, student name, contact info, program selection, and payment proof (screenshot of GCash or blockchain transaction).',
-        fil: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng GCash o blockchain transaction).',
-        tgl: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng GCash o blockchain transaction).'
+        en: 'You need: valid email, student name, contact info, program selection, and payment proof (screenshot of your GCash, SeaBank, or BDO transaction).',
+        fil: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng iyong GCash, SeaBank, o BDO transaction).',
+        tgl: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng GCash, SeaBank, o BDO transaction mo).'
       }
     },
     {
@@ -162,7 +171,7 @@ const AIResponseDatasets = {
         tgl: 'Karaniwang tumatagal ng 1-2 business days ang verification. Makakatanggap ka ng email notification kapag verified.'
       }
     },
-    // Payments (40 items)
+    // Payments
     {
       id: 'S011',
       role: 'student',
@@ -173,9 +182,9 @@ const AIResponseDatasets = {
         tgl: 'Magkano ang program?'
       },
       expectedReply: {
-        en: 'Costs vary by program. Academic Tutorial is 2500. SPED Tutorial is 3500. Exam Prep is 3500. Ask about specific programs for exact prices.',
-        fil: 'Iba ang presyo depende sa program. Academic Tutorial ay 2500. SPED Tutorial ay 3500. Exam Prep ay 3500. Tanungin sa tukoy na program para sa exact prices.',
-        tgl: 'Iba ang presyo depende sa program. Academic Tutorial ay 2500. SPED Tutorial ay 3500. Exam Prep ay 3500. Tanungin sa specific program para sa exact prices.'
+        en: 'Prices depend on the program and package. Bee Bright offers Toddlers Playgroup, Academic Tutorial, and Examination Preparation. Ask about a specific program (for example "Academic Tutorial packages") for its exact package prices.',
+        fil: 'Depende ang presyo sa program at package. Nag-aalok ang Bee Bright ng Toddlers Playgroup, Academic Tutorial, at Examination Preparation. Magtanong tungkol sa isang tukoy na program (halimbawa "Academic Tutorial packages") para sa eksaktong presyo ng package.',
+        tgl: 'Depende ang presyo sa program at package. Nag-aalok ang Bee Bright ng Toddlers Playgroup, Academic Tutorial, at Examination Preparation. Magtanong tungkol sa specific program (halimbawa "Academic Tutorial packages") para sa exact package prices.'
       }
     },
     {
@@ -188,9 +197,9 @@ const AIResponseDatasets = {
         tgl: 'Anong payment methods ang tina-tanggap?'
       },
       expectedReply: {
-        en: 'We accept GCash mobile payments and blockchain cryptocurrency payments (MetaMask).',
-        fil: 'Tinatanggap namin ang GCash mobile payments at blockchain cryptocurrency payments (MetaMask).',
-        tgl: 'Tinatanggap namin ang GCash mobile payments at blockchain cryptocurrency payments (MetaMask).'
+        en: 'We accept GCash, SeaBank, and BDO. Choose Full Payment or 50% Down Payment during enrollment and upload your proof of payment.',
+        fil: 'Tinatanggap namin ang GCash, SeaBank, at BDO. Pumili ng Full Payment o 50% Down Payment sa enrollment at i-upload ang iyong proof of payment.',
+        tgl: 'Tinatanggap namin ang GCash, SeaBank, at BDO. Pumili ng Full Payment o 50% Down Payment sa enrollment at i-upload ang proof of payment mo.'
       }
     },
     {
@@ -218,9 +227,9 @@ const AIResponseDatasets = {
         tgl: 'Paano ako mag-submit ng payment proof?'
       },
       expectedReply: {
-        en: 'During enrollment, upload a screenshot of your transaction receipt or confirmation from GCash or MetaMask in the payment section.',
-        fil: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash o MetaMask sa payment section.',
-        tgl: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash o MetaMask sa payment section.'
+        en: 'During enrollment, upload a screenshot of your transaction receipt or confirmation from GCash, SeaBank, or BDO in the payment section.',
+        fil: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash, SeaBank, o BDO sa payment section.',
+        tgl: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash, SeaBank, o BDO sa payment section.'
       }
     },
     {
@@ -238,7 +247,7 @@ const AIResponseDatasets = {
         tgl: 'Tingnan ang Payments section ng dashboard para makita ang latest payment status, transaction ID, amount, at verification date.'
       }
     },
-    // Grades & Progress (40 items)
+    // Grades & Progress
     {
       id: 'S016',
       role: 'student',
@@ -314,7 +323,7 @@ const AIResponseDatasets = {
         tgl: 'Karaniwang na-update ang grades after each assessment o lesson completion. Regular na tingnan ang dashboard para sa latest updates.'
       }
     },
-    // Schedule (40 items)
+    // Schedule
     {
       id: 'S021',
       role: 'student',
@@ -390,7 +399,7 @@ const AIResponseDatasets = {
         tgl: 'Tingnan ang dashboard Schedule para makita kung may sessions scheduled ngayong linggo. Ang calendar ay nagpapakita ng lahat ng upcoming appointments.'
       }
     },
-    // Learning Materials (40 items)
+    // Learning Materials
     {
       id: 'S026',
       role: 'student',
@@ -466,7 +475,7 @@ const AIResponseDatasets = {
         tgl: 'Regular na nipo-post ang materials ng tutor, usually before o after tutoring sessions. Regular na tingnan ang dashboard para sa updates.'
       }
     },
-    // Announcements (40 items)
+    // Announcements
     {
       id: 'S031',
       role: 'student',
@@ -542,7 +551,7 @@ const AIResponseDatasets = {
         tgl: 'Ang announcements ay viewable ng lahat ng students. Para sa questions o discussions, direktang kontakin ang admin o tutor.'
       }
     },
-    // Attendance (40 items)
+    // Attendance
     {
       id: 'S036',
       role: 'student',
@@ -573,7 +582,7 @@ const AIResponseDatasets = {
         tgl: 'Ang tutor ay nag-record ng attendance during each session. If dumalo ka, aabot sa dashboard mo automatically.'
       }
     },
-    // Tutor Contact (40 items)
+    // Tutor Contact
     {
       id: 'S038',
       role: 'student',
@@ -604,7 +613,7 @@ const AIResponseDatasets = {
         tgl: 'Buksan ang dashboard, pumunta sa Profile o Settings, at baguhin ang personal information, email, phone, o emergency contact details.'
       }
     },
-    // General Support (40 items)
+    // General Support
     {
       id: 'S040',
       role: 'student',
@@ -619,11 +628,91 @@ const AIResponseDatasets = {
         fil: 'Ang dashboard ay may sections para sa Grades, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.',
         tgl: 'Ang dashboard ay may sections para sa Grades, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.'
       }
+    },
+    // Login email verification code (OTP) — sent after the CAPTCHA.
+    {
+      id: 'S041',
+      role: 'student',
+      topic: 'login',
+      queries: {
+        en: 'Why do I need to enter a verification code to log in?',
+        fil: 'Bakit kailangan kong maglagay ng verification code para mag-login?',
+        tgl: 'Bakit may verification code pa bago maka-login?'
+      },
+      expectedReply: {
+        en: 'For account security, Bee Bright emails you a 6-digit verification code each time you log in, after the CAPTCHA. Enter that code to finish signing in. If it does not arrive, check your spam folder, wait a minute, then use the resend option. Codes expire after a short time.',
+        fil: 'Para sa seguridad ng account, nagpapadala ang Bee Bright ng 6-digit na verification code sa email mo tuwing maglo-login ka, pagkatapos ng CAPTCHA. Ilagay ang code na iyon para makumpleto ang pag-sign in. Kung hindi ito dumating, tingnan ang spam folder, maghintay ng isang minuto, tapos gamitin ang resend option. Nag-e-expire ang code pagkatapos ng maikling panahon.',
+        tgl: 'Para sa security ng account, nag-e-email ang Bee Bright ng 6-digit verification code tuwing maglo-login ka, after ng CAPTCHA. I-enter ang code para matapos ang sign in. Kung hindi dumating, i-check ang spam folder, maghintay ng isang minuto, tapos i-resend. Nag-e-expire ang code after ng ilang minuto.'
+      }
+    },
+    // Change password while logged in — distinct from Forgot Password.
+    {
+      id: 'S042',
+      role: 'student',
+      topic: 'profile',
+      queries: {
+        en: 'How do I change my password while logged in?',
+        fil: 'Paano ko papalitan ang password ko habang naka-login?',
+        tgl: 'Paano magpalit ng password habang naka-login?'
+      },
+      expectedReply: {
+        en: 'Open Profile or Settings from your dashboard and choose Change Password. Enter your current password and a new one, then confirm with the verification code sent to your email. If you cannot sign in at all, use the Forgot Password option on the login page instead.',
+        fil: 'Buksan ang Profile o Settings mula sa dashboard mo at piliin ang Change Password. Ilagay ang kasalukuyang password at bago, tapos kumpirmahin gamit ang verification code na ipinadala sa email mo. Kung hindi ka talaga makapag-sign in, gamitin na lang ang Forgot Password option sa login page.',
+        tgl: 'Buksan ang Profile o Settings sa dashboard mo, piliin ang Change Password. I-enter ang current password at bago, tapos i-confirm gamit ang verification code sa email mo. Kung hindi ka talaga maka-login, gamitin ang Forgot Password sa login page.'
+      }
+    },
+    // Resubmit a rejected payment.
+    {
+      id: 'S043',
+      role: 'student',
+      topic: 'payments',
+      queries: {
+        en: 'My payment was rejected. How do I resubmit it?',
+        fil: 'Na-reject ang payment ko. Paano ko ito ire-resubmit?',
+        tgl: 'Na-reject ang payment ko, paano ko ma-re-resubmit?'
+      },
+      expectedReply: {
+        en: 'Log in to your parent account, open the Payments or Enrollment section, and upload a new, clear photo or screenshot of your payment proof, then resubmit. The admin reviews it again. Check the rejection reason shown on your enrollment so you know what to fix.',
+        fil: 'Mag-log in sa parent account mo, buksan ang Payments o Enrollment section, at mag-upload ng bago at malinaw na larawan o screenshot ng payment proof, tapos i-resubmit. Susuriin itong muli ng admin. Tingnan ang dahilan ng rejection sa enrollment mo para malaman kung ano ang aayusin.',
+        tgl: 'Mag-login sa parent account mo, buksan ang Payments o Enrollment section, mag-upload ng bago at malinaw na photo o screenshot ng payment proof, tapos i-resubmit. Ire-review ulit ng admin. I-check ang rejection reason sa enrollment mo para alam mo kung ano ang aayusin.'
+      }
+    },
+    // Where invoices / payment history live.
+    {
+      id: 'S044',
+      role: 'student',
+      topic: 'payments',
+      queries: {
+        en: 'Where do I see my invoices and payment history?',
+        fil: 'Saan ko makikita ang mga invoice at payment history ko?',
+        tgl: 'Saan makikita ang invoices at payment history ko?'
+      },
+      expectedReply: {
+        en: 'Log in and open the Payments page. The Invoices tab lists what is due for your enrollment, and the History tab lists the payments you have already submitted along with their status.',
+        fil: 'Mag-log in at buksan ang Payments page. Nakalista sa Invoices tab ang dapat bayaran para sa enrollment mo, at nakalista sa History tab ang mga bayad na na-submit mo na kasama ang status.',
+        tgl: 'Mag-login at buksan ang Payments page. Nasa Invoices tab ang due para sa enrollment mo, at nasa History tab ang mga na-submit mo nang payment kasama ang status.'
+      }
+    },
+    // Auto-logout / session timeout.
+    {
+      id: 'S045',
+      role: 'student',
+      topic: 'login',
+      queries: {
+        en: 'Why was I logged out automatically?',
+        fil: 'Bakit ako na-log out nang kusa?',
+        tgl: 'Bakit ako biglang na-logout?'
+      },
+      expectedReply: {
+        en: 'For security, Bee Bright signs you out after a period of inactivity. Just log in again with your email and password to continue — nothing you saved is lost.',
+        fil: 'Para sa seguridad, awtomatikong nila-log out ka ng Bee Bright pagkatapos ng ilang panahon na walang aktibidad. Mag-log in ka lang ulit gamit ang email at password mo para magpatuloy — walang mawawala sa mga na-save mo.',
+        tgl: 'Para sa security, nila-logout ka ng Bee Bright pagkatapos ng ilang minuto na walang activity. Mag-login ka lang ulit gamit ang email at password mo — walang mawawala sa na-save mo.'
+      }
     }
   ],
 
   // ===============================
-  // TUTOR QUERIES (300 items)
+  // TUTOR QUERIES (8 items)
   // ===============================
   tutorQueries: [
     {
@@ -701,12 +790,58 @@ const AIResponseDatasets = {
         tgl: 'Ang students ay makikita lang ang announcements na nipo-post ng admin. Kontakin ang admin para mag-post ng announcements sa behalf mo sa students.'
       }
     },
-    // Add 295 more tutor-specific items following similar patterns
-    // Topics: materials upload, grading, communication, attendance, schedule management, etc.
+    // Mark attendance for a session.
+    {
+      id: 'T006',
+      role: 'tutor',
+      topic: 'attendance',
+      queries: {
+        en: 'How do I mark attendance for my students?',
+        fil: 'Paano ako mag-mark ng attendance para sa mga estudyante ko?',
+        tgl: 'Paano mag-mark ng attendance ng mga student ko?'
+      },
+      expectedReply: {
+        en: 'Open the Attendance tab in your tutor dashboard, select the session, and mark each student present or absent, then save. Students then see the record in their own Attendance section.',
+        fil: 'Buksan ang Attendance tab sa tutor dashboard mo, piliin ang session, at markahan ang bawat estudyante na present o absent, tapos i-save. Makikita ng mga estudyante ang record sa sarili nilang Attendance section.',
+        tgl: 'Buksan ang Attendance tab sa tutor dashboard mo, piliin ang session, i-mark ang bawat student na present o absent, tapos i-save. Makikita ito ng mga student sa Attendance section nila.'
+      }
+    },
+    // Set teaching availability (Profile / Settings).
+    {
+      id: 'T007',
+      role: 'tutor',
+      topic: 'schedule',
+      queries: {
+        en: 'How do I set my teaching availability?',
+        fil: 'Paano ko itatakda ang availability ko sa pagtuturo?',
+        tgl: 'Paano i-set ang availability ko sa pagtuturo?'
+      },
+      expectedReply: {
+        en: 'Open Profile or Settings from your tutor dashboard and update your employment type, available days, and available time slots. Admin uses this when assigning your sessions. For changes to classes that are already scheduled, contact admin.',
+        fil: 'Buksan ang Profile o Settings mula sa tutor dashboard mo at i-update ang employment type, available na araw, at available na oras. Ginagamit ito ng admin kapag nag-a-assign ng session sa iyo. Para sa pagbabago sa mga klaseng naka-schedule na, kontakin ang admin.',
+        tgl: 'Buksan ang Profile o Settings sa tutor dashboard mo at i-update ang employment type, available days, at available time slots. Ginagamit ito ng admin sa pag-assign ng sessions mo. Para sa changes sa naka-schedule nang classes, contact ang admin.'
+      }
+    },
+    // Report unavailability / request a day off.
+    {
+      id: 'T008',
+      role: 'tutor',
+      topic: 'schedule',
+      queries: {
+        en: 'How do I report that I will be unavailable or request a day off?',
+        fil: 'Paano ko ipapaalam na hindi ako available o hihiling ng day off?',
+        tgl: 'Paano mag-report na hindi ako available o mag-request ng day off?'
+      },
+      expectedReply: {
+        en: 'Use the tutor unavailability option in your dashboard Schedule section to block dates you cannot teach, and announce an absence for a specific session so admin can arrange a substitute. Give as much advance notice as possible.',
+        fil: 'Gamitin ang tutor unavailability option sa Schedule section ng dashboard mo para i-block ang mga petsang hindi ka makakapagturo, at mag-announce ng absence para sa partikular na session para makapag-ayos ang admin ng kapalit. Magbigay ng maagang abiso hangga\'t maaari.',
+        tgl: 'Gamitin ang tutor unavailability option sa Schedule section ng dashboard mo para i-block ang dates na hindi ka available, at mag-announce ng absence para sa specific session para makapag-arrange ang admin ng substitute. Mag-advance notice hangga\'t kaya.'
+      }
+    },
   ],
 
   // ===============================
-  // ADMIN QUERIES (300 items)
+  // ADMIN QUERIES (5 items)
   // ===============================
   adminQueries: [
     {
@@ -734,17 +869,63 @@ const AIResponseDatasets = {
         tgl: 'Paano ako nag-review ng payments?'
       },
       expectedReply: {
-        en: 'Check Payments section to see all submissions with GCash/blockchain proof. Verify transaction IDs, amounts, and confirm or reject each payment.',
-        fil: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash/blockchain proof. I-verify ang transaction IDs, amounts, at kumpirmahin o i-reject ang payment.',
-        tgl: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash/blockchain proof. I-verify ang transaction IDs, amounts, at kumpirmahin o i-reject ang payment.'
+        en: 'Check the Payments section to see all submissions with GCash, SeaBank, or BDO proof. Verify reference numbers, amounts, and confirm or reject each payment.',
+        fil: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash, SeaBank, o BDO proof. I-verify ang reference numbers, amounts, at kumpirmahin o i-reject ang payment.',
+        tgl: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash, SeaBank, o BDO proof. I-verify ang reference numbers, amounts, at kumpirmahin o i-reject ang payment.'
       }
     },
-    // Add 298 more admin-specific items
-    // Topics: user management, schedule coordination, analytics, data review, system settings, etc.
+    // Create a tutor / admin account.
+    {
+      id: 'A003',
+      role: 'admin',
+      topic: 'user_management',
+      queries: {
+        en: 'How do I add a new tutor account?',
+        fil: 'Paano ako magdagdag ng bagong tutor account?',
+        tgl: 'Paano mag-add ng bagong tutor account?'
+      },
+      expectedReply: {
+        en: 'Open the Users section of the admin dashboard and use Add Tutor (or Add Admin) to create the account and issue credentials. New admin accounts can also be created through the admin invite flow. Only admins and super admins can create accounts.',
+        fil: 'Buksan ang Users section ng admin dashboard at gamitin ang Add Tutor (o Add Admin) para gumawa ng account at magbigay ng credentials. Maaari ring gumawa ng bagong admin account sa pamamagitan ng admin invite flow. Admin at super admin lang ang puwedeng gumawa ng account.',
+        tgl: 'Buksan ang Users section ng admin dashboard at gamitin ang Add Tutor (o Add Admin) para gumawa ng account at magbigay ng credentials. Puwede ring gawin ang bagong admin account via admin invite flow. Admin at super admin lang ang puwedeng gumawa ng account.'
+      }
+    },
+    // Create and publish an announcement.
+    {
+      id: 'A004',
+      role: 'admin',
+      topic: 'announcements',
+      queries: {
+        en: 'How do I create and post an announcement?',
+        fil: 'Paano ako gumawa at mag-post ng announcement?',
+        tgl: 'Paano gumawa at mag-post ng announcement?'
+      },
+      expectedReply: {
+        en: 'Open the Announcements tab in the admin dashboard, create a new announcement, write the title and message, choose the audience (students, tutors, or everyone), and publish. Tutors do not post directly — they submit announcement requests to admin for approval.',
+        fil: 'Buksan ang Announcements tab sa admin dashboard, gumawa ng bagong announcement, isulat ang title at mensahe, piliin ang audience (students, tutors, o lahat), at i-publish. Hindi direktang nagpo-post ang mga tutor — nagpapasa sila ng announcement request sa admin para aprubahan.',
+        tgl: 'Buksan ang Announcements tab sa admin dashboard, gumawa ng bagong announcement, i-type ang title at message, piliin ang audience (students, tutors, o lahat), at i-publish. Hindi direktang nagpo-post ang tutors — nag-su-submit sila ng announcement request sa admin para i-approve.'
+      }
+    },
+    // Handle support requests / escalations.
+    {
+      id: 'A005',
+      role: 'admin',
+      topic: 'escalations',
+      queries: {
+        en: 'How do I handle support requests from users?',
+        fil: 'Paano ko hina-handle ang mga support request ng users?',
+        tgl: 'Paano i-handle ang support requests ng users?'
+      },
+      expectedReply: {
+        en: 'Open the Support Requests / Escalations page from the admin dashboard. Each entry shows who submitted it, the trigger, and the severity. Review it, follow up with the user through their registered contact details, then update the status when it is resolved.',
+        fil: 'Buksan ang Support Requests / Escalations page mula sa admin dashboard. Ipinapakita ng bawat entry kung sino ang nag-submit, ang trigger, at ang severity. Suriin ito, makipag-ugnayan sa user gamit ang nakarehistrong contact details, tapos i-update ang status kapag naresolba na.',
+        tgl: 'Buksan ang Support Requests / Escalations page sa admin dashboard. Bawat entry ay may kung sino ang nag-submit, ang trigger, at ang severity. I-review ito, mag-follow up sa user via registered contact details nila, tapos i-update ang status kapag resolved na.'
+      }
+    },
   ],
 
   // ===============================
-  // VISITOR QUERIES (500 items)
+  // VISITOR QUERIES (12 items)
   // ===============================
   visitorQueries: [
     {
@@ -756,9 +937,9 @@ const AIResponseDatasets = {
         tgl: 'Anong mga programa ang inooffer ng Bee Bright?'
       },
       expectedReply: {
-        en: 'We offer Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, and Examination Preparation.',
-        fil: 'Nag-aalok kami ng Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, at Examination Preparation.',
-        tgl: 'Nag-aalok kami ng Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, at Examination Preparation.'
+        en: 'Bee Bright offers three programs: Toddlers Playgroup (ages 2 to 4), Academic Tutorial (ages 2 and up), and Examination Preparation (ages 3 and up). Ask about any one for its packages and prices.',
+        fil: 'Nag-aalok ang Bee Bright ng tatlong programa: Toddlers Playgroup (edad 2 hanggang 4), Academic Tutorial (edad 2 pataas), at Examination Preparation (edad 3 pataas). Magtanong tungkol sa alinman para sa mga package at presyo.',
+        tgl: 'Nag-aalok ang Bee Bright ng tatlong programa: Toddlers Playgroup (ages 2 to 4), Academic Tutorial (ages 2 and up), at Examination Preparation (ages 3 and up). Magtanong tungkol sa alinman para sa packages at prices.'
       }
     },
     {
@@ -784,9 +965,9 @@ const AIResponseDatasets = {
         tgl: 'Magkano ang enrollment?'
       },
       expectedReply: {
-        en: 'Costs vary by program from 2500 to 3500 pesos. Ask about specific programs or request a price list for details.',
-        fil: 'Ang presyo ay nag-vary depende sa program mula 2500 hanggang 3500 pesos. Magtanong ng tukoy na programa o mag-request ng price list.',
-        tgl: 'Ang presyo ay nag-vary depende sa program mula 2500 hanggang 3500 pesos. Magtanong ng specific program o mag-request ng price list.'
+        en: 'Prices depend on the program and package you choose. Ask about a specific program (Toddlers Playgroup, Academic Tutorial, or Examination Preparation) for its exact package prices, and note that payment is 50% on enrollment with the balance after half the sessions.',
+        fil: 'Depende ang presyo sa program at package na pipiliin mo. Magtanong tungkol sa isang tukoy na program (Toddlers Playgroup, Academic Tutorial, o Examination Preparation) para sa eksaktong presyo, at tandaan na 50% ang bayad sa enrollment at ang balanse ay pagkatapos ng kalahati ng sessions.',
+        tgl: 'Depende ang presyo sa program at package na pipiliin mo. Magtanong tungkol sa specific program (Toddlers Playgroup, Academic Tutorial, o Examination Preparation) para sa exact package prices, at note na 50% ang bayad sa enrollment at ang balance ay after ng kalahati ng sessions.'
       }
     },
     {
@@ -798,9 +979,9 @@ const AIResponseDatasets = {
         tgl: 'Paano ko makontakin ang Bee Bright?'
       },
       expectedReply: {
-        en: 'Visit our website contact page or find contact details on the site. You can also visit us at Barangay Pantal, Dagupan City.',
-        fil: 'Bisitahin ang contact page ng website o hanapin ang contact details sa site. Pwede mo din kaming bisitahin sa Barangay Pantal, Dagupan City.',
-        tgl: 'Bisitahin ang contact page ng website o hanapin ang contact details sa site. Pwede mo din kaming bisitahin sa Barangay Pantal, Dagupan City.'
+        en: 'You can email Bee Bright at beebrightph@gmail.com, message the official Bee Bright social media page, or visit the center at Barangay Pantal, Dagupan City, Pangasinan. The same email is shown on the Track Enrollment page.',
+        fil: 'Maaari kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Barangay Pantal, Dagupan City, Pangasinan. Nakikita rin ang parehong email sa Track Enrollment page.',
+        tgl: 'Puwede kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Barangay Pantal, Dagupan City, Pangasinan. Nasa Track Enrollment page rin ang parehong email.'
       }
     },
     {
@@ -817,18 +998,115 @@ const AIResponseDatasets = {
         tgl: 'Bumili sa Enrollment page, punan ang student form, piliin ang programs, i-submit ang payment proof, at hintayin ang admin verification.'
       }
     },
-    // Add 495 more visitor queries covering:
-    // - FAQ about programs
-    // - Pricing questions
-    // - Program descriptions & benefits
-    // - Payment methods
-    // - How system works
-    // - Contact and location
-    // - General information
+    // Official Payment Policy notice — payments are non-refundable but transferable.
+    {
+      id: 'V006',
+      topic: 'refund_policy',
+      queries: {
+        en: 'What is your refund policy if we cancel?',
+        fil: 'Ano ang refund policy niyo kung magcacancel kami?',
+        tgl: 'May refund ba kayo pag nagcancel?'
+      },
+      expectedReply: {
+        en: 'All payments for new enrollments or renewals are non-refundable under any circumstances. However, your payment can be transferred to another new enrollee if you are unable to continue — contact our admin office or official social media page to arrange the transfer.',
+        fil: 'Lahat ng bayad para sa bagong enrollment o renewal ay hindi na-rerefund sa anumang pagkakataon. Pero puwedeng i-transfer ang bayad mo sa ibang bagong mag-e-enroll kung hindi ka na makakapagpatuloy — kontakin ang admin office o official social media page namin para maayos ang transfer.',
+        tgl: 'Lahat ng bayad sa bagong enrollment o renewal ay hindi na-rerefund kahit ano pa ang dahilan. Pero pwede itong i-transfer sa ibang student na mag-e-enroll kung hindi mo na kaya ituloy — kontakin ang admin office o social media namin para ma-arrange yung transfer.'
+      }
+    },
+    // Payment timing — no fixed calendar due date; completion-based per the brochure.
+    {
+      id: 'V011',
+      topic: 'payment_due_date',
+      queries: {
+        en: 'When is my payment due?',
+        fil: 'Kailan ako dapat magbayad?',
+        tgl: 'Kailan due yung bayad ko?'
+      },
+      expectedReply: {
+        en: 'There is no fixed monthly due date — you choose your own schedule. A 50% down payment is required upon enrollment, and the remaining balance must be settled once you have completed half of your booked sessions. You may renew anytime, as long as the balance for your current sessions is settled.',
+        fil: 'Walang fixed na monthly due date — ikaw mismo ang pipili ng schedule mo. Kailangan ng 50% down payment pagka-enroll, at dapat masettle ang natitirang balance kapag natapos mo na ang kalahati ng mga naka-book mong sessions. Puwede kang mag-renew anumang oras, basta nasettle ang balance sa kasalukuyan mong mga session.',
+        tgl: 'Walang fixed na due date, ikaw mismo pipili ng schedule mo. Kailangan ng 50% down payment sa enrollment, tapos babayaran mo yung natitira pagkatapos mong matapos yung kalahati ng sessions mo. Pwede ka mag-renew kahit kailan, basta bayad na yung balance sa current sessions mo.'
+      }
+    },
+    // Pre-enrollment assessment — what it is (per-student results are a separate grounded lookup, not built).
+    {
+      id: 'V012',
+      topic: 'assessment',
+      queries: {
+        en: 'What is the pre-enrollment assessment for?',
+        fil: 'Para saan ang pre-enrollment assessment?',
+        tgl: 'Ano yung assessment na kailangan bago mag-enroll?'
+      },
+      expectedReply: {
+        en: "The pre-enrollment assessment helps Bee Bright determine your child's current level and learning needs, so tutors can plan the right starting point and approach. It is taken before or during enrollment.",
+        fil: 'Ang pre-enrollment assessment ay tumutulong sa Bee Bright na malaman ang kasalukuyang level at learning needs ng anak mo, para maplano ng mga tutor ang tamang starting point at approach. Kinukuha ito bago o habang nag-eenroll.',
+        tgl: 'Ang pre-enrollment assessment ay tumutulong para malaman ng Bee Bright yung level at learning needs ng anak mo, para alam ng tutor kung saan magsisimula. Ginagawa ito bago o habang nag-eenroll.'
+      }
+    },
+    // Official attendance policy — differs by program.
+    {
+      id: 'V013',
+      topic: 'attendance_policy',
+      queries: {
+        en: 'What is your attendance policy for missed sessions?',
+        fil: 'Ano ang attendance policy niyo kung makakaliban sa session?',
+        tgl: 'Ano policy niyo pag na-miss ang session?'
+      },
+      expectedReply: {
+        en: "This depends on the program. For Toddlers Playgroup: up to 2 absences are allowed per monthly package — a 3rd or further absence within that month counts as a completed session day. For Academic Tutorial: all pre-booked weekly time slots are considered completed once booked, since slots are limited and reserved specifically for your child. You may excuse an upcoming session in advance, before the week's timetable is finalized. Exceptions to rescheduling are made for natural calamities (e.g. typhoons, flooding) and for sickness with a medical certificate or prescription.",
+        fil: 'Depende ito sa program. Para sa Toddlers Playgroup: pinapayagan ang hanggang 2 absence bawat monthly package — ang ika-3 pataas na absence sa buwan na iyon ay itinuturing nang natapos na session day. Para sa Academic Tutorial: ang lahat ng naka-book na weekly time slots ay itinuturing nang tapos na sa sandaling ma-book, dahil limitado at nakalaan ito para sa anak mo. Puwede kang mag-excuse ng paparating na session nang maaga, bago pa ma-finalize ang timetable ng linggo. May exception sa pag-reschedule para sa natural calamities (hal. bagyo, baha) at para sa pagkakasakit na may medical certificate o prescription.',
+        tgl: 'Depende sa program. Sa Toddlers Playgroup: hanggang 2 absence lang bawat buwan — sa 3rd absence pataas, itinuturing na nagamit na session. Sa Academic Tutorial naman, itinuturing na "completed" na yung lahat ng naka-book na weekly slots pagkatapos ma-book, dahil limited lang ang slots. Pwede ka mag-excuse bago ma-finalize ang timetable ng linggo. May exception sa calamities (bagyo, baha) at sa sakit — kailangan lang ng medical certificate o prescription.'
+      }
+    },
+    // How to give notice for an absence (24h rule). Complements V013 (how absences are counted).
+    {
+      id: 'V007',
+      topic: 'attendance_policy',
+      queries: {
+        en: 'How do I let Bee Bright know my child will miss a class?',
+        fil: 'Paano ko ipapaalam sa Bee Bright na makakaliban ang anak ko sa klase?',
+        tgl: 'Paano ko sasabihin sa Bee Bright na di makakapasok si anak sa class?'
+      },
+      expectedReply: {
+        en: 'Notify the center at least 24 hours in advance if a student will be absent. The tutor records attendance each session, and it shows in the dashboard Attendance section. For arrangements about a missed session, contact the admin office.',
+        fil: 'Ipaalam sa center nang hindi bababa sa 24 oras bago ang araw kung makakaliban ang estudyante. Nire-record ng tutor ang attendance kada session, at makikita ito sa Attendance section ng dashboard. Para sa ayos ukol sa nalibang session, kontakin ang admin office.',
+        tgl: 'I-notify ang center nang at least 24 hours bago kung mali-liban ang student. Nire-record ng tutor ang attendance kada session, at makikita sa Attendance section ng dashboard. Para sa arrangements sa na-miss na session, contact ang admin office.'
+      }
+    },
+    // Public enrollment tracking — no login needed, ID + registered email.
+    {
+      id: 'V008',
+      topic: 'enrollment_process',
+      queries: {
+        en: 'How do I check my enrollment status without logging in?',
+        fil: 'Paano ko mati-check ang status ng enrollment ko nang hindi naglo-log in?',
+        tgl: 'Paano ko ma-che-check ang enrollment status ko na hindi naglo-login?'
+      },
+      expectedReply: {
+        en: 'Open the Track Enrollment page and enter your enrollment ID and the email address you used on the form. The ID was emailed to you after you submitted. It shows your application status and any rejection reason. To upload new payment proof, log in to your parent account.',
+        fil: 'Buksan ang Track Enrollment page at ilagay ang enrollment ID at ang email na ginamit mo sa form. Ipinadala sa email mo ang ID pagkatapos mong mag-submit. Makikita nito ang status ng application at anumang dahilan ng rejection. Para mag-upload ng bagong payment proof, mag-log in sa parent account mo.',
+        tgl: 'Buksan ang Track Enrollment page at ilagay ang enrollment ID at ang email na ginamit mo sa form. Na-email sa iyo ang ID pagkatapos mag-submit. Makikita nito ang application status at rejection reason kung meron. Para mag-upload ng bagong payment proof, mag-login sa parent account mo.'
+      }
+    },
+    // No native mobile app — responsive web only.
+    {
+      id: 'V009',
+      topic: 'general',
+      queries: {
+        en: 'Do you have a mobile app?',
+        fil: 'May mobile app ba kayo?',
+        tgl: 'May app ba kayo sa phone?'
+      },
+      expectedReply: {
+        en: 'Bee Bright is a web-based system with no separate mobile app. Open it in any browser on a phone, tablet, or computer — the layout adjusts to your screen.',
+        fil: 'Ang Bee Bright ay web-based na system at walang hiwalay na mobile app. Buksan ito sa kahit anong browser sa phone, tablet, o computer — umaangkop ang layout sa screen mo.',
+        tgl: 'Ang Bee Bright ay web-based na system, walang separate mobile app. Buksan mo lang sa kahit anong browser sa phone, tablet, o computer — nag-a-adjust ang layout sa screen mo.'
+      }
+    },
   ],
 
   // ===============================
-  // CONTEXT-AWARE FOLLOW-UPS (500 items)
+  // CONTEXT-AWARE FOLLOW-UPS (2 items)
   // ===============================
   contextAwareFollowUps: [
     {
@@ -866,7 +1144,7 @@ const AIResponseDatasets = {
   // CSV INTENT KEYWORD DATASETS
   // ===============================
     // ===============================
-    // NAVIGATION QUERIES (10,000+ items from beebright_10000_questions.csv)
+    // NAVIGATION QUERIES (10 items — distilled from beebright_10000_questions.csv, not 10,000 rows)
     // ===============================
     navigationQueries: [
       {
@@ -1024,7 +1302,8 @@ const AIResponseDatasets = {
     // ===============================
     // CSV INTENT KEYWORD DATASETS
     // ===============================
-    // Merged from beebright_ai_2000_dataset.csv (deduplicated by intent + keyword family)
+    // Distilled from beebright_ai_2000_dataset.csv — collapsed to one rule per intent +
+    // keyword family (25 rules, not 2000 rows). The CSV is kept as historical context.
     intentKeywordRules: [
     {
       intent: 'admin_student_count',
@@ -1380,6 +1659,18 @@ const AIResponseDatasets = {
         en: 'I can help you with enrollment, schedules, tutors, grades, and materials.',
         fil: 'Matutulungan kitang malaman ang enrollment, schedule, tutor, grades, at materials.'
       }
+    },
+    {
+      intent: 'theme_toggle',
+      roleScope: 'all',
+      keywords: [
+        'dark mode', 'light mode', 'night mode', 'change theme', 'switch theme',
+        'how to dark mode', 'enable dark mode', 'dark theme', 'palitan ang theme', 'dark mode ba'
+      ],
+      replies: {
+        en: 'Use the theme toggle (sun/moon icon) at the bottom-right of the screen, next to the chat button, to switch between light and dark mode. Your choice is remembered on that device.',
+        fil: 'Gamitin ang theme toggle (sun/moon icon) sa ibaba-kanan ng screen, katabi ng chat button, para lumipat sa light o dark mode. Naaalala ang pinili mo sa device na iyon.'
+      }
     }
   ],
 
@@ -1414,6 +1705,7 @@ const AIResponseDatasets = {
       this.tutorQueries.length +
       this.adminQueries.length +
       this.visitorQueries.length +
+      this.navigationQueries.length +
       this.contextAwareFollowUps.length +
       this.intentKeywordRules.length
     );
@@ -1432,26 +1724,42 @@ const AIResponseDatasets = {
       };
     },
 
+  // Stopwords for the token-overlap fallback. Deliberately broad — question openers and
+  // common verbs here previously let "what payment methods do you accept" match the
+  // "what can you do" keyword at 75% overlap (Task 22 fix).
+  _keywordStopWords: new Set([
+    'the', 'a', 'an', 'of', 'to', 'in', 'on', 'for', 'here', 'please', 'can', 'could',
+    'would', 'will', 'you', 'your', 'i', 'me', 'my', 'we', 'our', 'us', 'want', 'need',
+    'how', 'what', 'when', 'where', 'why', 'who', 'which', 'do', 'does', 'did', 'is',
+    'are', 'be', 'and', 'or', 'so', 'about', 'this', 'that', 'it', 'ang', 'ng', 'sa',
+    'mga', 'na', 'ko', 'mo', 'ako', 'po', 'ba', 'ano', 'paano', 'pano', 'saan', 'kailan',
+    'help', 'tulong', 'tulungan', 'gusto', 'kong', 'kailangan', 'pwede',
+  ]),
+
   getIntentKeywordMatch: function(message, role = 'public') {
     const normalized = String(message || '').toLowerCase().trim();
     if (!normalized) return null;
 
     const roleNormalized = role === 'super_admin' ? 'admin' : role;
-    const msgWords = normalized.split(/\s+/).filter(Boolean);
-    const stopWords = new Set(['the', 'a', 'an', 'of', 'to', 'in', 'on', 'for', 'here', 'please', 'can', 'you', 'i', 'want']);
+    const msgWords = new Set(normalized.split(/\s+/).filter(Boolean));
+    const stopWords = this._keywordStopWords;
+
     return this.intentKeywordRules.find((rule) => {
       const allowed = rule.roleScope === 'all' || rule.roleScope === roleNormalized;
       if (!allowed) return false;
       return rule.keywords.some((k) => {
         const key = String(k || '').toLowerCase().trim();
         if (!key) return false;
-        if (normalized.includes(key)) return true;
-
-        // Fuzzy token overlap: allows natural variants like "list of tutors here".
+        // 1. Whole keyword phrase present verbatim.
+        if (key.includes(' ') && normalized.includes(key)) return true;
+        // 2. Token overlap — but ONLY on the meaningful (non-stopword) words, and ALL of
+        //    them must be present (not 75%). Single meaningful words must be distinctive.
         const keyWords = key.split(/\s+/).filter(Boolean).filter((w) => !stopWords.has(w));
         if (!keyWords.length) return false;
-        const matchCount = keyWords.filter((w) => msgWords.includes(w)).length;
-        return matchCount / keyWords.length >= 0.75;
+        if (keyWords.length === 1) {
+          return keyWords[0].length >= 5 && msgWords.has(keyWords[0]);
+        }
+        return keyWords.every((w) => msgWords.has(w));
       });
     }) || null;
   },

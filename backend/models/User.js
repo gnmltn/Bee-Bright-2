@@ -161,6 +161,21 @@ passwordExpiresAt: { type: Date, default: () => getPasswordExpiresAt({ passwordC
     type: Date,
     default: null
   },
+  // ── Enrollment-wizard draft account ──────────────────────────────────────
+  // A parent record created at Step 2 ("Create Account & Send Code") is only a
+  // DRAFT until the parent finishes the wizard and submits the enrollment.
+  // Draft records are excluded from mobile/email uniqueness checks and are
+  // auto-removed by the draftExpiresAt TTL index if the wizard is abandoned.
+  enrollmentDraft: {
+    type: Boolean,
+    default: false
+  },
+  // When set (draft accounts only), Mongo removes the document once this time
+  // passes. Cleared ($unset) the moment the account is finalized on submit.
+  draftExpiresAt: {
+    type: Date,
+    default: null
+  },
   profileImage: {
     type: String,
     default: ''
@@ -215,6 +230,10 @@ userSchema.methods.toJSON = function() {
   delete user.password;
   return user;
 };
+
+// TTL: abandoned enrollment-wizard drafts self-destruct once draftExpiresAt passes.
+// Only draft docs ever have this field set; finalized accounts $unset it.
+userSchema.index({ draftExpiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Check if model already exists to prevent overwrite error
 const User = mongoose.models.User || mongoose.model('User', userSchema);

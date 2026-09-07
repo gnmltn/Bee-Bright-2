@@ -19,12 +19,14 @@ import {
   Award,
   Activity,
   ClipboardList,
+  Inbox,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
 import { UserRole } from "@/contexts/AuthContext";
 import { useAuth } from "@/hooks/useAuth";
 import { LogoutConfirmDialog } from "@/components/layout/LogoutConfirmDialog";
+import { AdminNotificationBell } from "@/components/notifications/AdminNotificationBell";
 import beeMascot from "@/assets/bee-mascot.png";
 
 interface DashboardLayoutProps {
@@ -76,6 +78,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Payments", href: "/admin-dashboard#payments", icon: DollarSign },
     { name: "Reports", href: "/admin-dashboard#reports", icon: FileText },
     { name: "Schedule", href: "/admin-dashboard#schedule", icon: Calendar },
+    { name: "Requests", href: "/admin-dashboard/escalations", icon: Inbox },
     { name: "Announcements", href: "/admin-dashboard#announcements", icon: Bell },
     { name: "Audit Logs", href: "/admin-dashboard#audit-logs", icon: ClipboardList },
     { name: "Activity", href: "/admin-dashboard#activity", icon: Activity },
@@ -88,6 +91,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Payments", href: "/super-admin-dashboard#payments", icon: DollarSign },
     { name: "Reports", href: "/super-admin-dashboard#reports", icon: FileText },
     { name: "Schedule", href: "/super-admin-dashboard#schedule", icon: Calendar },
+    { name: "Requests", href: "/super-admin-dashboard/escalations", icon: Inbox },
     { name: "Announcements", href: "/super-admin-dashboard#announcements", icon: Bell },
     { name: "Audit Logs", href: "/super-admin-dashboard#audit-logs", icon: ClipboardList },
     { name: "Activity", href: "/super-admin-dashboard#activity", icon: Activity },
@@ -115,6 +119,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const navigation = navigationByRole[user.role];
   const title = dashboardTitles[user.role];
   const overviewHref = navigation[0]?.href || "/";
+  const isAdminRole = user.role === "admin" || user.role === "super_admin";
 
   const isActive = (href: string) => {
     if (href.includes("#")) {
@@ -139,15 +144,18 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-card border-r border-border">
         {/* Logo */}
-        <div className="flex items-center gap-2 px-6 py-5 border-b border-border">
-          <img src={beeMascot} alt="Bee Bright" className="h-10 w-10" />
-          <div>
-            <span className="font-display font-bold text-lg">
-              <span className="text-primary">Bee</span>
-              <span className="text-foreground">Bright</span>
-            </span>
-            <p className="text-xs text-muted-foreground">{title}</p>
+        <div className="flex items-center justify-between gap-2 px-6 py-5 border-b border-border">
+          <div className="flex items-center gap-2 min-w-0">
+            <img src={beeMascot} alt="Bee Bright" className="h-10 w-10" />
+            <div className="min-w-0">
+              <span className="font-display font-bold text-lg">
+                <span className="text-primary">Bee</span>
+                <span className="text-foreground">Bright</span>
+              </span>
+              <p className="text-xs text-muted-foreground truncate">{title}</p>
+            </div>
           </div>
+          {isAdminRole && <AdminNotificationBell />}
         </div>
 
         {/* Navigation */}
@@ -210,13 +218,16 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <span className="text-foreground">Bright</span>
             </span>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-          >
-            {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-          </Button>
+          <div className="flex items-center gap-1">
+            {isAdminRole && <AdminNotificationBell />}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+            >
+              {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+            </Button>
+          </div>
         </div>
       </div>
 

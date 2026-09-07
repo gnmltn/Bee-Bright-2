@@ -12,9 +12,13 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/layout/Layout';
 import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
+import {
   INITIAL_WIZARD_DATA, WizardData,
 } from '@/components/enrollment/wizard-types';
-import { assessmentService } from '@/services/api';
+import { assessmentService, enrollmentService } from '@/services/api';
 
 import Step1Requirements   from '@/components/enrollment/steps/Step1Requirements';
 import Step2ParentAccount  from '@/components/enrollment/steps/Step2ParentAccount';
@@ -31,6 +35,30 @@ import Step11Consent       from '@/components/enrollment/steps/Step11Consent';
 import Step12Review        from '@/components/enrollment/steps/Step12Review';
 
 const STORAGE_KEY = 'bb-enrollment-wizard-v1';
+
+type StoredDraft = Partial<WizardData> & { step?: number; _serverInstanceId?: string | null };
+
+// sessionStorage (NOT localStorage): a plain in-tab refresh keeps the parent on
+// their step with data intact, but closing the tab/window — or restarting the
+// dev server / machine (detected via the backend instanceId) — wipes the draft
+// so they come back to a clean Step 1. Nothing is persisted server-side.
+const wizardStore = {
+  read(): StoredDraft | null {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  },
+  write(value: unknown) {
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value)); } catch { /* quota */ }
+  },
+  clear() {
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEY); // clean up any draft left by the old localStorage version
+    } catch { /* ignore */ }
+  },
+};
 
 type StepDef = { id: string; label: string };
 
@@ -55,21 +83,45 @@ export default function EnrollmentWizard() {
   const { toast } = useToast();
   const { user } = useAuth();
   const addChildMode = searchParams.get('mode') === 'add-child';
-  const [step, setStep] = useState(1);
-  const [includeAssessment, setIncludeAssessment] = useState(false);
-  const [data, setData] = useState<WizardData>(() => {
-    try {
-      const saved = sessionStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<WizardData>;
-        return { ...INITIAL_WIZARD_DATA, ...parsed };
-      }
-    } catch { /* ignore */ }
-    return INITIAL_WIZARD_DATA;
+  // Restore both the saved data AND the step the user last left off on (was resetting
+  // to Step 1 on every refresh). Skipped for a fresh "add child" flow.
+  const restored = addChildMode ? null : wizardStore.read();
+  const [step, setStep] = useState(() => {
+    const s = Number(restored?.step);
+    return Number.isFinite(s) && s >= 1 ? s : 1;
   });
+  const [includeAssessment, setIncludeAssessment] = useState(false);
+  const [data, setData] = useState<WizardData>(() =>
+    restored ? { ...INITIAL_WIZARD_DATA, ...restored } : INITIAL_WIZARD_DATA,
+  );
   const [submitting, setSubmitting] = useState(false);
   const latestStep = useRef(step);
   latestStep.current = step;
+
+  // Backend process id — a full server/machine restart changes it. Carried over
+  // from the saved draft so a plain refresh (same id) keeps progress.
+  const serverInstanceIdRef = useRef<string | null>(restored?._serverInstanceId ?? null);
+
+  useEffect(() => {
+    if (addChildMode) return;
+    const savedId = wizardStore.read()?._serverInstanceId;
+    let cancelled = false;
+    enrollmentService.getServerInstanceId()
+      .then((res) => {
+        const live = res.data?.instanceId || null;
+        if (cancelled || !live) return;
+        serverInstanceIdRef.current = live;
+        if (savedId && savedId !== live) {
+          // Server was restarted since this draft was saved → start fresh.
+          wizardStore.clear();
+          setData(INITIAL_WIZARD_DATA);
+          setStep(1);
+          setIncludeAssessment(false);
+        }
+      })
+      .catch(() => { /* server unreachable — keep the draft; close still wipes it */ });
+    return () => { cancelled = true; };
+  }, [addChildMode]);
 
   const flowSteps = useMemo<StepDef[]>(() => {
     const base = addChildMode
@@ -111,7 +163,7 @@ export default function EnrollmentWizard() {
       return prev.parentName === next.parentName && prev.parentEmail === next.parentEmail && prev.parentMobile === next.parentMobile && prev.guardianName === next.guardianName && prev.guardianPhone === next.guardianPhone && prev.guardianEmail === next.guardianEmail ? prev : next;
     });
     setStep(1);
-    sessionStorage.removeItem(STORAGE_KEY);
+    wizardStore.clear();
   }, [addChildMode, navigate, user]);
 
   const currentStepId = steps[step - 1]?.id || 'requirements';
@@ -191,21 +243,46 @@ export default function EnrollmentWizard() {
   }, [steps.length, step]);
 
   useEffect(() => {
-    try {
-      const toStore = { ...data, proofDataUrl: null };
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...toStore, step }));
-    } catch { /* quota exceeded – ignore */ }
-  }, [data, step]);
+    // The "add child" flow uses a separate modal — never write to the shared draft here.
+    if (addChildMode) return;
+    // Persist everything except the large base64 file blobs (proof + requirement docs),
+    // which would blow the sessionStorage quota and make the whole draft fail to save.
+    // Everything else — including the current step — is kept so a refresh resumes here.
+    wizardStore.write({
+      ...data,
+      step,
+      _serverInstanceId: serverInstanceIdRef.current,
+      proofDataUrl: null,
+      docBirthCertificate: null,
+      docStudentPhoto: null,
+      docGuardianId: null,
+    });
+  }, [data, step, addChildMode]);
 
   const update = useCallback((partial: Partial<WizardData>) => {
     setData((prev) => ({ ...prev, ...partial }));
   }, []);
 
   const goNext = useCallback(() => setStep((s) => Math.min(s + 1, steps.length)), [steps.length]);
-  const goPrev = useCallback(() => setStep((s) => Math.max(s - 1, 1)), []);
+
+  // Section 9 — confirm before navigating back INTO the Account step once the email
+  // has been verified, since that step can change the already-verified email.
+  const [confirmBackToAccount, setConfirmBackToAccount] = useState(false);
+  const emailVerified = Boolean(data.enrollmentToken);
+
+  const goPrev = useCallback(() => {
+    setStep((s) => {
+      const target = Math.max(s - 1, 1);
+      if (!addChildMode && emailVerified && steps[target - 1]?.id === 'account') {
+        setConfirmBackToAccount(true);
+        return s; // hold — the dialog decides
+      }
+      return target;
+    });
+  }, [addChildMode, emailVerified, steps]);
 
   const clearDraft = useCallback(() => {
-    sessionStorage.removeItem(STORAGE_KEY);
+    wizardStore.clear();
   }, []);
 
   const onEnrolled = useCallback((enrollmentId: string) => {
@@ -301,6 +378,30 @@ export default function EnrollmentWizard() {
         </div>
 
       </div>
+
+      <AlertDialog open={confirmBackToAccount} onOpenChange={setConfirmBackToAccount}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Go back to Account details?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your email is already verified. Going back to the Account step lets you edit your
+              Full Name, Email, Mobile Number and Password — changing the email may require
+              verifying it again. Continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>No, stay here</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const idx = steps.findIndex((s) => s.id === 'account');
+                if (idx >= 0) setStep(idx + 1);
+              }}
+            >
+              Yes, go to Account
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   );
 }

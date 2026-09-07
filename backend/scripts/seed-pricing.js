@@ -2,7 +2,7 @@
  * Seed Pricing collection — Bee Bright Tutorial Center
  *
  * PROGRAMS (3 only, from brochure):
- *   TPG101 – Toddlers Playgroup       (age 1.5 – 3)
+ *   TPG101 – Toddlers Playgroup       (age 2 – 4)
  *   ACT102 – Academic Tutorial        (age 2+, 1-on-1)
  *   EXP106 – Examination Preparation  (age 3+)
  *
@@ -30,7 +30,7 @@ const RETIRED_CODES = ['PKR105', 'KRP104', 'SPT103', 'EXAM'];
 const PRICING = [
   // ══════════════════════════════════════════════════════════════════════
   //  TODDLERS PLAYGROUP
-  //  Age: 1.5 – 3 years old | Group sessions (2 hrs each)
+  //  Age: 2 – 4 years old | Group sessions (2 hrs each)
   // ══════════════════════════════════════════════════════════════════════
   {
     programCode: 'TPG101',
@@ -41,8 +41,8 @@ const PRICING = [
     priceFull: 2800,
     currency: 'PHP',
     displayOrder: 1,
-    ageMin: 1.5,
-    ageMax: 3,
+    ageMin: 2,
+    ageMax: 4,
     active: true,
   },
   {
@@ -54,8 +54,8 @@ const PRICING = [
     priceFull: 4080,
     currency: 'PHP',
     displayOrder: 2,
-    ageMin: 1.5,
-    ageMax: 3,
+    ageMin: 2,
+    ageMax: 4,
     active: true,
   },
   {
@@ -67,8 +67,8 @@ const PRICING = [
     priceFull: 5280,
     currency: 'PHP',
     displayOrder: 3,
-    ageMin: 1.5,
-    ageMax: 3,
+    ageMin: 2,
+    ageMax: 4,
     active: true,
   },
   {
@@ -80,8 +80,8 @@ const PRICING = [
     priceFull: 6400,
     currency: 'PHP',
     displayOrder: 4,
-    ageMin: 1.5,
-    ageMax: 3,
+    ageMin: 2,
+    ageMax: 4,
     active: true,
   },
 

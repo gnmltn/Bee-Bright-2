@@ -2,6 +2,11 @@ import { useEffect, useState, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { formatAge } from "@/components/enrollment/wizard-types";
+import { checkProgramEligibility } from "@/components/enrollment/wizard-types";
+import DocUploadField from "@/components/enrollment/DocUploadField";
+import {
+  validateFullName, validateBirthdate, birthdateMin, birthdateMax, toTitleCase, computeAgeYears,
+} from "@/lib/enrollmentValidation";
 import {
   BookOpen,
   Calendar,
@@ -19,6 +24,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { MyRequestsBell } from "@/components/notifications/MyRequestsBell";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -184,6 +190,10 @@ export default function StudentDashboard() {
   const [hasMedicalConditions, setHasMedicalConditions] = useState<"yes" | "no" | "">("");
   const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", preferredTime: "no_preference", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
   const [newChildConsent, setNewChildConsent] = useState(false);
+  type ChildDoc = { dataUrl: string; fileName: string; fileSize: number } | null;
+  const [childDocs, setChildDocs] = useState<{ birthCert: ChildDoc; photo: ChildDoc; guardianId: ChildDoc }>({ birthCert: null, photo: null, guardianId: null });
+  const [childErrors, setChildErrors] = useState<Record<string, string>>({});
+  const childDocsComplete = Boolean(childDocs.birthCert && childDocs.photo && childDocs.guardianId);
 
   // ─── Schedule view controls ────────────────────────────────────────────────────
   const [scheduleViewMode, setScheduleViewMode] = useState<"monthly" | "weekly" | "daily">("monthly");
@@ -731,8 +741,8 @@ export default function StudentDashboard() {
 
   const handleAddChildSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!newChild.firstName.trim() || !newChild.lastName.trim() || !newChild.birthdate || !newChild.packageKey || !newChildConsent) {
-      toast.error("Please complete the child information and accept the agreement.");
+    if (!validateChildStep1() || !newChild.packageKey || !newChildConsent) {
+      toast.error("Please complete the child information, required documents and accept the agreement.");
       return;
     }
 
@@ -750,10 +760,15 @@ export default function StudentDashboard() {
         }],
         paymentOption: "down",
         paymentMethod: newChild.paymentMethod as "gcash" | "seabank" | "bdo",
-        studentFirstName: newChild.firstName.trim(),
-        studentMiddleName: newChild.middleName.trim(),
-        studentLastName: newChild.lastName.trim(),
+        studentFirstName: toTitleCase(newChild.firstName),
+        studentMiddleName: newChild.middleName.trim() ? toTitleCase(newChild.middleName) : "",
+        studentLastName: toTitleCase(newChild.lastName),
         birthdate: newChild.birthdate,
+        requirementDocuments: {
+          birthCertificate: childDocs.birthCert ? { dataUrl: childDocs.birthCert.dataUrl, fileName: childDocs.birthCert.fileName } : undefined,
+          studentPhoto: childDocs.photo ? { dataUrl: childDocs.photo.dataUrl, fileName: childDocs.photo.fileName } : undefined,
+          guardianId: childDocs.guardianId ? { dataUrl: childDocs.guardianId.dataUrl, fileName: childDocs.guardianId.fileName } : undefined,
+        },
         preferredStartDate: newChild.preferredStartDate || undefined,
         preferredTime: newChild.preferredTime as "morning" | "afternoon" | "no_preference",
         // preferredDays not collected in the quick add-child flow — defaults to no preference
@@ -780,6 +795,9 @@ export default function StudentDashboard() {
       setAssessmentInfo({});
       setPaymentProofFile(null);
       setPaymentReference("");
+      setChildDocs({ birthCert: null, photo: null, guardianId: null });
+      setChildErrors({});
+      setAddChildStep(1);
       setIsAddChildOpen(false);
       const response = await enrollmentService.getMyEnrollments();
       if (response.data?.success && Array.isArray(response.data.enrollments)) setEnrollments(response.data.enrollments);
@@ -791,9 +809,30 @@ export default function StudentDashboard() {
     }
   };
 
+  const validateChildStep1 = () => {
+    const e: Record<string, string> = {};
+    const fn = validateFullName(newChild.firstName, "First name", { minParts: 1 });
+    if (!fn.valid) e.firstName = fn.error!;
+    if (newChild.middleName.trim()) {
+      const mn = validateFullName(newChild.middleName, "Middle name", { minParts: 1, required: false });
+      if (!mn.valid) e.middleName = mn.error!;
+    }
+    const ln = validateFullName(newChild.lastName, "Last name", { minParts: 1 });
+    if (!ln.valid) e.lastName = ln.error!;
+    const bd = validateBirthdate(newChild.birthdate);
+    if (!bd.valid) e.birthdate = bd.error!;
+    if (!childDocsComplete) e.docs = "Upload all three required documents (Birth Certificate, 2×2 Photo, Guardian ID).";
+    setChildErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
   const handleAddChildNext = () => {
+    if (addChildStep === 1 && !validateChildStep1()) {
+      toast.error("Please complete the child information, birthdate and required documents.");
+      return;
+    }
     const requiredByStep: Record<number, boolean> = {
-      1: Boolean(newChild.firstName.trim() && newChild.lastName.trim() && newChild.birthdate),
+      1: true,
       2: Boolean(newChild.packageKey),
       3: true,
       4: Boolean(hasAllergies && hasMedicalConditions && newChild.emergencyContact.trim() && (hasAllergies === "no" || newChild.allergies.trim()) && (hasMedicalConditions === "no" || newChild.medications.trim())),
@@ -821,11 +860,13 @@ export default function StudentDashboard() {
     setAddChildStep((step) => Math.min(9, step + 1));
   };
 
-  const childAge = newChild.birthdate
-    ? (Date.now() - new Date(`${newChild.birthdate}T00:00:00`).getTime()) / (365.25 * 24 * 60 * 60 * 1000)
-    : null;
-  const isPackageEligible = (item: { ageMin?: number | null; ageMax?: number | null }) =>
-    childAge !== null && (item.ageMin == null || childAge >= item.ageMin) && (item.ageMax == null || childAge <= item.ageMax);
+  // Shared calendar-exact age maths — a local 365.25-day approximation here used
+  // to compute 1.9997 for a child on their exact 2nd birthday, locking them out.
+  const childAge = newChild.birthdate ? computeAgeYears(newChild.birthdate) : null;
+  // Use the shared program eligibility rules (Toddlers Playgroup 2–4, etc.) rather than
+  // the raw Pricing ageMin/ageMax so this matches the main enrollment wizard.
+  const isPackageEligible = (item: { programCode?: string }) =>
+    childAge !== null && !!item.programCode && checkProgramEligibility(item.programCode, childAge).eligible;
   const activeAssessmentTemplate = assessmentTemplates.find((template) => template._id === assessmentTemplateId);
 
   const handleQuickAction = (action: string) => {
@@ -926,6 +967,7 @@ export default function StudentDashboard() {
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </button>
                 ))}
+                <MyRequestsBell asRow />
               </div>
             </motion.div>
 
@@ -1700,26 +1742,62 @@ export default function StudentDashboard() {
             <DialogDescription>Step {addChildStep + 3} of 12. This creates an enrollment under your account, not another login account.</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleAddChildSubmit} className="space-y-4">
-            {addChildStep === 1 && <div className="space-y-4">
+            {addChildStep === 1 && <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="child-first-name">First name</Label>
-                <Input id="child-first-name" value={newChild.firstName} onChange={(event) => setNewChild((current) => ({ ...current, firstName: event.target.value }))} required />
+                <Input id="child-first-name" value={newChild.firstName}
+                  className={childErrors.firstName ? "border-destructive" : ""}
+                  onChange={(event) => { setNewChild((current) => ({ ...current, firstName: event.target.value })); setChildErrors((p) => ({ ...p, firstName: "" })); }}
+                  onBlur={(event) => { const c = toTitleCase(event.target.value); if (c && c !== event.target.value) setNewChild((cur) => ({ ...cur, firstName: c })); const r = validateFullName(c || event.target.value, "First name", { minParts: 1 }); setChildErrors((p) => ({ ...p, firstName: r.valid ? "" : r.error! })); }}
+                  required />
+                {childErrors.firstName && <p className="text-xs text-destructive">{childErrors.firstName}</p>}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="child-middle-name">Middle name</Label>
-                <Input id="child-middle-name" value={newChild.middleName} onChange={(event) => setNewChild((current) => ({ ...current, middleName: event.target.value }))} />
+                <Input id="child-middle-name" value={newChild.middleName}
+                  className={childErrors.middleName ? "border-destructive" : ""}
+                  onChange={(event) => { setNewChild((current) => ({ ...current, middleName: event.target.value })); setChildErrors((p) => ({ ...p, middleName: "" })); }}
+                  onBlur={(event) => { if (!event.target.value.trim()) { setChildErrors((p) => ({ ...p, middleName: "" })); return; } const c = toTitleCase(event.target.value); if (c !== event.target.value) setNewChild((cur) => ({ ...cur, middleName: c })); const r = validateFullName(c, "Middle name", { minParts: 1, required: false }); setChildErrors((p) => ({ ...p, middleName: r.valid ? "" : r.error! })); }} />
+                {childErrors.middleName && <p className="text-xs text-destructive">{childErrors.middleName}</p>}
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="child-last-name">Last name</Label>
-                <Input id="child-last-name" value={newChild.lastName} onChange={(event) => setNewChild((current) => ({ ...current, lastName: event.target.value }))} required />
+                <Input id="child-last-name" value={newChild.lastName}
+                  className={childErrors.lastName ? "border-destructive" : ""}
+                  onChange={(event) => { setNewChild((current) => ({ ...current, lastName: event.target.value })); setChildErrors((p) => ({ ...p, lastName: "" })); }}
+                  onBlur={(event) => { const c = toTitleCase(event.target.value); if (c && c !== event.target.value) setNewChild((cur) => ({ ...cur, lastName: c })); const r = validateFullName(c || event.target.value, "Last name", { minParts: 1 }); setChildErrors((p) => ({ ...p, lastName: r.valid ? "" : r.error! })); }}
+                  required />
+                {childErrors.lastName && <p className="text-xs text-destructive">{childErrors.lastName}</p>}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="child-birthdate">Birthdate</Label>
-                <Input id="child-birthdate" type="date" value={newChild.birthdate} onChange={(event) => setNewChild((current) => ({ ...current, birthdate: event.target.value }))} required />
+                <Input id="child-birthdate" type="date" min={birthdateMin()} max={birthdateMax()} value={newChild.birthdate}
+                  className={childErrors.birthdate ? "border-destructive" : ""}
+                  onChange={(event) => { setNewChild((current) => ({ ...current, birthdate: event.target.value })); setChildErrors((p) => ({ ...p, birthdate: "" })); }}
+                  required />
+                {childErrors.birthdate && <p className="text-xs text-destructive">{childErrors.birthdate}</p>}
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold">Enrollment Requirements</p>
+                <span className="text-xs text-muted-foreground">{[childDocs.birthCert, childDocs.photo, childDocs.guardianId].filter(Boolean).length}/3</span>
+              </div>
+              <DocUploadField label="Student Birth Certificate" desc="Used for age verification." value={childDocs.birthCert}
+                onChange={(doc) => { setChildDocs((c) => ({ ...c, birthCert: doc })); setChildErrors((p) => ({ ...p, docs: "" })); }}
+                onRemove={() => setChildDocs((c) => ({ ...c, birthCert: null }))} />
+              <DocUploadField label="Recent 2×2 Photo of Student" desc="Clear, recent photo." value={childDocs.photo}
+                accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                onChange={(doc) => { setChildDocs((c) => ({ ...c, photo: doc })); setChildErrors((p) => ({ ...p, docs: "" })); }}
+                onRemove={() => setChildDocs((c) => ({ ...c, photo: null }))} />
+              <DocUploadField label="Guardian Valid ID" desc="Government-issued ID of the parent/guardian." value={childDocs.guardianId}
+                onChange={(doc) => { setChildDocs((c) => ({ ...c, guardianId: doc })); setChildErrors((p) => ({ ...p, docs: "" })); }}
+                onRemove={() => setChildDocs((c) => ({ ...c, guardianId: null }))} />
+              {childErrors.docs && <p className="text-xs text-destructive">{childErrors.docs}</p>}
             </div>
             </div>}
             {addChildStep === 2 && <div className="space-y-2"><Label>Choose a program package</Label><p className="text-xs text-muted-foreground">Enter the birthdate first. Programs outside the child&apos;s age range are disabled.</p><div className="max-h-64 space-y-2 overflow-y-auto">{["TPG101", "ACT102", "EXP106"].map((programCode) => { const items = pricing.filter((item) => item.programCode === programCode); if (!items.length) return null; const eligibleItems = items.filter(isPackageEligible); const expanded = expandedPrograms.includes(programCode); const programName = programCode === "TPG101" ? "Toddlers Playgroup" : programCode === "ACT102" ? "Academic Tutorial" : "Examination Preparation"; return <div key={programCode} className="rounded-lg border border-border"><button type="button" disabled={eligibleItems.length === 0} onClick={() => setExpandedPrograms((current) => current.includes(programCode) ? current.filter((code) => code !== programCode) : [...current, programCode])} className={`flex w-full items-center justify-between p-3 text-left ${eligibleItems.length === 0 ? "cursor-not-allowed opacity-50" : "hover:bg-muted/50"}`}><span><span className="block text-sm font-semibold">{programName}</span><span className="text-xs text-muted-foreground">{eligibleItems.length === 0 ? (childAge === null ? "Enter birthdate to check eligibility" : "Not available for this age") : `${items.length} package${items.length === 1 ? "" : "s"}`}</span></span><span className="text-muted-foreground">{expanded ? "−" : "+"}</span></button>{expanded && eligibleItems.length > 0 && <div className="space-y-2 border-t border-border p-2">{eligibleItems.map((item) => <button type="button" key={`${item.programCode}:${item.packageSlug}`} onClick={() => setNewChild((current) => ({ ...current, packageKey: `${item.programCode}:${item.packageSlug}` }))} className={`w-full rounded-lg border p-3 text-left ${newChild.packageKey === `${item.programCode}:${item.packageSlug}` ? "border-primary bg-primary/5" : "border-border"}`}><span className="block text-sm font-medium">{item.displayName}</span><span className="text-xs text-muted-foreground">{item.durationDesc || "Package"} - PHP {item.priceFull.toLocaleString()}</span></button>)}</div>}</div>; })}</div></div>}

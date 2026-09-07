@@ -267,7 +267,7 @@ export default function EnrollmentTracking() {
           {/* Footer help */}
           <p className="text-center text-xs text-muted-foreground mt-6">
             Need help? Contact us at{' '}
-            <a href="mailto:beebright@gmail.com" className="text-amber-600 hover:underline">beebright@gmail.com</a>
+            <a href="mailto:beebrightph@gmail.com" className="text-amber-600 hover:underline">beebrightph@gmail.com</a>
           </p>
         </div>
       </div>

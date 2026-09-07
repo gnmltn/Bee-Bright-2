@@ -34,11 +34,18 @@ const splitValidAndInvalidPayments = (payments) => {
   const invalidIds = [];
 
   (payments || []).forEach((payment) => {
-    if (!payment?.student || !hasCompleteStudentName(payment.student)) {
-      invalidIds.push(payment?._id);
+    if (!payment) return;
+    // A payment is legitimate if it is linked to an enrollment OR a parent account
+    // (the wizard / "add child" flow — student is null there), OR a legacy student
+    // with a complete name. Only genuinely orphaned junk is a cleanup candidate.
+    const hasEnrollment = !!payment.enrollment;
+    const hasParent = !!payment.parent;
+    const hasNamedStudent = payment.student && hasCompleteStudentName(payment.student);
+    if (hasEnrollment || hasParent || hasNamedStudent) {
+      valid.push(payment);
       return;
     }
-    valid.push(payment);
+    invalidIds.push(payment._id);
   });
 
   return { valid, invalidIds: invalidIds.filter(Boolean) };
@@ -113,7 +120,8 @@ const findAdminPayments = async (status, limit) => {
 
   return Payment.find(filter)
     .populate('student', 'firstName lastName email phone')
-    .populate('enrollment', 'referenceNumber paymentStatus status totalFee paymentOption')
+    .populate('parent', 'firstName lastName email phone')
+    .populate('enrollment', 'referenceNumber enrollmentId studentSnapshot paymentStatus status totalFee paymentOption')
     .populate('verifiedBy', 'firstName lastName role')
     .sort({ createdAt: -1 })
     .limit(safeLimit);
@@ -859,5 +867,7 @@ module.exports = {
   getMyPayments,
   getAdminPayments,
   getPendingPayments,
-  verifyPayment
+  verifyPayment,
+  // exported for tests
+  splitValidAndInvalidPayments,
 };

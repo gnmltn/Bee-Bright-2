@@ -2,19 +2,36 @@
 
 ## Overview
 
-The BeeBright AI system now includes a comprehensive, integrated dataset of **2000+ pre-trained Q&A pairs** designed to provide intelligent, role-aware, and context-sensitive responses across multiple languages (English, Filipino, Taglish).
+> **Accuracy note (Task 23c):** an earlier version of this doc claimed "2000+ Q&A pairs".
+> The actual live dataset is **89 entries total** — see the real counts below. The
+> "2000" figure came from `beebright_ai_2000_dataset.csv`, which was **distilled down**
+> to the 25 `intentKeywordRules` (one rule per intent/keyword family), not imported
+> row-for-row. Base any fine-tuning decision on the real numbers.
+
+The BeeBright AI system includes a small hand-curated dataset that powers **deterministic keyword-matched replies** across English, Filipino, and Taglish.
+
+> **Task 24 update:** the dataset is now *also* used as **RAG reference context** for the
+> local `phi` model — but only a small, topic-relevant slice (≤4 entries, selected by the
+> Task 20 categoriser), and only when a message actually reaches the `phi` fallback. It is
+> injected as a clearly-labelled `[REFERENCE MATERIAL]` block, kept separate from the
+> per-user `[ACCOUNT DATA]` block. See `buildPhiReferenceContext()` / `generatePhiReply()`
+> in `aiController.js`. `phi` still never queries the database and is never the source of
+> truth for account data.
 
 ## What Was Created
 
 ### 1. Dataset File: `aiResponseDatasets.js`
 **Location:** `backend/ai_training/aiResponseDatasets.js`
 
-A comprehensive, modular dataset system containing:
-- **400+ Student Queries** - Questions from students about enrollment, payments, grades, schedule, materials, login, and support
-- **300+ Tutor Queries** - Tutor-specific questions about materials, grading, students, attendance, communication, sessions
-- **300+ Admin Queries** - Admin-focused queries about enrollments, payments, user management, analytics, schedules
-- **500+ Visitor Queries** - General public questions about programs, pricing, location, contact, and enrollment process
-- **500+ Context-Aware Follow-ups** - Follow-up questions that maintain conversation context
+A modular dataset system. **Real live counts:**
+- **40 Student Queries** - enrollment, payments, grades, schedule, materials, login, support
+- **5 Tutor Queries** - materials, grading, students, attendance, communication, sessions
+- **2 Admin Queries** - enrollments, payments, user management, analytics, schedules
+- **5 Visitor Queries** - programs, pricing, location, contact, enrollment process
+- **10 Navigation Queries** - dashboard/profile/announcements navigation
+- **2 Context-Aware Follow-ups** - follow-up questions that maintain conversation context
+- **25 Intent Keyword Rules** - keyword lists → templated replies (some backed by live DB counts)
+- **→ 89 entries total** (`getDatasetCount()` / `getDatasetCountByType().total`)
 
 ### 2. Integration Points
 
@@ -28,11 +45,11 @@ Added the following functions:
 - `getAIDatasetStats()` - Express endpoint to retrieve dataset stats
 
 #### B. Response Pipeline
-The dataset matching is integrated early in the `getResolvedReply()` function:
+The Q&A dataset match runs in `getResolvedReply()` (and `getOllamaBypassReply()`), after
+the specific grounded/keyword handlers and before the generic system replies. (It was
+briefly unreachable behind an unconditional `return` — fixed in Task 23a.)
 ```javascript
-// CHECK AI DATASETS FIRST (2000+ pre-trained Q&A items)
-const userRole = user?.role || 'student';
-const datasetResponse = getContextualDatasetResponse(message, userRole, effectiveLanguageProfile, []);
+const datasetResponse = getContextualDatasetResponse(message, user?.role || 'student', effectiveLanguageProfile, history);
 if (datasetResponse) {
   return datasetResponse;
 }
@@ -137,12 +154,13 @@ Role: admin or super_admin
   "success": true,
   "message": "AI dataset statistics retrieved successfully",
   "data": {
-    "totalDatasets": 2000,
-    "studentDatasets": 410,
-    "tutorDatasets": 305,
-    "adminDatasets": 303,
-    "visitorDatasets": 506,
-    "contextAwareDatasets": 476,
+    "totalDatasets": 89,
+    "studentDatasets": 40,
+    "tutorDatasets": 5,
+    "adminDatasets": 2,
+    "visitorDatasets": 5,
+    "contextAwareDatasets": 2,
+    "csvIntentKeywordDatasets": 25,
     "topics": {
       "student": ["login", "enrollment", "payments", "grades", ...],
       "tutor": ["login", "materials", "schedule", ...],
@@ -312,15 +330,19 @@ Use `GET /api/ai/dataset-stats` to monitor:
 
 ## Summary
 
-The BeeBright AI now has a robust foundation with **2000+ pre-trained responses** that:
-- ✅ Handle 90%+ of common questions
-- ✅ Maintain context across conversation
-- ✅ Support multiple languages seamlessly
-- ✅ Respect role-based access control
-- ✅ Provide fast, deterministic responses
-- ✅ Gracefully fall back to advanced methods when needed
+The BeeBright AI dataset is a **small, hand-curated set of 89 entries** (62 Q&A pairs +
+2 follow-ups + 25 keyword rules) that:
+- ✅ Provides fast, deterministic replies for common navigation/FAQ questions
+- ✅ Supports English, Filipino, and Taglish
+- ✅ Respects role-based access control
+- ✅ Feeds a weighted keyword matcher (filler words stripped, domain keywords boosted)
+- ✅ Falls through to grounded DB answers and, last of all, the local `phi` model
+- ✅ (Task 24) Also feeds `phi` a small topic-relevant RAG slice when the deterministic
+  matcher genuinely has nothing — so the last-resort answer is grounded, not free-invented
 
-This system ensures BeeBright users receive intelligent, accurate, and contextually appropriate responses in their preferred language, while admins benefit from detailed analytics and easy maintenance tools.
+It is **not** a large corpus. Task 24 uses it as *reference* context for `phi` (a few
+entries at a time), not as bulk LLM training/context. For substantially better free-text
+coverage, a stronger model (or fine-tuning) is still the path — not growing this file.
 
 ---
 

@@ -41,6 +41,24 @@ const listEscalations = async (req, res) => {
 };
 
 /**
+ * GET /api/escalations/mine  (any authenticated user)
+ * The caller's OWN handoff tickets only — read-only status visibility (Tasks 16/18).
+ * Child-safety escalations are never returned here; those are admin-only.
+ */
+const listMyEscalations = async (req, res) => {
+  try {
+    const rows = await Escalation.find({ user: req.user._id, source: 'handoff' })
+      .select('category trigger status severity createdAt updatedAt handledAt')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    res.status(200).json({ success: true, count: rows.length, escalations: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load your requests.' });
+  }
+};
+
+/**
  * GET /api/escalations/stats  (admin / super_admin)
  * Open-item counts for a dashboard badge.
  */
@@ -120,6 +138,7 @@ const updateEscalation = async (req, res) => {
 
 module.exports = {
   listEscalations,
+  listMyEscalations,
   getEscalationStats,
   getEscalation,
   updateEscalation,

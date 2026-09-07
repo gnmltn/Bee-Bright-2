@@ -92,6 +92,14 @@ const enrollmentSchema = new mongoose.Schema({
     emergencyContact: { type: String, default: '' }
   },
 
+  // Enrollment requirement documents (stored on disk under /uploads/requirements/).
+  // Linked to this specific child's enrollment record, not the parent account.
+  requirementDocuments: {
+    birthCertificate: { path: { type: String, default: null }, fileName: { type: String, default: null }, uploadedAt: { type: Date, default: null } },
+    studentPhoto:     { path: { type: String, default: null }, fileName: { type: String, default: null }, uploadedAt: { type: Date, default: null } },
+    guardianId:       { path: { type: String, default: null }, fileName: { type: String, default: null }, uploadedAt: { type: Date, default: null } },
+  },
+
   referenceNumber: { type: String, default: null },
 
   paymentOption: {

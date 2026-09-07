@@ -1,11 +1,12 @@
-import { useState, useRef } from 'react';
-import { Upload, X, FileImage, Copy, CheckCheck } from 'lucide-react';
+import { useState } from 'react';
+import { Copy, CheckCheck } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { computeTotalFee } from '../wizard-types';
+import DocUploadField from '../DocUploadField';
 
 // Real logo assets from src/assets (seabank_logo.png, bdo_logo.jpg)
 // GCash has no image file in assets — uses brand-colour SVG instead
@@ -80,10 +81,7 @@ const METHODS = [
   },
 ] as const;
 
-const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
-
 export default function Step10Billing({ data, update, onNext, onBack, toast }: Props) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [copying, setCopying] = useState<string | null>(null);
 
   const totalFull = data.selectedPackages.reduce((s, p) => s + p.price, 0);
@@ -100,34 +98,6 @@ export default function Step10Billing({ data, update, onNext, onBack, toast }: P
     } catch {
       toast({ title: 'Copy failed', description: 'Please copy manually.', variant: 'destructive' });
     }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > MAX_FILE_BYTES) {
-      toast({ title: 'File too large', description: 'Maximum file size is 8 MB.', variant: 'destructive' });
-      return;
-    }
-    if (!['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'].includes(file.type)) {
-      toast({ title: 'Invalid file type', description: 'Please upload a JPG, PNG, or PDF.', variant: 'destructive' });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      update({ proofDataUrl: reader.result as string, proofFileName: file.name });
-    };
-    reader.readAsDataURL(file);
-    // reset so the same file can be re-selected after removal
-    e.target.value = '';
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    const synthetic = { target: { files: e.dataTransfer.files } } as unknown as React.ChangeEvent<HTMLInputElement>;
-    handleFileChange(synthetic);
   };
 
   const instructionRows = [
@@ -240,59 +210,13 @@ export default function Step10Billing({ data, update, onNext, onBack, toast }: P
 
       {/* ── Proof of payment upload ── */}
       <div className="space-y-3">
-        <Label className="font-semibold">
-          Upload Proof of Payment <span className="text-destructive">*</span>
-        </Label>
-
-        <div
-          role="button"
-          tabIndex={0}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          onKeyDown={(e) => e.key === 'Enter' && fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-            data.proofDataUrl
-              ? 'border-emerald-400 bg-emerald-50 dark:bg-emerald-950/20'
-              : 'border-border hover:border-amber-400 hover:bg-amber-50/40'
-          }`}
-          aria-label="Upload payment proof"
-        >
-          {data.proofDataUrl ? (
-            <div className="flex flex-col items-center gap-2">
-              <FileImage className="h-8 w-8 text-emerald-600" />
-              <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300 max-w-xs truncate">
-                {data.proofFileName || 'File uploaded'}
-              </p>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:bg-destructive/10 h-7 gap-1"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  update({ proofDataUrl: null, proofFileName: null });
-                }}
-              >
-                <X className="h-3.5 w-3.5" /> Remove
-              </Button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-2">
-              <Upload className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-medium">Drag & drop or click to upload</p>
-              <p className="text-xs text-muted-foreground">Screenshot or PDF — max 8 MB · JPG, PNG, PDF</p>
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            accept="image/jpeg,image/jpg,image/png,application/pdf"
-            onChange={handleFileChange}
-            aria-hidden="true"
-          />
-        </div>
+        <DocUploadField
+          label="Upload Proof of Payment"
+          desc="Screenshot of your GCash / bank transfer receipt, or a PDF."
+          value={data.proofDataUrl ? { dataUrl: data.proofDataUrl, fileName: data.proofFileName || 'proof-of-payment', fileSize: 0 } : null}
+          onChange={(doc) => update({ proofDataUrl: doc.dataUrl, proofFileName: doc.fileName })}
+          onRemove={() => update({ proofDataUrl: null, proofFileName: null })}
+        />
 
         <div className="space-y-1.5">
           <Label htmlFor="payerReference">

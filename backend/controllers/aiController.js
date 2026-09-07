@@ -7,6 +7,8 @@ const Schedule = require('../models/Schedule');
 const User = require('../models/User');
 const Grade = require('../models/Grade');
 const LearningMaterial = require('../models/LearningMaterial');
+const Pricing = require('../models/Pricing');
+const Escalation = require('../models/Escalation');
 const { getIntentReply, getChatModelMetrics } = require('../utils/chatIntentModel');
 const AIResponseDatasets = require('../ai_training/aiResponseDatasets');
 const { logAiInteraction } = require('../utils/aiAuditService');
@@ -28,10 +30,25 @@ const {
   getLessonPrepUnavailableReply,
 } = require('../utils/tutorAi');
 const { isAccountScopedQuestion, getLoginPromptReply } = require('../utils/publicChatGuard');
+const {
+  contentTokens,
+  hasVagueFollowUpShape,
+  resolveDomainCategory,
+  weightedOverlapScore,
+  isOutOfScopeMetricsQuestion,
+  normalizeTypos,
+} = require('../utils/keywordWeighting');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'phi:latest';
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 20000);
+// How long Ollama keeps phi resident after a request (Task 29b — avoids repeated cold
+// starts between requests). Passed straight through as the `keep_alive` field.
+const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || '10m';
+// Task 29c — diagnostic-only. When on, the exact request payload sent to Ollama and the
+// raw pre-sanitize response are logged to the console (NOT the AuditLog collection) for
+// the llm / llm-fallback paths. Off by default; large output.
+const OLLAMA_DEBUG = /^(1|true|yes)$/i.test(String(process.env.OLLAMA_DEBUG || ''));
 const SYSTEM_UNAVAILABLE_REPLY = 'Sorry, this information is not yet available in the system.';
 
 const LANGUAGE_NAMES = {
@@ -295,6 +312,15 @@ function localizeKnownReply(reply, profile) {
       text,
       'Paumanhin, hindi pa available ang impormasyong ito sa system.',
       'Sorry, hindi pa available ang information na ito sa system.'
+    ),
+    // The intent-classifier fallback reply (utils/chatIntentModel.js). Localized here so
+    // that when phi is skipped for Filipino/Taglish (Task 26) the user still gets a
+    // grammatically correct reply in their own language.
+    'I can help with schedules, enrollment, payments, and learning materials. Try asking about one of those.': pickByLanguage(
+      profile,
+      text,
+      'Matutulungan kita sa mga programa at presyo, enrollment, payments, schedule, at learning materials. Magtanong tungkol sa alinman sa mga ito.',
+      'Matutulungan kita sa programs at pricing, enrollment, payments, schedule, at learning materials. Magtanong tungkol sa alinman sa mga ito.'
     )
   };
 
@@ -371,34 +397,46 @@ const KNOWN_SYSTEM_INTENTS = new Set([
   'tutor_help'
 ]);
 
+// The 3 programs actually offered — matches the Pricing collection (TPG101/ACT102/EXP106)
+// and the landing page. Pricing detail comes from the DB (getProgramPricingReply), Task 14.
+const PROGRAM_CATALOG = [
+  { code: 'TPG101', label: 'Toddlers Playgroup', ageText: 'ages 2 to 4', format: 'group play sessions', focus: 'socialization, sensory play, and early development', aliases: ['toddlers playgroup', 'toddler playgroup', 'toddlers', 'toddler', 'playgroup'] },
+  { code: 'ACT102', label: 'Academic Tutorial', ageText: 'ages 2 and up', format: 'one-on-one tutoring', focus: 'subject-based support from pre-school through junior/senior high school', aliases: ['academic tutorial', 'academic', 'tutorial program', 'tutoring program'] },
+  { code: 'EXP106', label: 'Examination Preparation', ageText: 'ages 3 and up', format: 'one-on-one tutoring', focus: 'test mastery, mock exams, and test-taking strategies for a specific upcoming exam', aliases: ['examination preparation', 'exam preparation', 'exam prep', 'exam review', 'entrance exam', 'test prep', 'exam package'] },
+];
+
+// Task 25 — the brochure prices only 3 packages. The items below are SCOPE of Academic
+// Tutorial (documented, not deleted), never separately priced.
+const ACADEMIC_TUTORIAL_SUBFEATURES = [
+  'Pre-Kindergarten Readiness',
+  'Reading, Writing, and Numeracy Enhancement',
+  'Academic Tutorial for Kindergarten to High School',
+  'Homework Assistance and Lesson Advancement',
+  'SPED Tutorial (individualized learning support)',
+];
+
 const PROGRAM_KEYWORDS = [
   {
     label: 'Toddlers Playgroup',
     aliases: ['toddlers playgroup', 'toddler playgroup', 'toddlers', 'toddler']
   },
   {
-    label: 'Pre-Kindergarten Readiness Program',
-    aliases: ['pre-kindergarten readiness program', 'pre-kindergarten readiness', 'pre kindergarten readiness', 'pre-k readiness', 'prek readiness', 'pre-k', 'prek']
-  },
-  {
-    label: 'Kindergarten Readiness Program',
-    aliases: ['kindergarten readiness program', 'kindergarten readiness', 'kindergarten']
-  },
-  {
+    // Task 25b — the retired "Pre-Kindergarten Readiness" / "Kindergarten Readiness" /
+    // "SPED Tutorial" names are folded in here as aliases: they resolve to Academic
+    // Tutorial, not to their own priced entries.
     label: 'Academic Tutorial',
-    aliases: ['academic tutorial', 'academic']
-  },
-  {
-    label: 'SPED Tutorial',
-    aliases: ['sped tutorial', 'sped', 'special education']
+    aliases: [
+      'academic tutorial', 'academic',
+      'pre-kindergarten readiness', 'pre kindergarten readiness', 'pre-k readiness', 'prek readiness',
+      'kindergarten readiness',
+      'sped tutorial', 'sped', 'special education',
+      'homework assistance', 'homework help', 'lesson advancement',
+      'reading writing and numeracy', 'numeracy enhancement',
+    ]
   },
   {
     label: 'Examination Preparation',
     aliases: ['examination preparation', 'exam preparation', 'exam prep']
-  },
-  {
-    label: 'Artificial Intelligence 101',
-    aliases: ['artificial intelligence 101', 'ai 101', 'ai program', 'artificial intelligence', 'programming', 'machine learning', 'neural networks', 'ann']
   }
 ];
 
@@ -409,24 +447,9 @@ const PROGRAM_FEES = [
     focus: 'Socialization, sensory play, and early development'
   },
   {
-    name: 'Pre-Kindergarten Readiness Program',
-    fee: 3200,
-    focus: 'Foundational academic skills, phonics, and basic reading and writing'
-  },
-  {
-    name: 'Kindergarten Readiness Program',
-    fee: 3000,
-    focus: 'School-entry preparation and reading and writing readiness'
-  },
-  {
     name: 'Academic Tutorial',
     fee: 2500,
-    focus: 'Subject-based support for Grade 1 to Junior High'
-  },
-  {
-    name: 'SPED Tutorial',
-    fee: 3500,
-    focus: 'Individualized learning support with IEP-based guidance'
+    focus: 'One-on-one subject tutoring from pre-school to high school, including reading, writing and numeracy, homework assistance, lesson advancement, and individualized (SPED) support'
   },
   {
     name: 'Examination Preparation',
@@ -463,6 +486,59 @@ function detectResponsePreference(message) {
     wantsSummary: /(summary|summarize|summarized|brief|concise|short|in short|paikliin|maikli)/.test(normalized),
     wantsSimple: /(simple|understandable|easy to understand|madaling intindihin|madali intindihin|clear explanation|clear)/.test(normalized)
   };
+}
+
+/**
+ * Task 21 — single-conversation topic retention.
+ *
+ * When a message is a vague follow-up ("tulungan mo ako uli dyan", "can you help with
+ * that again") with no topic of its own, resolve it against the most recent concrete
+ * message in this conversation. The frontend already sends `history` (the chat widget's
+ * in-memory message list) — that IS the session boundary; it clears on reload / logout /
+ * widget remount, so no new session storage is needed.
+ *
+ * Returns { message, isFollowUp } — `message` is the text the rest of the pipeline
+ * should resolve. A genuine topic switch (new domain keyword) is left untouched.
+ */
+function applyConversationContext(rawMessage, history = []) {
+  if (!hasVagueFollowUpShape(rawMessage)) {
+    return { message: rawMessage, isFollowUp: false };
+  }
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const item of items) {
+    if (!item || item.role !== 'user' || typeof item.content !== 'string') continue;
+    const prior = item.content.trim();
+    if (!prior || prior === String(rawMessage || '').trim()) continue;
+    if (hasVagueFollowUpShape(prior) || contentTokens(prior).length === 0) continue;
+    return { message: prior, isFollowUp: true, originalMessage: rawMessage };
+  }
+  return { message: rawMessage, isFollowUp: false };
+}
+
+// ── Class format: onsite only (Task 20) ────────────────────────────────────
+function isOnlineClassQuestion(normalized) {
+  if (/(online (payment|form|enrollment|registration)|bayad online|pay online|online (banking|transfer))/.test(normalized)) {
+    return false;
+  }
+  return /(online (class|classes|klase|session|sessions|tutorial|setup|option|learning|mode|program|meeting)|(may|meron|available|offer).*(online)|online ba|(hindi|walang|wala) (ba )?(kayong |kaming )?online|(face to face|f2f|onsite|in person|physical class|actual class)\b.*(ba|lang|only|po)|purely onsite|purong onsite)/.test(normalized);
+}
+
+function getClassFormatReply(languageProfile = 'english') {
+  return pickByLanguage(
+    languageProfile,
+    'Bee Bright classes are onsite / face-to-face only — there are no online classes. Sessions are held at the tutorial center in Barangay Pantal, Dagupan City, Pangasinan.',
+    'Onsite / face-to-face lang po ang klase sa Bee Bright — wala kaming online classes. Ginagawa ang mga session sa tutorial center sa Barangay Pantal, Dagupan City, Pangasinan.',
+    'Onsite / face-to-face lang po kami sa Bee Bright — wala kaming online classes. Nasa tutorial center sa Barangay Pantal, Dagupan City, Pangasinan ang mga session.'
+  );
+}
+
+function getOutOfScopeMetricsReply(languageProfile = 'english') {
+  return pickByLanguage(
+    languageProfile,
+    'System usage metrics and AI model statistics are only available on the admin dashboard, not through this assistant.',
+    'Ang system usage metrics at AI model statistics ay makikita lamang sa admin dashboard, hindi dito sa assistant.',
+    'Ang system usage metrics at AI model statistics ay nasa admin dashboard lang, hindi dito sa assistant.'
+  );
 }
 
 function detectFollowUpTopic(message, history = []) {
@@ -712,9 +788,9 @@ function getClarificationReply(languageProfile = 'english', relatedTopic = null)
 
   return pickByLanguage(
     languageProfile,
-    'I want to make sure my answer matches your exact question. Please clarify your topic: login, enrollment, payments, schedule, grades, materials, announcements, or tutor contact.',
-    'Gusto kong tiyaking tugma ang sagot ko sa eksaktong tanong mo. Pakilinaw ang topic: login, enrollment, payments, schedule, grades, materials, announcements, o tutor contact.',
-    'Gusto kong tiyaking tugma ang sagot ko sa exact na tanong mo. Pakilinaw ang topic: login, enrollment, payments, schedule, grades, materials, announcements, o tutor contact.'
+    'I want to make sure my answer matches your exact question. Please clarify your topic: programs and pricing, enrollment, payments, login, schedule, grades, materials, announcements, or tutor contact.',
+    'Gusto kong tiyaking tugma ang sagot ko sa eksaktong tanong mo. Pakilinaw ang topic: mga programa at presyo, enrollment, payments, login, schedule, grades, materials, announcements, o tutor contact.',
+    'Gusto kong tiyaking tugma ang sagot ko sa exact na tanong mo. Pakilinaw ang topic: programs at pricing, enrollment, payments, login, schedule, grades, materials, announcements, o tutor contact.'
   );
 }
 
@@ -813,9 +889,9 @@ function isSystemEffectivenessQuestion(normalized) {
 function getSystemEffectivenessReply(languageProfile = 'english') {
   return pickByLanguage(
     languageProfile,
-    'Bee Bright is designed to support academic growth through personalized tutoring, structured learning materials, grade tracking, schedule management, and direct tutor communication. Students benefit from one-on-one attention tailored to their learning pace. You can monitor progress through dashboards and receive recommendations based on performance. Enrollment includes different programs for various needs: Academic Tutorial for core subjects (Grade 1 to Junior High), SPED Tutorial for individualized learning, and Examination Preparation for test readiness.',
-    'Ang Bee Bright ay dinisenyo upang suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, grade tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Maaari mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations batay sa performance. Kasama sa enrollment ang iba\'t ibang programs para sa iba\'t ibang pangangailangan: Academic Tutorial para sa core subjects (Grade 1 to Junior High), SPED Tutorial para sa individualized learning, at Examination Preparation para sa test readiness.',
-    'Ang Bee Bright ay dinisenyo para suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, grade tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Pwede mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations based sa performance. Kasama sa enrollment ang iba\'t ibang programs para sa iba\'t ibang pangangailangan: Academic Tutorial para sa core subjects (Grade 1 to Junior High), SPED Tutorial para sa individualized learning, at Examination Preparation para sa test readiness.'
+    'Bee Bright is designed to support academic growth through personalized tutoring, structured learning materials, grade tracking, schedule management, and direct tutor communication. Students benefit from one-on-one attention tailored to their learning pace. You can monitor progress through dashboards and receive recommendations based on performance. Enrollment covers three programs: Toddlers Playgroup, Academic Tutorial (core subjects from pre-school to high school, including homework assistance, lesson advancement, and individualized/SPED support), and Examination Preparation for test readiness.',
+    'Ang Bee Bright ay dinisenyo upang suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, grade tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Maaari mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations batay sa performance. Saklaw ng enrollment ang tatlong programa: Toddlers Playgroup, Academic Tutorial (core subjects mula pre-school hanggang high school, kasama ang homework assistance, lesson advancement, at individualized/SPED support), at Examination Preparation para sa test readiness.',
+    'Ang Bee Bright ay dinisenyo para suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, grade tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Pwede mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations based sa performance. Saklaw ng enrollment ang tatlong program: Toddlers Playgroup, Academic Tutorial (core subjects mula pre-school hanggang high school, kasama ang homework assistance, lesson advancement, at individualized/SPED support), at Examination Preparation para sa test readiness.'
   );
 }
 
@@ -916,42 +992,56 @@ function isPaymentQuestion(normalized) {
 }
 
 function isPaymentMethodQuestion(normalized) {
-  return /(payment method|payment methods|mode of payment|modes of payment|how can i pay|what methods|anong payment method|mga payment method|paraan ng bayad|mode ng bayad|payment channel|gcash|blockchain|metamask|bank account|bank transfer|credit card|debit card|cash payment|saan.*magbabayad|magbabayad|saan.*payment)/.test(normalized);
+  return /(payment method|payment methods|mode of payment|modes of payment|how can i pay|what methods|anong payment method|mga payment method|paraan ng bayad|mode ng bayad|payment channel|gcash|seabank|sea bank|bdo|bank account|bank transfer|credit card|debit card|cash payment|saan.*magbabayad|magbabayad|saan.*payment)/.test(normalized);
 }
 
 function getPaymentMethodsReply(languageProfile = 'english', normalized = '') {
-  const asksBank = /(bank account|bank transfer|bdo|bpi|metrobank|landbank|unionbank)/.test(normalized);
+  const asksOtherBank = /(bpi|metrobank|landbank|unionbank|rcbc|security bank|pnb)/.test(normalized);
   const asksCard = /(credit card|debit card|visa|mastercard)/.test(normalized);
-  const asksCash = /(cash payment|cash|over the counter|walk-in)/.test(normalized);
+  const asksCash = /(cash payment|over the counter|walk-in)/.test(normalized);
+  const asksCrypto = /(blockchain|bitcoin|crypto|cryptocurrency|metamask|ethereum|\beth\b)/.test(normalized);
 
+  // Bee Bright accepts GCash, SeaBank, and BDO. (Blockchain payment was removed.)
   const baseReply = pickByLanguage(
     languageProfile,
     [
-      'Available payment methods are:',
+      'Bee Bright accepts three payment methods:',
       '1. GCash',
-      '2. Blockchain payment (Ganache/MetaMask)',
-      'You can choose Full Payment or Down Payment during enrollment, then submit proof of payment for admin verification.'
+      '2. SeaBank',
+      '3. BDO',
+      'You can choose Full Payment or 50% Down Payment during enrollment, then submit your proof of payment for admin verification.'
     ].join('\n'),
     [
-      'Ang available na payment methods ay:',
+      'Tumatanggap ang Bee Bright ng tatlong payment method:',
       '1. GCash',
-      '2. Blockchain payment (Ganache/MetaMask)',
-      'Maaari kang pumili ng Full Payment o Down Payment sa enrollment, pagkatapos ay mag-submit ng proof of payment para sa admin verification.'
+      '2. SeaBank',
+      '3. BDO',
+      'Maaari kang pumili ng Full Payment o 50% Down Payment sa enrollment, pagkatapos ay mag-submit ng proof of payment para sa admin verification.'
     ].join('\n'),
     [
-      'Ang available payment methods ay:',
-      '1. GCash - Magbabayad ka through GCash mobile app',
-      '2. Blockchain payment (Ganache/MetaMask) - Magbabayad ka through MetaMask wallet',
-      'Pwede kang pumili ng Full Payment or Down Payment sa enrollment, then mag-submit ng proof of payment for admin verification.'
+      'Tumatanggap ang Bee Bright ng tatlong payment method:',
+      '1. GCash',
+      '2. SeaBank',
+      '3. BDO',
+      'Pwede kang pumili ng Full Payment or 50% Down Payment sa enrollment, then mag-submit ng proof of payment for admin verification.'
     ].join('\n')
   );
 
-  if (asksBank || asksCard || asksCash) {
+  if (asksCrypto) {
     return pickByLanguage(
       languageProfile,
-      `${baseReply}\n\nAt the moment, bank transfer, card, and cash payments are not available in the system.`,
-      `${baseReply}\n\nSa ngayon, hindi pa available sa system ang bank transfer, card, at cash payments.`,
-      `${baseReply}\n\nSa ngayon, hindi pa available sa system ang bank transfer, card, at cash payments.`
+      `${baseReply}\n\nBlockchain and cryptocurrency payments are no longer accepted.`,
+      `${baseReply}\n\nHindi na tinatanggap ang blockchain at cryptocurrency payments.`,
+      `${baseReply}\n\nHindi na tinatanggap ang blockchain at cryptocurrency payments.`
+    );
+  }
+
+  if (asksOtherBank || asksCard || asksCash) {
+    return pickByLanguage(
+      languageProfile,
+      `${baseReply}\n\nOther bank transfers, card payments, and over-the-counter cash are not available in the system.`,
+      `${baseReply}\n\nHindi available sa system ang ibang bank transfers, card payments, at over-the-counter cash.`,
+      `${baseReply}\n\nHindi available sa system ang ibang bank transfers, card payments, at over-the-counter cash.`
     );
   }
 
@@ -971,7 +1061,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       languageProfile,
       [
         'Yes, payments are handled with security checks in the Bee Bright system:',
-        '1. Only supported methods are accepted (GCash or Blockchain).',
+        '1. Only supported methods are accepted (GCash, SeaBank, or BDO).',
         '2. You must submit payment proof before activation.',
         '3. Admin reviews and verifies the payment before final approval.',
         '4. Your payment and enrollment status can be tracked in your dashboard.',
@@ -979,7 +1069,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       ].join('\n'),
       [
         'Oo, may security checks ang payments sa Bee Bright system:',
-        '1. Tanging supported methods lang ang tinatanggap (GCash o Blockchain).',
+        '1. Tanging supported methods lang ang tinatanggap (GCash, SeaBank, o BDO).',
         '2. Kailangan magsumite ng payment proof bago ma-activate.',
         '3. Sinusuri at bine-verify ng admin ang bayad bago final approval.',
         '4. Makikita mo ang payment at enrollment status sa dashboard.',
@@ -987,7 +1077,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       ].join('\n'),
       [
         'Oo, may security checks ang payments sa Bee Bright system:',
-        '1. Supported methods lang ang tinatanggap (GCash or Blockchain).',
+        '1. Supported methods lang ang tinatanggap (GCash, SeaBank, or BDO).',
         '2. Kailangan mag-submit ng payment proof bago ma-activate.',
         '3. Ire-review at ibe-verify ng admin ang bayad bago final approval.',
         '4. Makikita mo ang payment at enrollment status sa dashboard.',
@@ -1371,7 +1461,7 @@ function getTutorAccountCreationReply(languageProfile = 'english') {
 }
 
 function isLocationQuestion(normalized) {
-  return /(location|address|located|barangay|dagupan|visit|map|find bee bright)/.test(normalized);
+  return /(location|address|located|locate|barangay|dagupan|visit|\bmap\b|find bee ?bright|saan (ang |ba )?(ang )?bee ?bright|nasaan (ang )?bee ?bright|where('?s| is) bee ?bright)/.test(normalized);
 }
 
 function isMaterialsQuestion(normalized) {
@@ -1402,8 +1492,18 @@ function isEnrollmentCountQuestion(normalized) {
     && /(student|students|enrollment|enrollments|enrolled)/.test(normalized);
 }
 
+// Plain "how many students do we have" — NOT the status-specific or per-program forms,
+// which are handled by getEnrollmentStatusReply / getProgramEnrollmentCountReply first.
+function isStudentCountQuestion(normalized) {
+  const hasCount = /(how many|number of|count|total|do (we|you) have)/.test(normalized);
+  const hasStudent = /(student|students|estudyante|mag-?aaral|enrolled (kids?|children)|kids? enrolled|children enrolled|enrollees?)/.test(normalized);
+  const hasStatusWord = /(active|pending|completed|cancelled|canceled|currently|approved)/.test(normalized);
+  const asksStats = /(enrollment (status|statistics)|statistics|by status|breakdown)/.test(normalized);
+  return hasCount && hasStudent && !hasStatusWord && !asksStats;
+}
+
 function isTutorCountQuestion(normalized) {
-  return /(how many|number of|count|total)/.test(normalized)
+  return /(how many|number of|count|total|do (we|you) have)/.test(normalized)
     && /(tutor|tutors|teacher|teachers)/.test(normalized);
 }
 
@@ -1442,13 +1542,194 @@ function findProgramKeyword(normalized) {
   ) || null;
 }
 
+// ── Task 14 — DB-backed program + package pricing ──────────────────────────
+function matchProgramCatalog(normalized) {
+  return PROGRAM_CATALOG.find((p) => p.aliases.some((a) => normalized.includes(a))) || null;
+}
+
+function isProgramPricingQuestion(normalized) {
+  const priceWord = /(price|prices|pricing|cost|costs|how much|magkano|presyo|bayad|tuition|fee|fees|rate|rates|package|packages|pakete)/.test(normalized);
+  const programWord = /(program|programs|programa|course|courses|tutorial|tutoring|playgroup|toddler|academic|exam|examination|classes|lessons)/.test(normalized);
+  const asksOffer = /(what (programs?|courses?|classes) (do|does|are)|(programs?|courses?) (do|does) you (offer|have)|anong.*(programa|program|course|klase)|what do you offer|services (do )?you offer|ano ang inyong (programa|inaalok))/.test(normalized);
+  if (isProgramComparisonQuestion(normalized)) return false; // 22e — comparison has its own reply
+  return asksOffer || (priceWord && programWord) || (priceWord && !!matchProgramCatalog(normalized));
+}
+
+// 22b + 22e — "ano ang pagkakaiba/pinagkaiba ng mga programs", "which program is better",
+// "difference between Academic Tutorial and Exam Prep".
+function isProgramComparisonQuestion(normalized) {
+  const comparisonWord = /(difference|differences|pagkakaiba|pinagkaiba|pinag kaiba|pinag-kaiba|kaibahan|kaiba|magkaiba|nagkakaiba|compare|comparison|versus|\bvs\b|which (one )?is better|alin (ang )?(mas |pinaka)|mas maganda|mas ok|dapat piliin|best fit|bagay sa)/.test(normalized);
+  const programContext = /(program|programs|programa|programang|course|courses|tutorial|playgroup|toddler|academic|exam|examination|offering|mga (yan|ito|yun)|each|bawat)/.test(normalized);
+  return comparisonWord && programContext;
+}
+
+/**
+ * 22e — the comparison intent gets its OWN reply: a one-line differentiator per program.
+ * If the user names exactly two programs, answers just those two. Sourced from
+ * PROGRAM_CATALOG (age / format / focus), not invented.
+ */
+function getProgramComparisonReply(message, languageProfile = 'english') {
+  const normalized = normalizeMessage(message);
+  if (!isProgramComparisonQuestion(normalized)) {
+    return null;
+  }
+
+  const named = PROGRAM_CATALOG.filter((p) => p.aliases.some((a) => normalized.includes(a)));
+  const targets = named.length === 2 ? named : PROGRAM_CATALOG;
+
+  const line = (p) => `- ${p.label} (${p.ageText}): ${p.format} focused on ${p.focus}.`;
+  const lines = targets.map(line);
+
+  const intro = targets.length === 2
+    ? pickByLanguage(languageProfile,
+      `Here is how ${targets[0].label} and ${targets[1].label} differ:`,
+      `Ganito ang pagkakaiba ng ${targets[0].label} at ${targets[1].label}:`,
+      `Ganito ang pagkakaiba ng ${targets[0].label} at ${targets[1].label}:`)
+    : pickByLanguage(languageProfile,
+      'Bee Bright has three programs. The main differences:',
+      'May tatlong programa ang Bee Bright. Ito ang pangunahing pagkakaiba:',
+      'May tatlong programa ang Bee Bright. Ito ang main na pagkakaiba:');
+
+  const outro = pickByLanguage(languageProfile,
+    'Ask about any one by name for its packages and prices.',
+    'Magtanong tungkol sa alinman para sa mga package at presyo.',
+    'Magtanong tungkol sa alinman para sa packages at prices.');
+
+  return [intro, ...lines, outro].join('\n');
+}
+
+// ── Task 25a — Academic Tutorial sub-features ──────────────────────────────
+// The printed brochure lists these as SCOPE items under the single "Academic Tutorial"
+// program, NOT as separately-priced programs:
+//   - Pre-Kindergarten Readiness
+//   - Reading, Writing, and Numeracy Enhancement
+//   - Academic Tutorial for Kindergarten to High School
+//   - Homework Assistance and Lesson Advancement
+//   - SPED Tutorial
+// A public or parent user asking "may SPED tutorial ba kayo?" / "meron ba kayong homework
+// assistance?" must hear "yes — that's covered under Academic Tutorial", not "we don't
+// offer that" and not an unqualified 3-program list.
+const ACADEMIC_SUBFEATURE_RE = new RegExp(
+  [
+    '\\bsped\\b', 'sped tutorial', 'special education', 'special(?: |-)ed\\b', 'special needs',
+    'homework assistance', 'homework help', 'homework support', 'homework tutoring',
+    'tulong sa (?:homework|assignment|takdang aralin|takdang-aralin)',
+    'pre-?kinder(?:garten)? readiness', 'pre-?k readiness', 'prek readiness', 'kinder(?:garten)? readiness',
+    'reading,? (?:and )?writing,? (?:and )?numeracy', 'numeracy enhancement', '\\bnumeracy\\b',
+    'lesson advancement', 'advancement of lessons', 'advance(?:d|ment of)? lessons?',
+  ].join('|'),
+  'i',
+);
+
+function isAcademicSubFeatureQuestion(message) {
+  const n = normalizeMessage(message);
+  if (!n) return false;
+  // A comparison question ("difference between SPED and Academic Tutorial") has its own
+  // handler and shouldn't be short-circuited here.
+  if (isProgramComparisonQuestion(n)) return false;
+  return ACADEMIC_SUBFEATURE_RE.test(n);
+}
+
+/**
+ * Task 25a — single clear reply: the asked-about item is part of Academic Tutorial.
+ * Scope wording is taken from the brochure (pre-school to high school, one-on-one,
+ * homework assistance, lesson advancement, exam-adjacent support, individualized/SPED),
+ * not invented. Applied to Public and Parent/Guardian chat.
+ */
+function getAcademicSubFeatureReply(languageProfile = 'english') {
+  return pickByLanguage(
+    languageProfile,
+    'Yes — that is part of our Academic Tutorial program, not a separate program. '
+      + 'Academic Tutorial covers pre-school through high school in one-on-one sessions: '
+      + 'subject-based tutoring, reading, writing and numeracy, homework assistance, lesson '
+      + 'advancement, exam-adjacent support, and individualized (SPED) tutoring. It is enrolled '
+      + 'and priced as one program — ask about "Academic Tutorial packages" for the rates.',
+    'Oo — bahagi iyon ng aming Academic Tutorial program, hindi ito hiwalay na programa. '
+      + 'Saklaw ng Academic Tutorial ang pre-school hanggang high school sa one-on-one na sessions: '
+      + 'subject-based tutoring, reading, writing at numeracy, homework assistance, lesson '
+      + 'advancement, suporta para sa mga pagsusulit, at individualized (SPED) tutoring. Iisang '
+      + 'programa ito sa enrollment at presyo — magtanong tungkol sa "Academic Tutorial packages" para sa rates.',
+    'Oo — part iyon ng aming Academic Tutorial program, hindi hiwalay na program. '
+      + 'Covered ng Academic Tutorial ang pre-school hanggang high school sa one-on-one sessions: '
+      + 'subject-based tutoring, reading, writing at numeracy, homework assistance, lesson '
+      + 'advancement, exam support, at individualized (SPED) tutoring. Isang program lang ito sa '
+      + 'enrollment at pricing — magtanong tungkol sa "Academic Tutorial packages" para sa rates.',
+  );
+}
+
+function formatPhp(n) {
+  return `PHP ${Number(n || 0).toLocaleString('en-PH')}`;
+}
+
+/**
+ * Program/package pricing straight from the Pricing collection. Role-agnostic — program
+ * info is not account-specific, so this serves public, parent (incl. programs their child
+ * is not in), and every other role identically. Returns null when it isn't a pricing
+ * question or the catalog is empty (older hardcoded replies then take over).
+ */
+async function getProgramPricingReply(message, languageProfile = 'english') {
+  const normalized = normalizeMessage(message);
+  if (!isProgramPricingQuestion(normalized)) {
+    return null;
+  }
+
+  const rows = await Pricing.find({ active: true }).sort({ programCode: 1, displayOrder: 1 }).lean();
+  if (!rows.length) {
+    return null;
+  }
+
+  const downOf = (r) => (r.priceDown != null ? r.priceDown : Math.ceil(r.priceFull * 0.5));
+  const matched = matchProgramCatalog(normalized);
+
+  if (matched) {
+    const pkgs = rows.filter((r) => r.programCode === matched.code);
+    if (!pkgs.length) {
+      return null;
+    }
+    const lines = pkgs.map((r) => {
+      const dur = r.durationDesc ? ` (${r.durationDesc})` : '';
+      return `- ${r.displayName}${dur}: ${formatPhp(r.priceFull)} full payment, or ${formatPhp(downOf(r))} as the 50% down payment`;
+    });
+    return pickByLanguage(
+      languageProfile,
+      [`${matched.label} — ${matched.ageText}. Available packages:`, ...lines, 'Payment is 50% on enrollment and the remaining 50% after completing half of the sessions. Accepted methods: GCash, SeaBank, or BDO.'].join('\n'),
+      [`${matched.label} — para sa ${matched.ageText}. Mga available na package:`, ...lines, 'Ang bayad ay 50% sa enrollment at ang natitirang 50% pagkatapos makumpleto ang kalahati ng sessions. Tinatanggap: GCash, SeaBank, o BDO.'].join('\n'),
+      [`${matched.label} — para sa ${matched.ageText}. Available packages:`, ...lines, 'Ang bayad ay 50% sa enrollment at ang remaining 50% pagkatapos ma-complete ang kalahati ng sessions. Accepted: GCash, SeaBank, o BDO.'].join('\n')
+    );
+  }
+
+  // General "what do you offer" — overview of the three programs with price ranges.
+  const overview = PROGRAM_CATALOG.map((p) => {
+    const pkgs = rows.filter((r) => r.programCode === p.code);
+    if (!pkgs.length) {
+      return null;
+    }
+    const prices = pkgs.map((r) => r.priceFull).filter(Boolean).sort((a, b) => a - b);
+    const range = prices.length > 1 && prices[0] !== prices[prices.length - 1]
+      ? `${formatPhp(prices[0])} to ${formatPhp(prices[prices.length - 1])}`
+      : formatPhp(prices[0]);
+    return `- ${p.label} (${p.ageText}): ${pkgs.length} package${pkgs.length === 1 ? '' : 's'}, ${range}`;
+  }).filter(Boolean);
+
+  if (!overview.length) {
+    return null;
+  }
+
+  return pickByLanguage(
+    languageProfile,
+    ['Bee Bright offers three programs:', ...overview, 'Ask about any one — for example "Academic Tutorial packages" — for its full package list and prices.'].join('\n'),
+    ['Nag-aalok ang Bee Bright ng tatlong programa:', ...overview, 'Magtanong tungkol sa alinman — halimbawa "Academic Tutorial packages" — para sa kumpletong listahan ng package at presyo.'].join('\n'),
+    ['Nag-aalok ang Bee Bright ng tatlong programa:', ...overview, 'Magtanong tungkol sa alinman — e.g. "Academic Tutorial packages" — para sa buong package list at prices.'].join('\n')
+  );
+}
+
 function getProgramsWithCostsReply(languageProfile = 'english', responsePreference = {}) {
   if (responsePreference.wantsSummary) {
     return pickByLanguage(
       languageProfile,
-      'Available paid programs are Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, and Examination Preparation. Ask if you want the full fee breakdown.',
-      'Ang mga available na paid programs ay Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, at Examination Preparation. Sabihin mo kung gusto mo ang kumpletong fee breakdown.',
-      'Ang available paid programs ay Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, at Examination Preparation. Sabihin mo if gusto mo ng full fee breakdown.'
+      'Bee Bright prices three programs: Toddlers Playgroup, Academic Tutorial, and Examination Preparation. Pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, and SPED support are all part of Academic Tutorial. Ask if you want the full fee breakdown.',
+      'Tatlong programa ang may presyo sa Bee Bright: Toddlers Playgroup, Academic Tutorial, at Examination Preparation. Ang pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, at SPED support ay bahagi lahat ng Academic Tutorial. Sabihin mo kung gusto mo ang kumpletong fee breakdown.',
+      'Tatlong program ang may presyo sa Bee Bright: Toddlers Playgroup, Academic Tutorial, at Examination Preparation. Ang pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, at SPED support ay part lahat ng Academic Tutorial. Sabihin mo if gusto mo ng full fee breakdown.'
     );
   }
 
@@ -1466,7 +1747,14 @@ function getProgramsWithCostsReply(languageProfile = 'english', responsePreferen
     pickByLanguage(languageProfile, 'Payment Options:', 'Mga Opsyon sa Pagbabayad:', 'Payment Options:'),
     pickByLanguage(languageProfile, '• Full Payment: pay the full program fee during enrollment.', '• Full Payment: bayaran ang buong halaga ng programa habang nag-e-enroll.', '• Full Payment: bayaran ang buong program fee during enrollment.'),
     pickByLanguage(languageProfile, '• Down Payment: pay 50% first, then settle the remaining balance with admin.', '• Down Payment: bayaran muna ang 50%, pagkatapos ay i-settle ang natitirang balanse sa admin.', '• Down Payment: bayaran muna ang 50%, then i-settle ang remaining balance sa admin.'),
-    pickByLanguage(languageProfile, 'Note: Final fees depend on the program or programs selected during enrollment.', 'Tandaan: Ang final fees ay nakadepende sa program o mga program na pipiliin sa enrollment.', 'Note: Ang final fees ay depende sa program o programs na pipiliin during enrollment.')
+    pickByLanguage(languageProfile, 'Note: Final fees depend on the program or programs selected during enrollment.', 'Tandaan: Ang final fees ay nakadepende sa program o mga program na pipiliin sa enrollment.', 'Note: Ang final fees ay depende sa program o programs na pipiliin during enrollment.'),
+    '',
+    pickByLanguage(
+      languageProfile,
+      'Academic Tutorial also covers pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, and SPED (individualized) support — these are part of that one program, not priced separately.',
+      'Saklaw din ng Academic Tutorial ang pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, at SPED (individualized) support — bahagi ito ng iisang programa, hindi hiwalay na presyo.',
+      'Covered din ng Academic Tutorial ang pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, at SPED (individualized) support — part ito ng iisang program, hindi hiwalay ang presyo.',
+    ),
   ];
 
   return lines.join('\n').trim();
@@ -1491,17 +1779,17 @@ function getProgramsReply(normalized, languageProfile = 'english', responsePrefe
   if (isProgramPlacementQuestion(normalized)) {
     return pickByLanguage(
       languageProfile,
-      'The SPED Tutorial program is the best available option for learners who need individualized support. Please contact admin so they can recommend the best placement for the student.',
-      'Ang SPED Tutorial program ang pinakaangkop na option para sa mga mag-aaral na nangangailangan ng individualized support. Makipag-ugnayan sa admin upang mairerekomenda nila ang pinakamainam na placement para sa mag-aaral.',
-      'Ang SPED Tutorial program ang best available option para sa learners na kailangan ng individualized support. Please contact admin para ma-recommend nila ang best placement para sa student.'
+      'Learners who need individualized or SPED support are served under our Academic Tutorial program, which includes one-on-one individualized instruction. Please contact admin so they can recommend the best setup for the student.',
+      'Ang mga mag-aaral na nangangailangan ng individualized o SPED support ay saklaw ng aming Academic Tutorial program, na may kasamang one-on-one individualized instruction. Makipag-ugnayan sa admin upang mairerekomenda nila ang pinakamainam na setup para sa mag-aaral.',
+      'Ang mga learners na kailangan ng individualized o SPED support ay covered ng aming Academic Tutorial program, na may kasamang one-on-one individualized instruction. Please contact admin para ma-recommend nila ang best setup para sa student.'
     );
   }
 
   return pickByLanguage(
     languageProfile,
-    'Available programs include Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, and Examination Preparation. Ask about pricing or specific programs for more details.',
-    'Kasama sa available na programs ang Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, at Examination Preparation. Maaari kang magtanong tungkol sa pricing o partikular na program para sa mas detalyadong impormasyon.',
-    'Kasama sa available programs ang Toddlers Playgroup, Pre-Kindergarten Readiness, Kindergarten Readiness, Academic Tutorial, SPED Tutorial, at Examination Preparation. Ask ka lang about pricing or specific programs para sa more details.'
+    'Bee Bright offers three programs: Toddlers Playgroup, Academic Tutorial, and Examination Preparation. Academic Tutorial covers pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, and SPED (individualized) support. Ask about pricing or a specific program for more details.',
+    'Nag-aalok ang Bee Bright ng tatlong programa: Toddlers Playgroup, Academic Tutorial, at Examination Preparation. Saklaw ng Academic Tutorial ang pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, at SPED (individualized) support. Magtanong tungkol sa pricing o isang tukoy na program para sa mas detalyadong impormasyon.',
+    'Nag-aalok ang Bee Bright ng tatlong program: Toddlers Playgroup, Academic Tutorial, at Examination Preparation. Covered ng Academic Tutorial ang pre-kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, at SPED (individualized) support. Magtanong tungkol sa pricing o specific program para sa more details.'
   );
 }
 
@@ -1524,6 +1812,12 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
     } else {
       return localizeKnownReply('Please ask something about Bee Bright programs, enrollment, pricing, or services.', languageProfile);
     }
+  }
+
+  // Task 25a — Academic Tutorial sub-feature ("do you have SPED tutorial / homework
+  // assistance / pre-kindergarten readiness"). Public + Parent/Guardian only.
+  if ((!user || user.role === 'parent') && isAcademicSubFeatureQuestion(message)) {
+    return getAcademicSubFeatureReply(effectiveLanguageProfile);
   }
 
   if (isSystemOverviewQuestion(normalized)) {
@@ -1927,9 +2221,11 @@ async function getEnrollmentStatusReply(user, message, languageProfile = 'englis
     return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
   }
 
-  let statusFilter = 'active';
+  // 'approved' is the primary approved state; 'active' is a legacy alias. Count both
+  // for "active"/"currently enrolled" so the number matches the admin dashboard (Task 15).
+  let statusFilter = { $in: ['approved', 'active'] };
   let statusLabel = 'active';
-  
+
   if (/\bpending\b/.test(normalized)) {
     statusFilter = 'pending';
     statusLabel = 'pending';
@@ -1937,11 +2233,11 @@ async function getEnrollmentStatusReply(user, message, languageProfile = 'englis
     statusFilter = 'completed';
     statusLabel = 'completed';
   } else if (/\bcancelled\b|\bcanceled\b/.test(normalized)) {
-    statusFilter = 'cancelled';
+    statusFilter = { $in: ['cancelled', 'rejected'] };
     statusLabel = 'cancelled';
   } else {
-    // Default to active for questions like "currently enrolled", "students enrolled", etc.
-    statusFilter = 'active';
+    // Default: "currently enrolled", "students enrolled", etc.
+    statusFilter = { $in: ['approved', 'active'] };
     statusLabel = 'currently active';
   }
 
@@ -2223,6 +2519,29 @@ async function getProgramEnrollmentCountReply(user, message, languageProfile = '
   });
 
   return localizeKnownReply(`There are ${count} ${statusLabel} enrollments in ${matchedProgram.label} right now.`, languageProfile);
+}
+
+// "How many students do we have" — counts ENROLLED CHILDREN (approved/active enrollments),
+// matching dashboardController. Children are not User accounts in the guardian flow, so
+// counting User{role:'student'} would under-report (Task 15).
+async function getStudentCountReply(user, message, languageProfile = 'english') {
+  const normalized = normalizeMessage(message);
+  if (!isStudentCountQuestion(normalized)) {
+    return null;
+  }
+
+  if (!user || !['admin', 'super_admin'].includes(user.role)) {
+    return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
+  }
+
+  const totalStudents = await Enrollment.countDocuments({ status: { $in: ['approved', 'active'] } });
+
+  return pickByLanguage(
+    languageProfile,
+    `There are currently ${totalStudents} enrolled student${totalStudents === 1 ? '' : 's'} at Bee Bright.`,
+    `Kasalukuyang may ${totalStudents} na naka-enroll na estudyante sa Bee Bright.`,
+    `Kasalukuyang may ${totalStudents} enrolled student${totalStudents === 1 ? '' : 's'} sa Bee Bright.`
+  );
 }
 
 async function getTutorCountReply(user, message, languageProfile = 'english') {
@@ -3347,6 +3666,106 @@ async function getTutorContactReply(user, message, languageProfile = 'english') 
   );
 }
 
+// ── Task 31 (D3) — live support-request / ticket status lookup ─────────────
+// "What's the status of my request?", "na-resolve na ba yung concern ko?".
+// Deliberately NOT a static dataset entry — the reply must reflect the caller's real
+// Escalation record(s). Scoped exactly like GET /api/escalations/mine: the requesting
+// user's own `source: 'handoff'` tickets only. Child-safety escalations are never shown.
+function isTicketStatusQuestion(normalized) {
+  const aboutRequest = /(\brequests?\b|\btickets?\b|\bconcerns?\b|\bcomplaints?\b|\breklamo\b|escalation|na-?flag|report ko sa admin|tinanong ko sa admin|sagot sa (tinanong|tanong)|follow[- ]?up (ko|natin|request|sa (request|concern|admin|reklamo)))/.test(normalized);
+  const askingStatus = /(status|update|\bresolved?\b|na-?resolve|naresolve|na-?ayos na|inayos na|na-?sagot na|sinagot na|sagot na ba|may sagot na|kumusta na|ano na (ang )?(nangyari|balita|update)|pending pa|natapos na ba|nagawan na ba|nasagot na ba|any word|word na ba|follow[- ]?up|followed up|nag-?follow|may nag-?follow)/.test(normalized);
+  return aboutRequest && askingStatus;
+}
+
+async function getTicketStatusReply(user, message, languageProfile = 'english') {
+  const normalized = normalizeMessage(message);
+  if (!isTicketStatusQuestion(normalized)) {
+    return null;
+  }
+
+  if (!user || !user._id) {
+    return pickByLanguage(
+      languageProfile,
+      'Please log in with your Bee Bright account so I can check the status of your support request.',
+      'Mag-log in muna gamit ang Bee Bright account mo para ma-check ko ang status ng iyong support request.',
+      'Mag-login muna gamit ang Bee Bright account mo para ma-check ko ang status ng support request mo.'
+    );
+  }
+
+  const rows = await Escalation.find({ user: user._id, source: 'handoff' })
+    .select('trigger status resolutionNote createdAt handledAt')
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .lean();
+
+  if (!rows.length) {
+    return pickByLanguage(
+      languageProfile,
+      "I don't see any support request submitted from your account yet. If you need a person to follow up, ask to talk to a real person and I'll flag it for a Bee Bright admin.",
+      'Wala pa akong nakikitang support request na na-submit mula sa account mo. Kung kailangan mo ng taong mag-follow up, hilingin na makipag-usap sa isang tao at ipapa-flag ko ito sa isang Bee Bright admin.',
+      'Wala pa akong nakikitang support request mula sa account mo. Kung kailangan mo ng tao para mag-follow up, sabihin mo na gusto mong makausap ang isang tao at ipa-flag ko sa Bee Bright admin.'
+    );
+  }
+
+  const isResolved = (r) => r.status === 'resolved';
+  const isOpen = (r) => r.status === 'open' || r.status === 'acknowledged';
+  const openRows = rows.filter(isOpen);
+  const resolvedRows = rows.filter(isResolved);
+
+  if (rows.length === 1) {
+    const r = rows[0];
+    const when = formatDate(r.createdAt);
+    if (isResolved(r)) {
+      const rawNote = (r.resolutionNote || '').trim();
+      const note = rawNote
+        ? { en: ` The admin noted: "${rawNote}".`, fil: ` Sabi ng admin: "${rawNote}".`, tgl: ` Sabi ng admin: "${rawNote}".` }
+        : { en: '', fil: '', tgl: '' };
+      return pickByLanguage(
+        languageProfile,
+        `Your support request from ${when} has been resolved.${note.en} If it still isn't sorted out, reply and ask to talk to a real person again.`,
+        `Naresolba na ang support request mo mula ${when}.${note.fil} Kung hindi pa rin ito ayos, magreply ka at hilingin ulit na makausap ang isang tao.`,
+        `Resolved na ang support request mo mula ${when}.${note.tgl} Kung hindi pa rin ayos, mag-reply ka at humingi ulit na makausap ang isang tao.`
+      );
+    }
+    return pickByLanguage(
+      languageProfile,
+      `Your support request from ${when} is still being reviewed. Please be patient — a Bee Bright admin will follow up with you through your registered contact details.`,
+      `Sinusuri pa ang support request mo mula ${when}. Pakihintay lang po — may Bee Bright admin na makikipag-ugnayan sa iyo gamit ang iyong nakarehistrong contact details.`,
+      `Ina-review pa ang support request mo mula ${when}. Sandali lang po — may Bee Bright admin na mag-fofollow up sa iyo gamit ang registered contact details mo.`
+    );
+  }
+
+  const latestOpen = openRows[0];
+  const counts = { en: [], fil: [], tgl: [] };
+  if (openRows.length) {
+    counts.en.push(`${openRows.length} still being reviewed`);
+    counts.fil.push(`${openRows.length} ang sinusuri pa`);
+    counts.tgl.push(`${openRows.length} ang ina-review pa`);
+  }
+  if (resolvedRows.length) {
+    counts.en.push(`${resolvedRows.length} resolved`);
+    counts.fil.push(`${resolvedRows.length} naresolba na`);
+    counts.tgl.push(`${resolvedRows.length} resolved na`);
+  }
+  const tail = latestOpen
+    ? {
+      en: ` The most recent one still open is from ${formatDate(latestOpen.createdAt)}. Please be patient — a Bee Bright admin will follow up with you.`,
+      fil: ` Ang pinakabagong bukas pa ay mula ${formatDate(latestOpen.createdAt)}. Pakihintay lang — may Bee Bright admin na makikipag-ugnayan sa iyo.`,
+      tgl: ` Ang pinakabagong open pa ay mula ${formatDate(latestOpen.createdAt)}. Sandali lang po — may Bee Bright admin na mag-fofollow up sa iyo.`,
+    }
+    : {
+      en: ' All of them have been resolved. If something still is not sorted out, ask to talk to a real person again.',
+      fil: ' Lahat ng ito ay naresolba na. Kung may hindi pa ayos, hilingin ulit na makausap ang isang tao.',
+      tgl: ' Resolved na lahat. Kung may hindi pa ayos, humingi ulit na makausap ang isang tao.',
+    };
+  return pickByLanguage(
+    languageProfile,
+    `You have ${rows.length} support requests: ${counts.en.join(' and ')}.${tail.en}`,
+    `May ${rows.length} kang support requests: ${counts.fil.join(' at ')}.${tail.fil}`,
+    `May ${rows.length} kang support requests: ${counts.tgl.join(' at ')}.${tail.tgl}`
+  );
+}
+
 async function getResolvedReply(user, message, classifierResult, groundedContext, languageProfile = 'english', history = []) {
   const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
 
@@ -3365,6 +3784,38 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
   // that would tell a tutor to "check the Progress section".
   if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
     return groundedContext.fallbackReply;
+  }
+
+  // Internal metrics / dataset stats are dashboard-only — never answered here (Task 20).
+  if (isOutOfScopeMetricsQuestion(message)) {
+    return getOutOfScopeMetricsReply(effectiveLanguageProfile);
+  }
+
+  // Class format: Bee Bright is onsite only (Task 20). Fires on "online class" phrasing.
+  if (isOnlineClassQuestion(normalizeMessage(message))) {
+    return getClassFormatReply(effectiveLanguageProfile);
+  }
+
+  // Task 25a — "may SPED tutorial ba kayo?" etc. These are Academic Tutorial sub-features,
+  // not separate programs. Public + Parent/Guardian only. Runs before the program keyword
+  // / pricing handlers, which would otherwise mis-answer with a per-program fee.
+  if ((!user || user.role === 'parent') && isAcademicSubFeatureQuestion(message)) {
+    return getAcademicSubFeatureReply(effectiveLanguageProfile);
+  }
+
+  // Program comparison (22e) — its own differentiated reply, before the plain pricing/
+  // list handlers that would otherwise just dump program names.
+  const programComparisonReply = getProgramComparisonReply(message, effectiveLanguageProfile);
+  if (programComparisonReply) {
+    return programComparisonReply;
+  }
+
+  // Program + package pricing from the Pricing collection (Task 14). Role-agnostic —
+  // serves public and every authenticated role, including a parent asking about a
+  // program their child is not enrolled in.
+  const programPricingReply = await getProgramPricingReply(message, effectiveLanguageProfile);
+  if (programPricingReply) {
+    return programPricingReply;
   }
 
   const roleBasedContactDetailsReply = await getRoleBasedContactDetailsReply(user, message, effectiveLanguageProfile, history);
@@ -3395,13 +3846,26 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
   const tutorContactReply = await getTutorContactReply(user, message, effectiveLanguageProfile);
   if (tutorContactReply) {
     return tutorContactReply;
+  }
 
-    // CHECK AI DATASETS FIRST (2000+ pre-trained Q&A items)
-    const userRole = user?.role || 'student';
-    const datasetResponse = getContextualDatasetResponse(message, userRole, effectiveLanguageProfile, []);
-    if (datasetResponse) {
-      return datasetResponse;
-    }
+  // Task 31 — live status of the user's own support request(s). Before the dataset
+  // match so no static entry can shadow it.
+  const ticketStatusReply = await getTicketStatusReply(user, message, effectiveLanguageProfile);
+  if (ticketStatusReply) {
+    return ticketStatusReply;
+  }
+
+  // Q&A dataset match (weighted keyword matching + stopword stripping, Tasks 19-21).
+  // Runs after the specific handlers above and before the generic system replies below.
+  // `message` here is already the Task 21 context-resolved message.
+  const datasetResponse = getContextualDatasetResponse(
+    message,
+    user?.role || 'student',
+    effectiveLanguageProfile,
+    history,
+  );
+  if (datasetResponse) {
+    return datasetResponse;
   }
 
   const gradesReply = await getStudentGradesReply(user, message, effectiveLanguageProfile);
@@ -3444,6 +3908,11 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
     return programCountReply;
   }
 
+  const studentCountReply = await getStudentCountReply(user, message, effectiveLanguageProfile);
+  if (studentCountReply) {
+    return studentCountReply;
+  }
+
   const tutorCountReply = await getTutorCountReply(user, message, effectiveLanguageProfile);
   if (tutorCountReply) {
     return tutorCountReply;
@@ -3484,6 +3953,38 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
     return groundedContext.fallbackReply;
   }
 
+  // Internal metrics / dataset stats are dashboard-only — never answered here (Task 20).
+  if (isOutOfScopeMetricsQuestion(message)) {
+    return getOutOfScopeMetricsReply(effectiveLanguageProfile);
+  }
+
+  // Class format: Bee Bright is onsite only (Task 20). Fires on "online class" phrasing.
+  if (isOnlineClassQuestion(normalizeMessage(message))) {
+    return getClassFormatReply(effectiveLanguageProfile);
+  }
+
+  // Task 25a — "may SPED tutorial ba kayo?" etc. These are Academic Tutorial sub-features,
+  // not separate programs. Public + Parent/Guardian only. Runs before the program keyword
+  // / pricing handlers, which would otherwise mis-answer with a per-program fee.
+  if ((!user || user.role === 'parent') && isAcademicSubFeatureQuestion(message)) {
+    return getAcademicSubFeatureReply(effectiveLanguageProfile);
+  }
+
+  // Program comparison (22e) — its own differentiated reply, before the plain pricing/
+  // list handlers that would otherwise just dump program names.
+  const programComparisonReply = getProgramComparisonReply(message, effectiveLanguageProfile);
+  if (programComparisonReply) {
+    return programComparisonReply;
+  }
+
+  // Program + package pricing from the Pricing collection (Task 14). Role-agnostic —
+  // serves public and every authenticated role, including a parent asking about a
+  // program their child is not enrolled in.
+  const programPricingReply = await getProgramPricingReply(message, effectiveLanguageProfile);
+  if (programPricingReply) {
+    return programPricingReply;
+  }
+
   const roleBasedContactDetailsReply = await getRoleBasedContactDetailsReply(user, message, effectiveLanguageProfile, history);
   if (roleBasedContactDetailsReply) {
     return roleBasedContactDetailsReply;
@@ -3507,6 +4008,24 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   const personInfoReply = await getRoleAwarePersonInfoReply(user, message, effectiveLanguageProfile, history);
   if (personInfoReply) {
     return personInfoReply;
+  }
+
+  // Task 31 — live status of the user's own support request(s), before the dataset match.
+  const ticketStatusReply = await getTicketStatusReply(user, message, effectiveLanguageProfile);
+  if (ticketStatusReply) {
+    return ticketStatusReply;
+  }
+
+  // Q&A dataset match (weighted keyword matching, Tasks 19-21) — also on the ollama /
+  // Taglish path, not just the deterministic English/Filipino path.
+  const bypassDatasetResponse = getContextualDatasetResponse(
+    message,
+    user?.role || 'student',
+    effectiveLanguageProfile,
+    history,
+  );
+  if (bypassDatasetResponse) {
+    return bypassDatasetResponse;
   }
 
   if (isGenericHelpRequest(message)) {
@@ -3614,6 +4133,11 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   const programCountReply = await getProgramEnrollmentCountReply(user, message, effectiveLanguageProfile);
   if (programCountReply) {
     return programCountReply;
+  }
+
+  const studentCountReply = await getStudentCountReply(user, message, effectiveLanguageProfile);
+  if (studentCountReply) {
+    return studentCountReply;
   }
 
   const tutorCountReply = await getTutorCountReply(user, message, effectiveLanguageProfile);
@@ -3732,10 +4256,47 @@ function sanitizeOllamaReply(reply) {
     /\b(alice|bob|charlie|dana)\b/i,
     /each member was responsible for one feature/i,
     /here are some facts/i,
-    /as an ai language model/i
+    /as an ai language model/i,
+    // Task 29a — "as a language model AI…", "as an AI developed by OpenAI…" (the same
+    // refusal boilerplate the original pattern missed on word-order variants), and any
+    // mention of the upstream vendor (phi should never name it).
+    /as (an?|the) (ai|a\.?i\.?|artificial intelligence|language model)\b[^.?!\n]{0,40}\b(language model|assistant|developed by|do not|don'?t|cannot|can'?t)\b/i,
+    /\bas a language model\b/i,
+    /\bdeveloped by openai\b/i,
   ];
 
   if (unsafePatterns.some((pattern) => pattern.test(cleaned))) {
+    return '';
+  }
+
+  // Task 29a — self-referential meta-commentary / system-prompt narration. phi (a small
+  // model handed a rules document it's told not to reveal) sometimes narrates that prompt
+  // as story content: describing "the Assistant" / "the AI" in the third person, listing
+  // its rules/clues/bugs, framing the exchange as a "puzzle" or "game", or phrasing its
+  // behavior as conditional rules ("If the user is from X, then the Assistant will Y").
+  // A genuine Bee Bright answer never takes this shape — it addresses the user and their
+  // topic, not the bot itself. Pattern-based (not fixed phrases): the wording varies
+  // every time, but the shape is stable.
+  const metaNarrationPatterns = [
+    // "the Assistant/AI/model/bot/system" as subject + self-behaviour / internals vocab nearby
+    /\bthe (assistant|ai|a\.?i\.?|model|bot|chatbot|system)('?s)?\b[^.?!\n]{0,90}\b(bug|glitch|issue|error|rule|rules|instruction|instructions|clue|clues|prompt|guidelines?|behaviou?r|configured|configuration|programmed|designed to|supposed to|must (not )?follow|needs? to|will (respond|reply|say|answer|guide|follow|never|always)|responses? (must|should|will))\b/i,
+    /\b(the|its|the (assistant|ai|model)'?s) (system prompt|hidden (rules?|instructions?)|internal (rules?|instructions?|prompt)|own (bug|rules?|behaviou?r)|guidelines? (provided|above|below))\b/i,
+    // behaviour rules phrased as conditionals: "if (the) user …, then (the) assistant/AI/it will/should/says …"
+    /\bif (the )?(user|users|client|customer|person)\b[^.?!\n]{0,140}\bthen (the )?(assistant|ai|system|bot|model|it)\b[^.?!\n]{0,40}\b(will|would|should|must|responds?|replies|says?|answers?|guides?)\b/i,
+    // roleplay / puzzle framing
+    /\b(in this|here'?s a|let'?s (play|try) a|consider (this|the following)|imagine a) (puzzle|game|scenario|exercise|riddle|challenge|conversation)\b/i,
+    /\brules of (the|this) (game|puzzle|exercise|scenario|conversation)\b/i,
+    /\bconversation between (an? )?(ai|a\.?i\.?|assistant|chatbot|bot|model) and (a |the )?user\b/i,
+    // an explicit rules/clues dump
+    /\bhere (are|is)\b[^.?!\n]{0,30}\b(clues?|rules?|instructions?|guidelines?)\b/i,
+    /\bthe (following|below) (rules?|clues?|guidelines?|instructions?)\b/i,
+    /\b(provided|given) in the conversation above\b/i,
+  ];
+  // A real reply talks to "you" about a Bee Bright topic; narrating "the Assistant" /
+  // "the AI" in the third person two+ times means the reply's subject is the bot itself.
+  const thirdPersonSelfRefs = (cleaned.match(/\bthe (assistant|ai|a\.?i\.?|chatbot)\b/gi) || []).length;
+
+  if (thirdPersonSelfRefs >= 2 || metaNarrationPatterns.some((pattern) => pattern.test(cleaned))) {
     return '';
   }
 
@@ -3770,6 +4331,9 @@ function detectGroundedTopic(user, message) {
   // Scoped to role 'parent' so students, tutors, and admins keep their pipeline unchanged.
   if (user.role === 'parent') {
     if (isPersonInfoQuery(normalized)) return null;
+    // Task 25a — "may SPED tutorial / homework assistance / lesson advancement ba kayo?"
+    // is a program-scope question, not a request about this child's own schedule/grades.
+    if (isAcademicSubFeatureQuestion(normalized)) return null;
     if (isParentChildProgressQuestion(normalized)) return 'grades';
 
     const scheduleKeyword = /(schedule|class|classes|session|sessions|lesson|lessons|calendar|timetable)/.test(normalized);
@@ -4947,6 +5511,136 @@ async function handleLessonPrepRequest(req, message) {
 }
 
 /**
+ * Task 24 — assemble the phi system prompt and call the model once.
+ *
+ * `groundedContext` MUST already be the output of getGroundedChatContext (i.e. access-
+ * scoped for this exact user + role — parent => own child only, tutor => own students
+ * only, admin => system-wide, public => none). This function NEVER queries the database;
+ * it only reads the text that scoped lookup already prepared, plus the Task 24b static
+ * RAG reference material, which it keeps in its own distinctly-labelled block.
+ *
+ * Returns a sanitized reply string, or null when phi is unreachable / declined / empty /
+ * not-English — the caller then keeps its deterministic (already localized) reply.
+ */
+async function generatePhiReply({
+  user,
+  resolvedMessage,
+  rawMessage,
+  groundedContext,
+  effectiveLanguageProfile,
+  responsePreference,
+  history,
+}) {
+  // Task 26 — phi is a small (~2.7B), English-centric model; its Filipino / Taglish
+  // generation is unreliable and can come out grammatically broken. Only let it generate
+  // for English. For Filipino / Taglish (or anything else) we return null here so the
+  // caller falls back to the existing localized canned reply — the same path already
+  // used when phi times out or errors. This reverts Filipino/Taglish to pre-Task-24a
+  // behavior while leaving English's Task 24a/24b improvements fully in effect.
+  // (Out of scope: generateTutoringReply(), the separate TUTOR_AI_ENABLED-gated call.)
+  if (effectiveLanguageProfile !== 'english') {
+    return null;
+  }
+
+  const detectedLang = detectLanguage(resolvedMessage);
+  const langName = getLanguageName(detectedLang);
+
+  const systemMessages = [getSystemPrompt()];
+  const profileLanguageLabel = pickByLanguage(effectiveLanguageProfile, 'English', 'Filipino', 'Filipino');
+  const responseFormatInstruction = getResponseFormatInstruction(
+    responsePreference || detectResponsePreference(resolvedMessage),
+    effectiveLanguageProfile,
+  );
+  systemMessages.push(`\n[USER ROLE & CONTEXT]\n${getRoleSpecificContext(user?.role)}`);
+  systemMessages.push(`\n[LANGUAGE INSTRUCTION] Respond to the user in ${langName}. Always use the same language as the user's question. Never switch languages unless the user explicitly requests it.`);
+  systemMessages.push(`\n[STYLE INSTRUCTION] The detected user language style is ${profileLanguageLabel}. Mirror this style exactly in your reply. Use concise, natural, one-on-one conversational tone.`);
+  systemMessages.push('\n[RELEVANCE INSTRUCTION] Answer only the user\'s exact Bee Bright question. Do not add hypothetical stories, logic puzzles, role-play scenes, or extra numbered items that were not asked.');
+  systemMessages.push(`\n[RESPONSE FORMAT INSTRUCTION] ${responseFormatInstruction}`);
+
+  if (user) {
+    systemMessages.push(`Authenticated user role: ${user.role}.`);
+  }
+
+  // Task 24b — static knowledge-base reference (programs, policies, how-tos). NOT account
+  // data; topic-selected and capped; its own labelled block.
+  const phiReference = buildPhiReferenceContext(resolvedMessage, user?.role);
+  if (phiReference) {
+    systemMessages.push(
+      '[REFERENCE MATERIAL — Bee Bright knowledge base]\n'
+      + 'Use this reference material to inform your answer where relevant. Do not contradict '
+      + "it. If the reference material doesn't cover the question, say you're not sure rather "
+      + 'than inventing details.\n'
+      + phiReference,
+    );
+  }
+
+  // Per-user account data — already access-scoped upstream. phi only ever reads this
+  // prepared text; it never queries the database (Task 24c).
+  if (groundedContext?.contextText) {
+    systemMessages.push(
+      `[ACCOUNT DATA — specific to this signed-in user, already access-scoped]\n${groundedContext.contextText}\nUse this data when answering account-specific questions. Do not invent details beyond this data. These figures are the only source of truth for this user's records.`,
+    );
+  }
+
+  const safeHistory = Array.isArray(history)
+    ? history
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-20)
+      .map((m) => ({ role: m.role, content: m.content.trim() }))
+    : [];
+
+  const messages = [
+    { role: 'system', content: systemMessages.join('\n\n') },
+    ...safeHistory,
+    { role: 'user', content: String(rawMessage || resolvedMessage || '').trim() },
+  ];
+
+  const requestBody = {
+    model: OLLAMA_MODEL,
+    messages,
+    stream: false,
+    keep_alive: OLLAMA_KEEP_ALIVE,
+    options: { temperature: 0.2, num_predict: 160, repeat_penalty: 1.15 },
+  };
+
+  if (OLLAMA_DEBUG) {
+    console.debug('[ollama-debug] request payload:', JSON.stringify({ url: `${OLLAMA_URL}/api/chat`, body: requestBody }, null, 2));
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      throw new Error(`Ollama ${response.status}`);
+    }
+    const data = await response.json();
+    const rawContent = data.message?.content?.trim() || '';
+    const sanitized = sanitizeOllamaReply(rawContent);
+    if (OLLAMA_DEBUG) {
+      console.debug('[ollama-debug] raw response (pre-sanitize):', JSON.stringify(rawContent));
+      if (sanitized !== rawContent) {
+        console.debug('[ollama-debug] sanitizer', sanitized ? 'trimmed the reply' : 'REJECTED the reply', '- final:', JSON.stringify(sanitized));
+      }
+    }
+    return sanitized || null;
+  } catch (ollamaErr) {
+    if (ollamaErr.name === 'AbortError') {
+      console.warn('Ollama timed out, using fallback');
+    } else {
+      console.warn('Ollama unavailable, using fallback:', ollamaErr.message);
+    }
+    return null;
+  }
+}
+
+/**
  * POST /api/ai/chat
  * Body: { message: string }
  * Returns a direct chatbot reply from the intent-classification model.
@@ -4980,18 +5674,47 @@ const chat = async (req, res) => {
       return res.status(200).json({ success: true, reply: lessonPrepReply });
     }
 
-    const languageProfile = detectLanguageProfile(message);
+    // Task 21 — a vague follow-up ("uli dyan") is resolved against the last concrete
+    // message in this conversation. Guards above ran on the original text.
+    const { message: contextMessage } = applyConversationContext(message, history);
+    // Task 22a — fix obvious typos / Taglish-affix words ("enrollement" -> "enrollment",
+    // "malolocate" -> "locate") so the exact regex handlers downstream still fire.
+    const resolvedMessage = normalizeTypos(contextMessage).text;
+
+    const languageProfile = detectLanguageProfile(resolvedMessage);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
-    const classifierResult = getIntentReply(message);
-    const groundedContext = await getGroundedChatContext(req.user, message);
-    const baseReply = await getResolvedReply(req.user, message, classifierResult, groundedContext, effectiveLanguageProfile, history);
+    const classifierResult = getIntentReply(resolvedMessage);
+    const groundedContext = await getGroundedChatContext(req.user, resolvedMessage);
+    let baseReply = await getResolvedReply(req.user, resolvedMessage, classifierResult, groundedContext, effectiveLanguageProfile, history);
+    let groundingPath = groundedContext ? 'grounded' : 'deterministic';
+
+    // Task 24a — last-resort phi fallback. Only when the whole deterministic pipeline
+    // produced nothing better than the generic "please clarify" / "not available" reply.
+    // phi gets the SAME already-access-scoped grounded context + the static RAG
+    // reference material; it never queries the database. Determinism always wins first.
+    if (isUnhelpfulReply(baseReply)) {
+      const phiReply = await generatePhiReply({
+        user: req.user,
+        resolvedMessage,
+        rawMessage: message,
+        groundedContext,
+        effectiveLanguageProfile,
+        responsePreference: detectResponsePreference(resolvedMessage),
+        history,
+      });
+      if (phiReply) {
+        baseReply = phiReply;
+        groundingPath = groundedContext ? 'grounded-llm' : 'llm';
+      }
+    }
+
     const reply = await applyRepeatedNoMatchHandoff(req, message, history, baseReply, effectiveLanguageProfile);
     await logAiInteraction({
       req,
       message,
       reply,
       groundedContext,
-      groundingPath: reply === baseReply ? (groundedContext ? 'grounded' : 'deterministic') : 'handoff',
+      groundingPath: reply === baseReply ? groundingPath : 'handoff',
       language: effectiveLanguageProfile,
     });
     res.status(200).json({ success: true, reply });
@@ -5089,103 +5812,66 @@ const ollamaChat = async (req, res) => {
       return respond(rewrittenReply, 'language-rewrite', groundedContextForPrevious, languageOverride);
     }
 
-    const languageProfile = detectLanguageProfile(message);
+    // Task 21 — vague follow-up resolves against the last concrete message in this chat.
+    const { message: contextMessage } = applyConversationContext(message, history);
+    // Task 22a — typo / Taglish-affix normalisation.
+    const resolvedMessage = normalizeTypos(contextMessage).text;
+
+    const languageProfile = detectLanguageProfile(resolvedMessage);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
-    const responsePreference = detectResponsePreference(message);
-    const classifierResult = getIntentReply(message);
-    const groundedContext = await getGroundedChatContext(req.user, message);
+    const responsePreference = detectResponsePreference(resolvedMessage);
+    const classifierResult = getIntentReply(resolvedMessage);
+    const groundedContext = await getGroundedChatContext(req.user, resolvedMessage);
 
     // Keep Bee Bright system answers deterministic and scoped.
     const shouldForceDeterministicReply = ['english', 'filipino'].includes(effectiveLanguageProfile);
-    if (shouldForceDeterministicReply && shouldUseDirectSystemReply(message, classifierResult, groundedContext)) {
-      const directScopedReply = await getResolvedReply(req.user, message, classifierResult, groundedContext, effectiveLanguageProfile, history);
+    const tryPhiLastResort = async () => generatePhiReply({
+      user: req.user,
+      resolvedMessage,
+      rawMessage: message,
+      groundedContext,
+      effectiveLanguageProfile,
+      responsePreference,
+      history,
+    });
+
+    if (shouldForceDeterministicReply && shouldUseDirectSystemReply(resolvedMessage, classifierResult, groundedContext)) {
+      const directScopedReply = await getResolvedReply(req.user, resolvedMessage, classifierResult, groundedContext, effectiveLanguageProfile, history);
+      // Task 24a — English/Filipino no longer dead-end at the generic clarification
+      // reply: if the deterministic pipeline had nothing real, let phi (with RAG) try.
+      if (isUnhelpfulReply(directScopedReply)) {
+        const phiReply = await tryPhiLastResort();
+        if (phiReply) {
+          return respond(phiReply, groundedContext ? 'grounded-llm' : 'llm', groundedContext, effectiveLanguageProfile);
+        }
+      }
       return respond(directScopedReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
     }
 
-    const directReply = await getOllamaBypassReply(req.user, message, groundedContext, classifierResult, effectiveLanguageProfile, history);
-    if (directReply) {
+    const directReply = await getOllamaBypassReply(req.user, resolvedMessage, groundedContext, classifierResult, effectiveLanguageProfile, history);
+    if (directReply && !isUnhelpfulReply(directReply)) {
       return respond(directReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
     }
 
-    const detectedLang = detectLanguage(message);
-    const langName = getLanguageName(detectedLang);
-    
-    const systemMessages = [getSystemPrompt()];
-    const profileLanguageLabel = pickByLanguage(effectiveLanguageProfile, 'English', 'Filipino', 'Filipino');
-    const responseFormatInstruction = getResponseFormatInstruction(responsePreference, effectiveLanguageProfile);
-    systemMessages.push(`\n[USER ROLE & CONTEXT]\n${getRoleSpecificContext(req.user?.role)}`);
-    systemMessages.push(`\n[LANGUAGE INSTRUCTION] Respond to the user in ${langName}. Always use the same language as the user's question. Never switch languages unless the user explicitly requests it.`);
-    systemMessages.push(`\n[STYLE INSTRUCTION] The detected user language style is ${profileLanguageLabel}. Mirror this style exactly in your reply. Use concise, natural, one-on-one conversational tone.`);
-    systemMessages.push('\n[RELEVANCE INSTRUCTION] Answer only the user\'s exact Bee Bright question. Do not add hypothetical stories, logic puzzles, role-play scenes, or extra numbered items that were not asked.');
-    systemMessages.push(`\n[RESPONSE FORMAT INSTRUCTION] ${responseFormatInstruction}`);
-
-    if (req.user) {
-      systemMessages.push(`Authenticated user role: ${req.user.role}.`);
+    // Task 24 — phi (with the Task 24b RAG reference + already-scoped grounded context).
+    // Reached here for English whose deterministic reply was only the generic
+    // clarification. Task 26: phi is skipped for Filipino/Taglish (generatePhiReply
+    // returns null for non-English) and we serve the localized canned reply instead.
+    const phiReply = await tryPhiLastResort();
+    const llmSucceeded = Boolean(phiReply);
+    const finalReply = phiReply
+      || localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile)
+      || directReply
+      || pickByLanguage(effectiveLanguageProfile, 'I can help with our programs and pricing, enrollment, payments, schedules, and learning materials. Try asking about one of these.', 'Matutulungan kita sa mga programa at presyo, enrollment, payments, schedule, at learning materials. Maaari kang magtanong tungkol sa alinman sa mga ito.', 'Matutulungan kita sa programs at pricing, enrollment, payments, schedule, at learning materials. Maaari kang magtanong tungkol sa alinman sa mga ito.');
+    let tailPath;
+    if (llmSucceeded) {
+      tailPath = 'llm';
+    } else if (effectiveLanguageProfile === 'english') {
+      tailPath = 'llm-fallback'; // phi was attempted but unreachable / declined
+    } else {
+      tailPath = groundedContext ? 'grounded' : 'deterministic'; // phi never attempted (Task 26)
     }
-
-    if (groundedContext?.contextText) {
-      systemMessages.push(
-        `Grounded account data:\n${groundedContext.contextText}\nUse this data when answering account-specific questions. Do not invent details beyond this data.`
-      );
-    }
-
-    const safeHistory = Array.isArray(history)
-      ? history
-        .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
-        .slice(-20)
-        .map((m) => ({ role: m.role, content: m.content.trim() }))
-      : [];
-
-    const messages = [
-      { role: 'system', content: systemMessages.join('\n\n') },
-      ...safeHistory,
-      { role: 'user', content: message.trim() },
-    ];
-
-    let reply;
-    let llmSucceeded = false;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
-      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          messages,
-          stream: false,
-          options: {
-            temperature: 0.2,
-            num_predict: 160,
-            repeat_penalty: 1.15
-          }
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Ollama ${response.status}`);
-      }
-
-      const data = await response.json();
-      reply = sanitizeOllamaReply(data.message?.content?.trim() || '');
-      if (!reply) {
-        reply = localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile);
-      } else {
-        llmSucceeded = true;
-      }
-    } catch (ollamaErr) {
-      if (ollamaErr.name === 'AbortError') {
-        console.warn('Ollama timed out, using fallback');
-      } else {
-        console.warn('Ollama unavailable, using fallback:', ollamaErr.message);
-      }
-      reply = localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile);
-    }
-
-    const finalReply = reply || localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile) || pickByLanguage(effectiveLanguageProfile, 'I can help with schedules, enrollment, payments, and learning materials. Try asking about one of these.', 'Maaari kitang tulungan sa schedule, enrollment, payments, learning materials, at pakikipag-ugnayan sa tutor. Maaari kang magtanong tungkol sa alinman sa mga ito.', 'Maaari kitang tulungan sa schedule, enrollment, payments, learning materials, at pakikipag-ugnayan sa tutor. Maaari kang magtanong tungkol sa alinman sa mga ito.');
-    return respond(finalReply, llmSucceeded ? 'llm' : 'llm-fallback', groundedContext, effectiveLanguageProfile);
+    return respond(finalReply, tailPath, groundedContext, effectiveLanguageProfile);
   } catch (error) {
     console.error('Ollama chat error:', error);
     const languageProfile = detectLanguageProfile(req.body?.message);
@@ -5230,8 +5916,8 @@ const CONTROLLER_EVAL_CASES = [
     id: 'payments_methods_en',
     message: 'What payment methods are available?',
     expectedLanguage: 'english',
-    mustInclude: [/gcash/i, /blockchain|metamask|ganache/i],
-    mustNotInclude: [/bank transfer.+available|credit card.+available|cash.+available/i]
+    mustInclude: [/gcash/i, /seabank/i, /bdo/i],
+    mustNotInclude: [/blockchain|metamask|ganache|crypto/i]
   },
   {
     id: 'location_en',
@@ -5331,161 +6017,31 @@ const getModelMetrics = async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message: error.message || 'Failed to load model metrics'
-
-    /**
-     * AI DATASET HELPER FUNCTIONS
-     * Leverage 2000+ Q&A datasets for intelligent, context-aware responses
-     */
-
+      message: error.message || 'Failed to load model metrics',
     });
   }
 };
 
 /**
- * AI DATASET HELPER FUNCTIONS
- * Leverage 2000+ Q&A datasets for intelligent, context-aware responses
+ * AI DATASET HELPER FUNCTIONS — Q&A dataset (aiResponseDatasets.js).
+ * ~62 Q&A pairs + 25 keyword rules. See AI_DATASETS_DOCUMENTATION.md.
+ * (A stale duplicate of these five functions was removed in Task 23a — this is the
+ * authoritative copy.)
  */
 
-/**
- * Find matching dataset item based on message and role
- * @param {string} message - User's message
- * @param {string} role - User role (student, tutor, admin, visitor)
- * @returns {Object|null} - Matching dataset item or null
- */
-function findDatasetMatch(message, role = 'student') {
-      const normalized = normalizeMessage(message);
-      if (!normalized) return null;
+// Task 19/20 — weighted match. Filler words ("help", "please", "pakitulong") are
+// stripped before scoring; audience domain keywords ("billing", "schedule") carry
+// extra weight, so a specific topic word can no longer be drowned out by filler.
+const DATASET_MATCH_THRESHOLD = 0.55;
 
-      let searchPool = [];
-  
-      if (role === 'student') {
-        searchPool = AIResponseDatasets.studentQueries;
-      } else if (role === 'tutor') {
-        searchPool = AIResponseDatasets.tutorQueries;
-      } else if (role === 'admin' || role === 'super_admin') {
-        searchPool = AIResponseDatasets.adminQueries;
-      } else {
-        searchPool = AIResponseDatasets.visitorQueries;
-      }
-
-      // Search for exact or partial match in queries
-      return searchPool.find(item => {
-        const enQuery = normalizeMessage(item.queries?.en || '');
-        const filQuery = normalizeMessage(item.queries?.fil || '');
-        const tglQuery = normalizeMessage(item.queries?.tgl || '');
-
-        // Check for direct containment
-        const queryMatch = enQuery.includes(normalized) || filQuery.includes(normalized) || 
-                          tglQuery.includes(normalized) || normalized.includes(enQuery) ||
-                          normalized.includes(filQuery) || normalized.includes(tglQuery);
-    
-        // Check for keyword overlap (80%+ match)
-        if (queryMatch) return true;
-    
-        const messageWords = normalized.split(/\s+/);
-        const queryWords = enQuery.split(/\s+/).concat(filQuery.split(/\s+/), tglQuery.split(/\s+/));
-        const matchCount = messageWords.filter(w => queryWords.includes(w)).length;
-    
-        return messageWords.length > 0 && matchCount / messageWords.length >= 0.5;
-      }) || null;
-    }
-
-    /**
-     * Get contextual response from dataset
-     * @param {string} message - User message
-     * @param {string} role - User role
-     * @param {string} languageProfile - Language preference (english, filipino, taglish)
-     * @param {Array} history - Previous conversation history
-     * @returns {string|null} - Appropriate response from dataset
-     */
-    function getContextualDatasetResponse(message, role = 'student', languageProfile = 'english', history = []) {
-      // First try direct match
-      let match = findDatasetMatch(message, role);
-  
-      if (!match) {
-        // Try context-aware follow-up if no direct match
-        const contextMatch = AIResponseDatasets.contextAwareFollowUps.find(item => {
-          const normalized = normalizeMessage(message);
-          const contextQuery = normalizeMessage(item.queries?.en || '');
-          return contextQuery.includes(normalized) || normalized.includes(contextQuery);
-        });
-        match = contextMatch;
-      }
-
-      if (!match) return null;
-
-      // Select language-appropriate response
-      const langMap = {
-        'english': 'en',
-        'english': 'en',
-        'taglish': 'tgl',
-        'filipino': 'fil'
-      };
-  
-      const lang = langMap[languageProfile] || 'en';
-      const response = match.expectedReply?.[lang] || match.expectedReply?.en;
-  
-      return response ? String(response).trim() : null;
-    }
-
-    /**
-     * Get dataset statistics for monitoring
-     * @returns {Object} - Statistics about available datasets
-     */
-    function getDatasetStatistics() {
-      return {
-        totalDatasets: AIResponseDatasets.getDatasetCount(),
-        studentDatasets: AIResponseDatasets.studentQueries.length,
-        tutorDatasets: AIResponseDatasets.tutorQueries.length,
-        adminDatasets: AIResponseDatasets.adminQueries.length,
-        visitorDatasets: AIResponseDatasets.visitorQueries.length,
-        contextAwareDatasets: AIResponseDatasets.contextAwareFollowUps.length,
-        topics: {
-          student: [...new Set(AIResponseDatasets.studentQueries.map(q => q.topic))],
-          tutor: [...new Set(AIResponseDatasets.tutorQueries.map(q => q.topic))],
-          admin: [...new Set(AIResponseDatasets.adminQueries.map(q => q.topic))],
-          visitor: [...new Set(AIResponseDatasets.visitorQueries.map(q => q.topic))]
-        }
-      };
-    }
-
-    /**
-     * Get random dataset sample for a role
-     * @param {string} role - User role
-     * @returns {Object} - Random dataset item for training/testing
-     */
-    function getRandomDatasetSample(role = 'student') {
-      return AIResponseDatasets.getRandomDataset(role);
-    }
-
-    /**
-     * Get all datasets by topic and role
-     * @param {string} role - User role
-     * @param {string} topic - Topic filter
-     * @returns {Array} - All matching dataset items
-     */
-    function getDatasetsByTopic(role = 'student', topic) {
-      return AIResponseDatasets.getDatasetByTopic(role, topic);
-    }
-
-/**
- * AI DATASET HELPER FUNCTIONS
- * Leverage 2000+ Q&A datasets for intelligent, context-aware responses
- */
-
-/**
- * Find matching dataset item based on message and role
- * @param {string} message - User's message
- * @param {string} role - User role (student, tutor, admin, visitor)
- * @returns {Object|null} - Matching dataset item or null
- */
 function findDatasetMatch(message, role = 'student') {
   const normalized = normalizeMessage(message);
   if (!normalized) return null;
 
-  let searchPool = [];
+  // A message made entirely of filler / greeting can't resolve to any Q&A item.
+  if (contentTokens(normalized).length === 0) return null;
 
+  let searchPool = [];
   if (role === 'student') {
     searchPool = AIResponseDatasets.studentQueries;
   } else if (role === 'tutor') {
@@ -5496,26 +6052,41 @@ function findDatasetMatch(message, role = 'student') {
     searchPool = AIResponseDatasets.visitorQueries;
   }
 
-  // Search for exact or partial match in queries
-  return searchPool.find(item => {
-    const enQuery = normalizeMessage(item.queries?.en || '');
-    const filQuery = normalizeMessage(item.queries?.fil || '');
-    const tglQuery = normalizeMessage(item.queries?.tgl || '');
+  // visitorQueries hold role-agnostic public info (programs, policies, contact, refund /
+  // payment-timing / attendance policy) that any role can ask about — always include
+  // them. Role-specific entries stay first in the pool, so they still win ties.
+  if (searchPool !== AIResponseDatasets.visitorQueries) {
+    searchPool = [...searchPool, ...AIResponseDatasets.visitorQueries];
+  }
 
-    // Check for direct containment
-    const queryMatch = enQuery.includes(normalized) || filQuery.includes(normalized) || 
-                      tglQuery.includes(normalized) || normalized.includes(enQuery) ||
-                      normalized.includes(filQuery) || normalized.includes(tglQuery);
+  let best = null;
+  let bestScore = 0;
 
-    // Check for keyword overlap (50%+ match)
-    if (queryMatch) return true;
+  for (const item of searchPool) {
+    const candidates = [item.queries?.en, item.queries?.fil, item.queries?.tgl].filter(Boolean);
+    // The item may also carry an explicit keyword list — treat those as candidate text.
+    if (Array.isArray(item.keywords) && item.keywords.length) {
+      candidates.push(item.keywords.join(' '));
+    }
 
-    const messageWords = normalized.split(/\s+/);
-    const queryWords = enQuery.split(/\s+/).concat(filQuery.split(/\s+/), tglQuery.split(/\s+/));
-    const matchCount = messageWords.filter(w => queryWords.includes(w)).length;
+    let itemScore = 0;
+    for (const cand of candidates) {
+      const candNorm = normalizeMessage(cand);
+      // Strong signal: one string fully contains the other (after normalisation).
+      if (candNorm && (candNorm.includes(normalized) || normalized.includes(candNorm))) {
+        itemScore = Math.max(itemScore, 1);
+        break;
+      }
+      itemScore = Math.max(itemScore, weightedOverlapScore(normalized, cand, role));
+    }
 
-    return messageWords.length > 0 && matchCount / messageWords.length >= 0.5;
-  }) || null;
+    if (itemScore > bestScore) {
+      bestScore = itemScore;
+      best = item;
+    }
+  }
+
+  return bestScore >= DATASET_MATCH_THRESHOLD ? best : null;
 }
 
 /**
@@ -5556,6 +6127,95 @@ function getContextualDatasetResponse(message, role = 'student', languageProfile
 }
 
 /**
+ * Task 24b — RAG reference material for phi.
+ *
+ * phi is a natural-language explainer, not a data source. When a message reaches the phi
+ * fallback, this selects a SMALL, topic-relevant slice of the static knowledge base
+ * (aiResponseDatasets.js — programs, policies, how-tos) as plain text, injected into the
+ * system prompt as a clearly-labelled [REFERENCE MATERIAL] block.
+ *
+ * Hard rules (Task 24 "Non-negotiable constraint"):
+ *   - Static KB only. This function NEVER reads the database or any per-user record.
+ *   - Never the whole dataset — a topic-relevant subset, capped at a few entries.
+ *   - Kept separate from groundedContext.contextText (per-user, already access-scoped).
+ *
+ * Returns '' when nothing is relevant enough — the caller then omits the block.
+ */
+const PHI_REFERENCE_MAX_ENTRIES = 4;
+const PHI_REFERENCE_MIN_SCORE = 0.18;
+
+// Task 20 domain category -> dataset `topic` values covering the same subject matter.
+const PHI_REFERENCE_TOPIC_HINTS = {
+  programs_pricing: ['programs', 'pricing'],
+  enrollment: ['enrollment', 'enrollment_process', 'enrollments'],
+  payment_methods: ['payments', 'pricing'],
+  payment_billing: ['payments'],
+  location_info: ['location', 'contact'],
+  class_format: ['programs', 'location'],
+  comparison: ['programs', 'pricing'],
+  schedule: ['schedule'],
+  progress: ['grades'],
+  assessment: ['grades', 'attendance'],
+  learning_materials: ['materials'],
+  child_enrollment: ['enrollment', 'enrollments'],
+  contact_tutor: ['tutor_help', 'contact'],
+  student_notes: ['grades'],
+};
+
+function buildPhiReferenceContext(message, role) {
+  const normalized = normalizeMessage(message);
+  if (!normalized || contentTokens(normalized).length === 0) return '';
+
+  const roleNorm = role === 'super_admin' ? 'admin' : (role || 'public');
+
+  // General-knowledge entries only. Visitor + navigation apply to everyone; the
+  // role-specific pools are still static how-to content (no account data lives in them).
+  const pool = [
+    ...AIResponseDatasets.visitorQueries,
+    ...AIResponseDatasets.navigationQueries,
+  ];
+  if (roleNorm === 'student' || roleNorm === 'parent') {
+    pool.push(...AIResponseDatasets.studentQueries);
+  } else if (roleNorm === 'tutor') {
+    pool.push(...AIResponseDatasets.tutorQueries);
+  } else if (roleNorm === 'admin') {
+    pool.push(...AIResponseDatasets.adminQueries);
+  }
+
+  // Topic hint from the Task 19/20 weighted categoriser — it can name the likely topic
+  // even when it is not confident enough to answer directly.
+  const category = resolveDomainCategory(message, role)?.category || null;
+  const topicHints = category ? (PHI_REFERENCE_TOPIC_HINTS[category] || []) : [];
+
+  const scored = [];
+  const seen = new Set();
+  for (const item of pool) {
+    const key = item.id || `${item.topic}|${item.queries?.en || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    let score = 0;
+    for (const cand of [item.queries?.en, item.queries?.fil, item.queries?.tgl]) {
+      if (cand) score = Math.max(score, weightedOverlapScore(normalized, cand, role));
+    }
+    if (topicHints.length && item.topic && topicHints.includes(item.topic)) {
+      score += 0.25;
+    }
+    if (score > 0) scored.push({ item, score });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const picked = scored
+    .filter((s) => s.score >= PHI_REFERENCE_MIN_SCORE)
+    .slice(0, PHI_REFERENCE_MAX_ENTRIES);
+  if (!picked.length) return '';
+
+  return picked
+    .map(({ item }) => `Q: ${item.queries?.en || ''}\nA: ${item.expectedReply?.en || ''}`.trim())
+    .join('\n\n');
+}
+
+/**
  * Get dataset statistics for monitoring
  * @returns {Object} - Statistics about available datasets
  */
@@ -5566,6 +6226,7 @@ function getDatasetStatistics() {
     tutorDatasets: AIResponseDatasets.tutorQueries.length,
     adminDatasets: AIResponseDatasets.adminQueries.length,
     visitorDatasets: AIResponseDatasets.visitorQueries.length,
+    navigationDatasets: Array.isArray(AIResponseDatasets.navigationQueries) ? AIResponseDatasets.navigationQueries.length : 0,
     contextAwareDatasets: AIResponseDatasets.contextAwareFollowUps.length,
     csvIntentKeywordDatasets: Array.isArray(AIResponseDatasets.intentKeywordRules) ? AIResponseDatasets.intentKeywordRules.length : 0,
     topics: {
@@ -5607,7 +6268,7 @@ const getAIDatasetStats = async (req, res) => {
       success: true,
       message: 'AI dataset statistics retrieved successfully',
       data: stats,
-      note: 'These datasets (2000+) power intelligent, context-aware responses in BeeBright AI'
+      note: 'Q&A dataset: ~62 Q&A pairs + 2 context follow-ups + 25 keyword rules (89 total). Powers deterministic keyword-matched replies; not sent to the LLM.'
     });
   } catch (error) {
     return res.status(500).json({
@@ -5625,6 +6286,9 @@ module.exports = {
   getModelMetrics,
   findDatasetMatch,
   getContextualDatasetResponse,
+  buildPhiReferenceContext,
+  generatePhiReply,
+  sanitizeOllamaReply,
   getDatasetStatistics,
   getRandomDatasetSample,
   getDatasetsByTopic,
@@ -5645,5 +6309,21 @@ module.exports = {
   buildTutorStudentNotesContext,
   getTutorStudents,
   handleAnonymousChatGuards,
+  getStudentCountReply,
+  getTutorCountReply,
+  getEnrollmentStatusReply,
+  getPaymentMethodsReply,
+  getProgramPricingReply,
+  isProgramPricingQuestion,
+  isProgramComparisonQuestion,
+  getProgramComparisonReply,
+  isAcademicSubFeatureQuestion,
+  getAcademicSubFeatureReply,
+  ACADEMIC_TUTORIAL_SUBFEATURES,
+  isTicketStatusQuestion,
+  getTicketStatusReply,
+  applyConversationContext,
+  isOnlineClassQuestion,
+  getClassFormatReply,
 };
 

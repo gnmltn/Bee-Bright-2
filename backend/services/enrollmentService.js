@@ -162,7 +162,7 @@ async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enroll
               You may upload new payment proof and resubmit your application. Log in to your parent dashboard to do so.
             </p>` : ''}
             <p style="color:#b91c1c;font-size:14px;margin-top:20px;">
-              If you have questions, please contact us at beebright@gmail.com
+              If you have questions, please contact us at beebrightph@gmail.com
             </p>
           </div>
         </div>`,

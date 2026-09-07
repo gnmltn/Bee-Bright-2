@@ -29,6 +29,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
+import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
@@ -526,6 +527,11 @@ export default function AdminDashboard() {
       consentItems?: { name?: string; accepted?: boolean }[];
       rejectionReason?: string; allowResubmission?: boolean; statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
       student?: AdminEnrollment["student"] & { guardianName?: string; guardianPhone?: string; studentId?: string };
+      requirementDocuments?: {
+        birthCertificate?: { path?: string | null; fileName?: string | null; uploadedAt?: string | null };
+        studentPhoto?: { path?: string | null; fileName?: string | null; uploadedAt?: string | null };
+        guardianId?: { path?: string | null; fileName?: string | null; uploadedAt?: string | null };
+      };
     };
     payments: {
       _id: string; referenceNumber?: string; amount: number; amountDue?: number; status: string;
@@ -2965,9 +2971,12 @@ export default function AdminDashboard() {
                             </tr>
                           ) : (
                             pendingPaymentsList.map((payment) => {
-                              const studentName = payment.student
-                                ? [payment.student.firstName, payment.student.lastName].filter(Boolean).join(" ").trim() || "—"
-                                : "—";
+                              const studentName = (
+                                [payment.student?.firstName, payment.student?.lastName].filter(Boolean).join(" ").trim()
+                                || [payment.enrollment?.studentSnapshot?.firstName, payment.enrollment?.studentSnapshot?.lastName].filter(Boolean).join(" ").trim()
+                                || [payment.parent?.firstName, payment.parent?.lastName].filter(Boolean).join(" ").trim()
+                                || "—"
+                              );
                               const dateLabel = payment.createdAt
                                 ? new Date(payment.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
                                 : "—";
@@ -2984,8 +2993,8 @@ export default function AdminDashboard() {
                                   </td>
                                   <td className="p-4">
                                     <div className="flex items-center gap-2 flex-wrap">
-                                      {payment.gcashDetails?.screenshotUrl ? (
-                                        <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
+                                      {(payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
+                                        <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
                                           Proof
                                         </Button>
                                       ) : null}
@@ -3042,9 +3051,12 @@ export default function AdminDashboard() {
                             </tr>
                           ) : (
                             paymentHistoryList.map((payment) => {
-                              const studentName = payment.student
-                                ? [payment.student.firstName, payment.student.lastName].filter(Boolean).join(" ").trim() || "—"
-                                : "—";
+                              const studentName = (
+                                [payment.student?.firstName, payment.student?.lastName].filter(Boolean).join(" ").trim()
+                                || [payment.enrollment?.studentSnapshot?.firstName, payment.enrollment?.studentSnapshot?.lastName].filter(Boolean).join(" ").trim()
+                                || [payment.parent?.firstName, payment.parent?.lastName].filter(Boolean).join(" ").trim()
+                                || "—"
+                              );
                               const submittedLabel = payment.createdAt
                                 ? new Date(payment.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
                                 : "—";
@@ -3078,8 +3090,8 @@ export default function AdminDashboard() {
                                   </td>
                                   <td className="p-4 text-sm text-muted-foreground">
                                     <div className="space-y-2">
-                                      {payment.gcashDetails?.screenshotUrl ? (
-                                        <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
+                                      {(payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
+                                        <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
                                           View proof
                                         </Button>
                                       ) : null}
@@ -5641,6 +5653,43 @@ export default function AdminDashboard() {
                   </div>
                 )}
 
+                {/* Enrollment requirement documents — Birth Certificate, 2×2 Photo, Guardian ID */}
+                {(() => {
+                  const rd = eAny.requirementDocuments as Record<string, { path?: string | null; fileName?: string | null; uploadedAt?: string | null } | undefined> | undefined;
+                  const docs = [
+                    { key: 'birthCertificate', label: 'Student Birth Certificate', doc: rd?.birthCertificate },
+                    { key: 'studentPhoto', label: 'Recent 2×2 Photo of Student', doc: rd?.studentPhoto },
+                    { key: 'guardianId', label: 'Guardian Valid ID', doc: rd?.guardianId },
+                  ];
+                  const anyUploaded = docs.some((d) => d.doc?.path);
+                  return (
+                    <div className="p-3 border border-border rounded-lg space-y-3">
+                      <p className="font-semibold text-foreground text-xs uppercase tracking-wide">Enrollment Requirements</p>
+                      {anyUploaded ? (
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          {docs.map(({ key, label, doc }) => (
+                            <div key={key} className="space-y-1">
+                              <p className="text-xs font-medium text-foreground">{label}</p>
+                              {doc?.path ? (
+                                <>
+                                  <FilePreview src={{ dataUrl: resolvePaymentProofUrl(doc.path), fileName: doc.fileName || label }} label={label} />
+                                  {doc.uploadedAt && <p className="text-[11px] text-muted-foreground">Uploaded {new Date(doc.uploadedAt).toLocaleDateString('en-PH')}</p>}
+                                </>
+                              ) : (
+                                <p className="text-xs text-destructive">Not uploaded</p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          No requirement documents on file for this enrollment. (Enrollments submitted before this feature will not have them.)
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Student info */}
                 <div className="p-3 bg-muted rounded-lg text-sm space-y-1">
                   <p className="font-semibold text-foreground text-xs uppercase tracking-wide mb-1">Student (Child)</p>
@@ -5716,16 +5765,12 @@ export default function AdminDashboard() {
                           <span className={`text-xs px-2 py-1 rounded-full font-medium ${p.status === 'verified' ? 'bg-emerald-100 text-emerald-800' : p.status === 'submitted' ? 'bg-amber-100 text-amber-800' : p.status === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-muted text-muted-foreground'}`}>{p.status}</span>
                         </div>
                         {proofSrc ? (
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Proof of Payment:</p>
-                            {String(proofSrc).endsWith('.pdf') ? (
-                              <a href={resolvePaymentProofUrl(proofSrc)} target="_blank" rel="noopener noreferrer" className="text-primary text-xs underline">Open PDF proof</a>
-                            ) : (
-                              <button type="button" onClick={() => openPaymentProof(proofSrc, p.referenceNumber || p._id)}
-                                className="block overflow-hidden rounded border border-border hover:border-primary/40">
-                                <img src={resolvePaymentProofUrl(proofSrc)} alt="Payment proof" className="max-w-full max-h-48 object-contain rounded cursor-zoom-in" />
-                              </button>
-                            )}
+                          <div className="space-y-1">
+                            <p className="text-xs text-muted-foreground">Proof of Payment{p.submittedAt ? ` · submitted ${new Date(p.submittedAt).toLocaleString('en-PH')}` : ''}:</p>
+                            <FilePreview
+                              src={{ dataUrl: resolvePaymentProofUrl(proofSrc), fileName: String(proofSrc).split('/').pop() || 'payment-proof' }}
+                              label={`Payment proof — ${p.referenceNumber || p._id.slice(-8)}`}
+                            />
                           </div>
                         ) : <p className="text-xs text-muted-foreground">No proof uploaded yet.</p>}
                         {p.status === 'submitted' && (

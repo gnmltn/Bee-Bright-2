@@ -162,33 +162,27 @@ export const INITIAL_WIZARD_DATA: WizardData = {
 };
 
 // ── Age eligibility (mirrors backend/utils/ageEligibility.js) ─────────────
-// Only 3 active programs per brochure.
+// Only 3 active programs. Toddlers Playgroup is ages 2–4 (owner-confirmed):
+// eligible from the 2nd birthday through the whole 4th year, out at 5.
+// General enrollment age range is 2–18 (see lib/enrollmentValidation.ts).
 export const PROGRAM_ELIGIBILITY: Record<string, { min: number; max: number | null; label: string }> = {
-  TPG101: { min: 1.5, max: 3,    label: 'Toddlers Playgroup' },
-  ACT102: { min: 2,   max: null, label: 'Academic Tutorial' },
-  EXP106: { min: 3,   max: null, label: 'Examination Preparation' },
+  TPG101: { min: 2, max: 4,  label: 'Toddlers Playgroup' },
+  ACT102: { min: 2, max: 18, label: 'Academic Tutorial' },
+  EXP106: { min: 3, max: 18, label: 'Examination Preparation' },
 };
 
-export function computeAgeYears(birthdate: string): number {
-  if (!birthdate) return 0;
-  const birth = new Date(birthdate);
-  const now = new Date();
-  return (now.getTime() - birth.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-}
+// Age maths lives in ONE place. Re-exported here so the wizard steps can keep
+// importing it from wizard-types — do not add a second copy.
+export { computeAgeYears, formatAge, parseBirthdate } from '@/lib/enrollmentValidation';
 
-export function formatAge(birthdate: string): string {
-  if (!birthdate) return '';
-  const birth = new Date(birthdate);
-  const now = new Date();
-  let years = now.getFullYear() - birth.getFullYear();
-  let months = now.getMonth() - birth.getMonth();
-  if (months < 0) { years--; months += 12; }
-  if (now.getDate() < birth.getDate()) months--;
-  if (months < 0) { years--; months += 12; }
-  const parts: string[] = [];
-  if (years > 0) parts.push(`${years} yr${years !== 1 ? 's' : ''}`);
-  if (months > 0) parts.push(`${months} mo${months !== 1 ? 's' : ''}`);
-  return parts.length ? parts.join(' ') : 'less than 1 month';
+/**
+ * A program whose `max` is a small explicit upper bound is written as an age
+ * BAND ("ages 2 to 4"). Purely a copy/message distinction — the comparison is
+ * the same for every program. Programs whose `max` is just an upper cap
+ * (Academic Tutorial / Exam Prep at 18) read as "up to N years old".
+ */
+function isAgeBand(rule: { max: number | null }): boolean {
+  return rule.max !== null && rule.max <= 5;
 }
 
 export function checkProgramEligibility(
@@ -197,17 +191,42 @@ export function checkProgramEligibility(
 ): { eligible: boolean; reason: string | null } {
   const rule = PROGRAM_ELIGIBILITY[programCode];
   if (!rule) return { eligible: true, reason: null };
+  if (!Number.isFinite(ageYears) || ageYears <= 0) {
+    return { eligible: false, reason: 'Enter a valid birthdate first.' };
+  }
+
+  const band = isAgeBand(rule);
+  // A banded program shows ONE consistent message whether the child is too
+  // young OR too old — e.g. "Toddlers Playgroup is for children ages 2 to 4 years old."
+  const bandMessage = `${rule.label} is for children ages ${rule.min} to ${rule.max} years old.`;
+
+  // Too young — the child has not reached their `min`th birthday yet.
   if (ageYears < rule.min) {
-    const minLabel =
-      rule.min % 1 !== 0
-        ? `${rule.min} yrs (${Math.floor(rule.min * 12)} months)`
-        : `${rule.min} years old`;
-    return { eligible: false, reason: `${rule.label} requires minimum age of ${minLabel}.` };
+    return {
+      eligible: false,
+      reason: band ? bandMessage : `${rule.label} is for children ages ${rule.min} years old and up.`,
+    };
   }
-  if (rule.max !== null && ageYears > rule.max + 0.5) {
-    return { eligible: false, reason: `${rule.label} is for children up to ${rule.max} years old.` };
+
+  // Too old — "ages 2 to 4" covers the whole 4th year, so a child is only out
+  // once they turn 5. Same rule for an upper cap ("up to 18" runs through 18).
+  if (rule.max !== null && Math.floor(ageYears) > rule.max) {
+    return {
+      eligible: false,
+      reason: band ? bandMessage : `${rule.label} is for students up to ${rule.max} years old.`,
+    };
   }
+
   return { eligible: true, reason: null };
+}
+
+/**
+ * Toddlers Playgroup: children ages 2, 3 and 4 years old — i.e. from the 2nd
+ * birthday until the day before the 5th. Single shared check — mirrors
+ * backend/utils/ageEligibility.js `isEligibleForToddlers`.
+ */
+export function isEligibleForToddlers(ageYears: number): boolean {
+  return checkProgramEligibility('TPG101', ageYears).eligible;
 }
 
 // Payment is always 50% down — always use priceDown.
@@ -222,6 +241,6 @@ export const PROGRAM_LABELS: Record<string, string> = {
   EXP106: 'Examination Preparation',
 };
 
-/** Max file size for document uploads in Step 1 (10 MB) */
-export const MAX_DOC_BYTES = 10 * 1024 * 1024;
+/** Max file size for document uploads (5 MB). See lib/enrollmentValidation.ts. */
+export const MAX_DOC_BYTES = 5 * 1024 * 1024;
 export const ALLOWED_DOC_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];

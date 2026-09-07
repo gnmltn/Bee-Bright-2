@@ -1,6 +1,7 @@
 const dns = require('dns');
 dns.setServers(['8.8.8.8', '8.8.4.4']); 
 
+const crypto = require('crypto');
 const express = require('express');
 const path = require('path');
 const mongoose = require('mongoose');
@@ -52,6 +53,7 @@ const { migrateScheduleIndexes } = require('./utils/scheduleIndexMigration');
 const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
 const { ensureAssessmentTemplates } = require('./utils/ensureAssessmentTemplates');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
+const { warmUpOllama } = require('./utils/ollamaWarmup');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -173,11 +175,18 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/admin-invites', adminCreationRoutes);
 app.use('/api/assessments', assessmentRoutes);
 
+// New value on every process start. The enrollment wizard stores it alongside
+// its client-side draft and wipes the draft when it changes — so stopping and
+// restarting the server (or the machine) drops any in-progress enrollment,
+// while a plain page refresh keeps it. Nothing is persisted server-side.
+const SERVER_INSTANCE_ID = crypto.randomUUID();
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     message: 'Bee Bright API is running',
+    instanceId: SERVER_INSTANCE_ID,
     timestamp: new Date(),
     environment: process.env.NODE_ENV
   });
@@ -209,6 +218,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API URL: http://localhost:${PORT}/api`);
   console.log('='.repeat(50));
+  // Task 29b — pre-warm phi so the first user needing it doesn't pay the cold-start cost.
+  // Fire-and-forget; never blocks startup or throws.
+  warmUpOllama();
 });
 
 server.on('error', (error) => {

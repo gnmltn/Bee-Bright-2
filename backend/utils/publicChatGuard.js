@@ -25,11 +25,13 @@ const ACCOUNT_DATA_PATTERNS = [
   /\b(check|track|see|view) (on )?my (child|kid|son|daughter|enrollment|payment|application)\b/,
   /\breference number\b/,
   /\b(what|when|where) is my (grade|grades|schedule|class|payment|payment status|tutor|enrollment|enrollment status|balance|next class|next session)\b/,
+  /\b(progress|status) ko\b/,
+  /\bkumusta (ako|na ako)\b/,
   // Filipino / Taglish
-  /\b(grado|marka|iskedyul|schedule|bayad|balanse|enrollment|tutor) ko\b/,
-  /\banak ko('?ng)?\b.*\b(grado|progress|schedule|klase|bayad|tutor|enrollment)\b/,
+  /\b(grado|marka|iskedyul|schedule|bayad|balanse|balance|enrollment|tutor|account|progress|status) ko\b/,
+  /\banak ko('?ng)?\b.*\b(grado|progress|schedule|klase|bayad|tutor|enrollment|marka|record)\b/,
   /\bkumusta.*anak ko\b/,
-  /\benrolled na ba (ako|kami|si)\b/,
+  /\benrolled na ba (ako|kami|si|ang anak)\b/,
 ];
 
 // Pre-enrollment / marketing questions that must NOT be treated as account questions,

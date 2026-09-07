@@ -36,6 +36,11 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         studentLastName: data.studentLastName,
         studentMiddleName: data.studentMiddleName || undefined,
         birthdate: data.birthdate,
+        requirementDocuments: {
+          birthCertificate: data.docBirthCertificate ? { dataUrl: data.docBirthCertificate.dataUrl, fileName: data.docBirthCertificate.fileName } : undefined,
+          studentPhoto: data.docStudentPhoto ? { dataUrl: data.docStudentPhoto.dataUrl, fileName: data.docStudentPhoto.fileName } : undefined,
+          guardianId: data.docGuardianId ? { dataUrl: data.docGuardianId.dataUrl, fileName: data.docGuardianId.fileName } : undefined,
+        },
         preferredStartDate: data.preferredStartDate || undefined,
         preferredTime: data.preferredTime,
         preferredDays: (data.preferredDays ?? []).length > 0 ? data.preferredDays : undefined,

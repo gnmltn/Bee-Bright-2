@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { MyRequestsBell } from "@/components/notifications/MyRequestsBell";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -1387,6 +1388,12 @@ export default function TutorDashboard() {
                     {(user as { employmentType?: string })?.employmentType === "part-time" ? "Part-time tutor" : "Full-time tutor"}
                   </p>
                 </div>
+              </div>
+
+              {/* Quick actions */}
+              <div className="bg-card rounded-xl p-4 border border-border">
+                <h4 className="font-semibold text-foreground mb-2">Quick Actions</h4>
+                <MyRequestsBell asRow />
               </div>
 
               {/* Today's schedule */}

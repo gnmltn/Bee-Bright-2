@@ -18,7 +18,7 @@ export const PROGRAM_CATEGORIES: ProgramCategoryOption[] = [
     id: 'toddlers_playgroup',
     programCode: 'TPG101',
     label: '👶 Toddlers Playgroup',
-    description: 'Socialization, sensory play, early development (group sessions, age 1.5–3)',
+    description: 'Socialization, sensory play, early development (group sessions, ages 2–4)',
     subjectItems: [
       'Basic Communication (simple words, greetings)',
       'Colors & Shapes Recognition',

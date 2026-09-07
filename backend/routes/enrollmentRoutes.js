@@ -19,7 +19,6 @@ const {
   verifyPayment,
   adminAddStudent,
 } = require('../controllers/enrollmentController');
-const { createDraft, updateDraft, getDraft } = require('../controllers/enrollmentDraftController');
 const { getAllPricing, createOrUpdatePricing } = require('../controllers/pricingController');
 const { protect, authorize, optionalProtect } = require('../middleware/auth');
 
@@ -32,10 +31,9 @@ router.get('/track', trackEnrollment); // GET /enrollments/track?enrollmentId=&e
 router.get('/pricing', getAllPricing);
 router.post('/pricing', protect, authorize('admin'), createOrUpdatePricing);
 
-// ── Draft autosave (auth required) ───────────────────────────────────────
-router.post('/drafts', protect, createDraft);
-router.put('/drafts/:id', protect, updateDraft);
-router.get('/drafts/:id', protect, getDraft);
+// Enrollment drafts are cached client-side only (sessionStorage) — never
+// persisted server-side while the parent is mid-wizard. The old
+// /drafts + EnrollmentDraft collection was removed for that reason.
 
 // ── Admin bulk/action routes (MUST come before /:id) ─────────────────────
 router.get('/admin/all', protect, authorize('admin'), getAllEnrollments);

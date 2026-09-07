@@ -40,7 +40,8 @@ function deriveDataCategories(groundedContext, reply) {
  * @param {string} opts.message        - the user's query
  * @param {string|null} opts.reply     - the assistant's reply text (null on failure)
  * @param {Object|null} [opts.groundedContext] - result of getGroundedChatContext (carries .topic)
- * @param {string} [opts.groundingPath] - deterministic | grounded | llm | llm-fallback | language-rewrite | error | rejected
+ * @param {string} [opts.groundingPath] - deterministic | grounded | llm | grounded-llm | llm-fallback | language-rewrite | handoff | error | rejected
+ *   ('grounded-llm' = Task 24a last-resort phi answer that also had access-scoped account context)
  * @param {string|null} [opts.language]
  * @param {'SUCCESS'|'FAILED'} [opts.status]
  */

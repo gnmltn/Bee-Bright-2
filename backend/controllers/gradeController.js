@@ -2,12 +2,14 @@ const Grade = require('../models/Grade');
 const { logAudit } = require('../utils/auditService');
 const Schedule = require('../models/Schedule');
 
+// Task 25c — Bee Bright has three programs. "Pre-Kindergarten Readiness", "Kindergarten
+// Readiness" and "SPED" are scope areas WITHIN Academic Tutorial, not their own programs,
+// so subject names that mention them resolve to `academic_tutorial` (the sub-feature is
+// still visible in the free-text `subjectItem` on each grade). No existing Grade record
+// used the retired category values.
 const PROGRAM_LABELS_BY_ID = {
   toddlers_playgroup: 'Toddlers Playgroup',
-  prek_readiness: 'Pre-Kindergarten Readiness Program',
-  kindergarten_readiness: 'Kindergarten Readiness Program',
   academic_tutorial: 'Academic Tutorial',
-  sped_tutorial: 'SPED Tutorial',
   exam_prep: 'Examination Preparation',
 };
 
@@ -25,11 +27,13 @@ function inferProgramCategoryIdFromSubjectName(subjectName) {
   if (!text) return null;
 
   if (text.includes('toddler') || text.includes('playgroup')) return 'toddlers_playgroup';
-  if (text.includes('pre kindergarten') || text.includes('prek') || text.includes('pre k')) return 'prek_readiness';
-  if (text.includes('kindergarten') || text.includes('kinder')) return 'kindergarten_readiness';
-  if (text.includes('sped') || text.includes('special education') || text.includes('special ed') || text.includes('iep')) return 'sped_tutorial';
   if (text.includes('exam') || text.includes('review') || text.includes('entrance') || text.includes('prep')) return 'exam_prep';
+  // Academic Tutorial and its sub-features (pre-kindergarten / kindergarten readiness,
+  // SPED / individualized support, reading & writing, core subjects).
   if (
+    text.includes('pre kindergarten') || text.includes('prek') || text.includes('pre k') ||
+    text.includes('kindergarten') || text.includes('kinder') ||
+    text.includes('sped') || text.includes('special education') || text.includes('special ed') || text.includes('iep') ||
     text.includes('academic tutorial') ||
     text.includes('tutorial') ||
     text.includes('math') ||

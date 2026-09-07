@@ -54,17 +54,23 @@ test('isUnhelpfulReply: recognises clarification / unavailable replies', () => {
 });
 
 test('getHandoffAcknowledgement: category + language', () => {
-  assert.match(getHandoffAcknowledgement('human_requested', 'english'), /staff member will follow up/i);
+  assert.match(getHandoffAcknowledgement('human_requested', 'english'), /a Bee Bright admin/i);
   assert.match(getHandoffAcknowledgement('billing_dispute', 'english'), /billing concern/i);
-  assert.match(getHandoffAcknowledgement('repeated_no_match', 'filipino'), /Bee Bright staff/);
-  assert.match(getHandoffAcknowledgement('complaint', 'taglish'), /admin team/i);
+  assert.match(getHandoffAcknowledgement('repeated_no_match', 'filipino'), /Bee Bright admin/);
+  assert.match(getHandoffAcknowledgement('complaint', 'taglish'), /Bee Bright admin/i);
+  // "staff" wording must be gone — no such role exists (Task 12).
+  for (const cat of ['human_requested', 'billing_dispute', 'complaint', 'repeated_no_match']) {
+    for (const lang of ['english', 'filipino', 'taglish']) {
+      assert.doesNotMatch(getHandoffAcknowledgement(cat, lang), /\bstaff\b/i);
+    }
+  }
 });
 
 test('handleExplicitHandoff: authenticated user → ack + normal open escalation', async () => {
   await withStubs(async ({ escalations }) => {
     const req = { user: { _id: 'u9', id: 'u9', role: 'student' }, body: {}, headers: {} };
     const reply = await handleExplicitHandoff(req, 'I want to talk to a real person please');
-    assert.match(reply, /staff member will follow up|maitutulong pa ba ako/i);
+    assert.match(reply, /a Bee Bright admin|maitutulong pa ba ako/i);
     assert.equal(escalations.length, 1);
     assert.equal(escalations[0].source, 'handoff');
     assert.equal(escalations[0].category, 'human_requested');
@@ -96,7 +102,7 @@ test('applyRepeatedNoMatchHandoff: two consecutive misses → escalate + append 
       'english',
     );
     assert.match(out, /Which page are you on right now\?/);      // original kept
-    assert.match(out, /flagged it for a Bee Bright staff member/i); // note appended
+    assert.match(out, /flagged it for a Bee Bright admin/i);     // note appended
     assert.equal(escalations.length, 1);
     assert.equal(escalations[0].category, 'repeated_no_match');
   });

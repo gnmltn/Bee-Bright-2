@@ -2,9 +2,14 @@ import { useState } from 'react';
 import { User, Mail, Phone, Lock, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '@/components/ui/dialog';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { parentAuthService } from '@/services/api';
+import { validateFullName, validateMobileNumber, normalizeMobile, toTitleCase } from '@/lib/enrollmentValidation';
 
 interface Props {
   data: WizardData;
@@ -14,7 +19,6 @@ interface Props {
   toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast'];
 }
 
-const PH_PHONE = /^(0?9|639)\d{9}$/;
 const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 
 export default function Step2ParentAccount({ data, update, onNext, onBack, toast }: Props) {
@@ -24,19 +28,20 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
   // confirmPassword is local — not stored in WizardData, just for validation
   const [confirmPassword, setConfirmPassword] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Final "is everything correct?" review before the verification code is sent.
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const validate = () => {
     const e: Record<string, string> = {};
 
-    if (!data.parentName.trim() || data.parentName.trim().length < 2)
-      e.parentName = 'Full name is required (at least 2 characters).';
+    const nameRes = validateFullName(data.parentName, 'Full name', { minParts: 2 });
+    if (!nameRes.valid) e.parentName = nameRes.error!;
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.parentEmail.trim()))
       e.parentEmail = 'Enter a valid email address.';
 
-    const digits = data.parentMobile.replace(/\D/g, '');
-    if (!PH_PHONE.test(digits))
-      e.parentMobile = 'Enter a valid Philippine mobile number (09XX XXX XXXX).';
+    const mobileRes = validateMobileNumber(data.parentMobile, 'Mobile number');
+    if (!mobileRes.valid) e.parentMobile = mobileRes.error!;
 
     if (!PASSWORD_RE.test(data.parentPassword))
       e.parentPassword = 'Password needs 8+ chars, uppercase, lowercase, number, and special character (@$!%*?&).';
@@ -50,20 +55,32 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
     return Object.keys(e).length === 0;
   };
 
-  const handleSubmit = async () => {
+  // "Create Account & Send Code" → validate, then show the review modal.
+  const handleSubmit = () => {
     if (!validate()) return;
+    setShowConfirm(true);
+  };
+
+  // Confirmed in the modal → actually register the draft and send the code.
+  const handleConfirmedRegister = async () => {
+    setShowConfirm(false);
     setLoading(true);
     try {
       const res = await parentAuthService.register({
-        name: data.parentName.trim(),
+        name: toTitleCase(data.parentName),
         email: data.parentEmail.trim().toLowerCase(),
-        mobile: data.parentMobile.replace(/\D/g, ''),
+        mobile: normalizeMobile(data.parentMobile),
         password: data.parentPassword,
+        // Lets the parent go Back and fix a typo without their own earlier draft
+        // blocking them — the same draft record is updated in place.
+        draftId: data.parentId,
       });
-      update({ parentId: res.data.parentId });
+      // Any previously-verified email/token is stale once we (re)register.
+      update({ parentId: res.data.parentId, enrollmentToken: null });
+      try { window.sessionStorage.removeItem('token'); } catch { /* ignore */ }
       toast({
-        title: 'Account created!',
-        description: `A verification code was sent to ${res.data.verificationSentTo}`,
+        title: 'Verification code sent',
+        description: `A 6-digit code was sent to ${res.data.verificationSentTo}`,
       });
       onNext();
     } catch (err: unknown) {
@@ -103,6 +120,12 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
               className={`pl-10 ${errors.parentName ? 'border-destructive' : ''}`}
               value={data.parentName}
               onChange={(e) => { update({ parentName: e.target.value }); setErrors((p) => ({ ...p, parentName: '' })); }}
+              onBlur={(e) => {
+                const cleaned = toTitleCase(e.target.value);
+                if (cleaned && cleaned !== e.target.value) update({ parentName: cleaned });
+                const r = validateFullName(cleaned || e.target.value, 'Full name', { minParts: 2 });
+                setErrors((p) => ({ ...p, parentName: r.valid ? '' : r.error! }));
+              }}
             />
           </div>
           {errors.parentName && <p className="text-xs text-destructive">{errors.parentName}</p>}
@@ -129,10 +152,23 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
           <div className="relative">
             <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              id="parentMobile" type="tel" placeholder="09XX XXX XXXX"
+              id="parentMobile" type="tel" inputMode="numeric" placeholder="09XXXXXXXXX"
               className={`pl-10 ${errors.parentMobile ? 'border-destructive' : ''}`}
               value={data.parentMobile}
-              onChange={(e) => { update({ parentMobile: e.target.value }); setErrors((p) => ({ ...p, parentMobile: '' })); }}
+              onChange={(e) => {
+                update({ parentMobile: e.target.value.replace(/[^\d\s+()-]/g, '') });
+                setErrors((p) => ({ ...p, parentMobile: '' }));
+              }}
+              onBlur={async (e) => {
+                const r = validateMobileNumber(e.target.value, 'Mobile number');
+                if (!r.valid) { setErrors((p) => ({ ...p, parentMobile: r.error! })); return; }
+                try {
+                  const chk = await parentAuthService.checkMobile(normalizeMobile(e.target.value));
+                  if (!chk.data.available) {
+                    setErrors((p) => ({ ...p, parentMobile: 'Mobile number is already registered to another account.' }));
+                  }
+                } catch { /* non-blocking — the submit still enforces it */ }
+              }}
             />
           </div>
           {errors.parentMobile && <p className="text-xs text-destructive">{errors.parentMobile}</p>}
@@ -222,6 +258,47 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
       </p>
 
       <StepNav onBack={onBack} onNext={handleSubmit} nextLabel="Create Account & Send Code" loading={loading} />
+
+      {/* Final review before the verification code is sent */}
+      <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Please review your information</DialogTitle>
+            <DialogDescription>
+              We'll send a 6-digit verification code to this email. Make sure everything is correct
+              so you don't have to start over.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-lg border border-border bg-muted/30 divide-y divide-border text-sm">
+            <div className="flex justify-between gap-4 px-3 py-2">
+              <span className="text-muted-foreground">Full Name</span>
+              <span className="font-medium text-right break-words">{toTitleCase(data.parentName) || '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 px-3 py-2">
+              <span className="text-muted-foreground">Email Address</span>
+              <span className="font-medium text-right break-all">{data.parentEmail.trim().toLowerCase() || '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 px-3 py-2">
+              <span className="text-muted-foreground">Mobile Number</span>
+              <span className="font-medium text-right">{normalizeMobile(data.parentMobile) || '—'}</span>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setShowConfirm(false)} disabled={loading}>
+              Go Back &amp; Edit
+            </Button>
+            <Button
+              onClick={handleConfirmedRegister}
+              disabled={loading}
+              className="bg-amber-500 hover:bg-amber-600 text-white"
+            >
+              Confirm &amp; Send Code
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

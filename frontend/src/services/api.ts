@@ -86,7 +86,11 @@ api.interceptors.response.use(
 
 // ── Parent Auth (enrollment wizard) ─────────────────────────────────────
 export const parentAuthService = {
-  register: (data: { name: string; email: string; mobile: string; password: string }) =>
+  checkMobile: (mobile: string) =>
+    api.post<{ success: boolean; valid: boolean; available: boolean; message: string | null }>(
+      '/auth/check-mobile', { mobile }
+    ),
+  register: (data: { name: string; email: string; mobile: string; password: string; draftId?: string | null }) =>
     api.post<{ success: boolean; message: string; verificationSentTo: string; parentId: string }>(
       '/auth/register-parent', data
     ),
@@ -248,9 +252,16 @@ export interface AdminPaymentItem {
   verifiedAt?: string;
   rejectionReason?: string;
   student?: { firstName?: string; lastName?: string; email?: string; phone?: string } | null;
+  parent?: { firstName?: string; lastName?: string; email?: string; phone?: string } | null;
+  proofUrl?: string | null;
+  payerReference?: string | null;
+  amountDue?: number | null;
+  submittedAt?: string;
   enrollment?: {
     _id?: string;
     referenceNumber?: string;
+    enrollmentId?: string;
+    studentSnapshot?: { firstName?: string; lastName?: string };
     paymentStatus?: string;
     status?: string;
     totalFee?: number;
@@ -272,6 +283,12 @@ export interface AdminPaymentItem {
 
 // Enrollment Service
 export const enrollmentService = {
+  /**
+   * Backend process id — changes on every server (re)start. The enrollment
+   * wizard uses it to drop a stale client-side draft after a full restart.
+   */
+  getServerInstanceId: () =>
+    api.get<{ success: boolean; instanceId?: string }>('/health'),
   getPricing: () => api.get<{ success: boolean; pricing: {
     programCode: string; packageSlug: string; displayName: string;
     durationDesc?: string; priceFull: number; priceDown?: number | null;
@@ -291,6 +308,11 @@ export const enrollmentService = {
     studentLastName: string;
     studentMiddleName?: string;
     birthdate: string;
+    requirementDocuments?: {
+      birthCertificate?: { dataUrl: string; fileName: string };
+      studentPhoto?: { dataUrl: string; fileName: string };
+      guardianId?: { dataUrl: string; fileName: string };
+    };
     preferredStartDate?: string;
     preferredTime?: 'morning' | 'afternoon' | 'no_preference';
     /** Days the child is available — Mon to Sat. Empty = no preference. */
@@ -648,6 +670,45 @@ export const aiService = {
   /** Ollama (phi) chatbot – uses backend proxy to local Ollama. No auth required. */
   ollamaChat: (message: string, history?: { role: 'user' | 'assistant'; content: string }[]) =>
     api.post<{ success: boolean; reply?: string; message?: string }>('/ai/ollama-chat', { message, history }),
+};
+
+// ── Escalations / support requests ───────────────────────────────────────────
+export type EscalationStatus = 'open' | 'acknowledged' | 'resolved';
+
+export interface MyEscalation {
+  _id: string;
+  category: string;
+  trigger?: string;
+  status: EscalationStatus;
+  severity: 'urgent' | 'normal';
+  createdAt: string;
+  updatedAt: string;
+  handledAt?: string | null;
+}
+
+export interface AdminEscalation extends MyEscalation {
+  source: 'child_safety' | 'handoff';
+  conversationSnippet?: string;
+  resolutionNote?: string;
+  role?: string | null;
+  userIdentifier?: string | null;
+  user?: { _id: string; firstName?: string; lastName?: string; email?: string; role?: string; phone?: string } | null;
+  handledBy?: { _id: string; firstName?: string; lastName?: string; email?: string } | null;
+}
+
+export const escalationService = {
+  /** The caller's own handoff tickets (any authenticated role). Read-only. */
+  listMine: () =>
+    api.get<{ success: boolean; count: number; escalations: MyEscalation[] }>('/escalations/mine'),
+  /** Admin / super_admin only. */
+  list: (params?: { status?: EscalationStatus; source?: string; severity?: string; category?: string; limit?: number }) =>
+    api.get<{ success: boolean; count: number; escalations: AdminEscalation[] }>('/escalations', { params }),
+  getStats: () =>
+    api.get<{ success: boolean; stats: { openUrgent: number; openOrAcknowledged: number; unresolvedChildSafety: number } }>('/escalations/stats'),
+  get: (id: string) =>
+    api.get<{ success: boolean; escalation: AdminEscalation }>(`/escalations/${id}`),
+  update: (id: string, body: { status?: EscalationStatus; resolutionNote?: string }) =>
+    api.patch<{ success: boolean; escalation: AdminEscalation }>(`/escalations/${id}`, body),
 };
 
 // Learning materials (tutor upload, student view assigned)

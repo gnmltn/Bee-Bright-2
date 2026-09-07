@@ -1,10 +1,8 @@
-import { useRef } from 'react';
-import { FileText, Clock, CreditCard, CheckCircle2, Upload, X, FileImage, AlertCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { FileText, Clock, CreditCard, CheckCircle2, AlertCircle } from 'lucide-react';
 import StepNav from '../StepNav';
-import type { WizardData, UploadedDoc } from '../wizard-types';
-import { MAX_DOC_BYTES, ALLOWED_DOC_TYPES } from '../wizard-types';
+import type { WizardData } from '../wizard-types';
 import { useToast } from '@/hooks/use-toast';
+import DocUploadField from '../DocUploadField';
 
 interface Props {
   data: WizardData;
@@ -20,120 +18,6 @@ const timeline = [
   { label: 'Enrollment Approved',              time: '2–3 business days' },
   { label: 'Schedule Assigned by Admin',       time: 'After approval' },
 ];
-
-/** One document upload widget */
-function DocUpload({
-  label,
-  desc,
-  value,
-  onChange,
-  onRemove,
-  accept = 'image/jpeg,image/jpg,image/png,application/pdf',
-}: {
-  label: string;
-  desc: string;
-  value: UploadedDoc | null;
-  onChange: (doc: UploadedDoc) => void;
-  onRemove: () => void;
-  accept?: string;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  const { toast } = useToast();
-
-  const handleFile = (file: File) => {
-    if (file.size > MAX_DOC_BYTES) {
-      toast({ title: 'File too large', description: 'Maximum 10 MB per document.', variant: 'destructive' });
-      return;
-    }
-    if (!ALLOWED_DOC_TYPES.includes(file.type)) {
-      toast({ title: 'Invalid file type', description: 'Please upload a JPG, PNG, or PDF.', variant: 'destructive' });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      onChange({ dataUrl: reader.result as string, fileName: file.name, fileSize: file.size });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-    // reset so same file can be re-selected after removal
-    e.target.value = '';
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold text-foreground">{label} <span className="text-destructive">*</span></p>
-          <p className="text-xs text-muted-foreground">{desc}</p>
-        </div>
-        {value && (
-          <span className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Uploaded
-          </span>
-        )}
-      </div>
-
-      {value ? (
-        /* Uploaded state */
-        <div className="flex items-center gap-3 p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-300 rounded-xl">
-          <FileImage className="h-8 w-8 text-emerald-600 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-emerald-800 dark:text-emerald-300 truncate">{value.fileName}</p>
-            <p className="text-xs text-emerald-600">{(value.fileSize / 1024).toFixed(1)} KB</p>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 flex-shrink-0"
-            onClick={onRemove}
-            aria-label={`Remove ${label}`}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      ) : (
-        /* Upload dropzone */
-        <div
-          role="button"
-          tabIndex={0}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={handleDrop}
-          onClick={() => ref.current?.click()}
-          onKeyDown={(e) => e.key === 'Enter' && ref.current?.click()}
-          className="flex items-center gap-3 p-3 border-2 border-dashed border-amber-300 rounded-xl cursor-pointer hover:border-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/10 transition-colors"
-          aria-label={`Upload ${label}`}
-        >
-          <div className="h-9 w-9 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
-            <Upload className="h-4 w-4 text-amber-600" />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-foreground">Click or drag to upload</p>
-            <p className="text-xs text-muted-foreground">JPG, PNG or PDF — max 10 MB</p>
-          </div>
-        </div>
-      )}
-
-      <input
-        ref={ref}
-        type="file"
-        className="hidden"
-        accept={accept}
-        onChange={handleChange}
-        aria-hidden="true"
-      />
-    </div>
-  );
-}
 
 export default function Step1Requirements({ data, update, onNext }: Props) {
   const { toast } = useToast();
@@ -177,7 +61,7 @@ export default function Step1Requirements({ data, update, onNext }: Props) {
           </span>
         </div>
 
-        <DocUpload
+        <DocUploadField
           label="Student Birth Certificate"
           desc="Original or photocopy — used for age verification."
           value={data.docBirthCertificate}
@@ -185,16 +69,16 @@ export default function Step1Requirements({ data, update, onNext }: Props) {
           onRemove={() => update({ docBirthCertificate: null })}
         />
 
-        <DocUpload
+        <DocUploadField
           label="Recent 2×2 Photo of Student"
           desc="Clear, recent photo of the student (passport or ID style)."
           value={data.docStudentPhoto}
           onChange={(doc) => update({ docStudentPhoto: doc })}
           onRemove={() => update({ docStudentPhoto: null })}
-          accept="image/jpeg,image/jpg,image/png"
+          accept=".jpg,.jpeg,.png,image/jpeg,image/png"
         />
 
-        <DocUpload
+        <DocUploadField
           label="Guardian Valid ID"
           desc="Any government-issued ID of the parent or guardian."
           value={data.docGuardianId}

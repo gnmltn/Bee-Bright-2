@@ -8,16 +8,31 @@
  *  3. POST /api/auth/parent-otp/verify → verify OTP, set emailVerifiedAt, return short-lived token
  */
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { sendEmail, getEmailErrorMessage, logEmailError } = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
+const { validateFullName, validatePhMobile, normalizeMobile, checkMobileNumberUnique, toTitleCase } = require('../utils/validation');
 
 // ── Constants ─────────────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 10;
 const OTP_RESEND_COOLDOWN_SECONDS = 120;
 const OTP_MAX_ATTEMPTS = 5;
 const ENROLLMENT_TOKEN_TTL = '2h'; // short-lived token scoped to enrollment wizard
+// How long an abandoned Step-2 draft account survives before the TTL index removes it.
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+const OTP_SELECT = '+parentOtpHash +parentOtpExpires +parentOtpAttempts +parentOtpLastSentAt';
+
+const draftExpiry = () => new Date(Date.now() + DRAFT_TTL_MS);
+
+const splitName = (cleanName) => {
+  const parts = String(cleanName || '').split(' ').filter(Boolean);
+  const firstName = parts[0] || '';
+  const lastName = parts.length > 1 ? parts[parts.length - 1] : firstName;
+  const middleName = parts.length > 2 ? parts.slice(1, -1).join(' ') : '';
+  return { firstName, middleName, lastName };
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 const normalizeEmail = (v = '') => String(v).trim().toLowerCase();
@@ -39,7 +54,6 @@ const issueEnrollmentToken = (userId) =>
     expiresIn: ENROLLMENT_TOKEN_TTL,
   });
 
-const PH_PHONE_RE = /^(0?9|639)\d{9}$/;
 const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 
 // ── Email ─────────────────────────────────────────────────────────────────
@@ -81,30 +95,35 @@ async function sendParentOtpEmail(to, otp) {
 
 /**
  * POST /api/auth/register-parent
- * Body: { name, email, mobile, password }
+ * Body: { name, email, mobile, password, draftId? }
  *
- * Creates an inactive parent account and sends OTP.
- * If email already registered as parent and NOT yet email-verified, resends OTP.
+ * Creates a DRAFT parent account (enrollmentDraft:true) and sends an OTP. The
+ * real, permanent account is only finalized when the parent submits the
+ * enrollment (see enrollmentController.submitEnrollment).
+ *
+ * `draftId` is the id this wizard session is already tracking. When present it
+ * lets the parent go Back and fix a mistyped email / mobile without their own
+ * earlier draft blocking them — the same record is updated in place.
+ *
+ * Uniqueness (email + mobile) is enforced against FINALIZED accounts only, so an
+ * abandoned draft never permanently reserves a number or address.
  */
 const registerParent = async (req, res) => {
   try {
-    const { name, email, mobile, password } = req.body;
+    const { name, email, mobile, password, draftId } = req.body;
 
     // ── Validation ──
-    if (!name || String(name).trim().length < 2)
-      return res.status(400).json({ success: false, message: 'Name must be at least 2 characters.' });
+    const nameErr = validateFullName(name, 'Full name', { minParts: 2 });
+    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
+    const cleanName = toTitleCase(name);
 
     const normalizedEmail = normalizeEmail(email);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
       return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
 
-    const normalizedPhone = String(mobile || '').replace(/\s/g, '');
-    const phoneDigits = normalizedPhone.replace(/\D/g, '');
-    if (!PH_PHONE_RE.test(phoneDigits))
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid Philippine mobile number (09XX XXX XXXX).',
-      });
+    const mobileErr = validatePhMobile(mobile, 'Mobile number');
+    if (mobileErr) return res.status(400).json({ success: false, message: mobileErr });
+    const phoneDigits = normalizeMobile(mobile);
 
     if (!PASSWORD_RE.test(password))
       return res.status(400).json({
@@ -113,29 +132,67 @@ const registerParent = async (req, res) => {
           'Password must be at least 8 characters and include uppercase, lowercase, number, and special character (@$!%*?&).',
       });
 
-    // ── Check existing ──
-    let parent = await User.findOne({ email: normalizedEmail }).select(
-      '+parentOtpHash +parentOtpExpires +parentOtpAttempts +parentOtpLastSentAt'
-    );
+    // ── Resolve which record to write ──────────────────────────────────────
+    // 1. The draft this wizard session already owns (if the id still points at a draft).
+    let sessionDraft = null;
+    if (draftId && mongoose.Types.ObjectId.isValid(draftId)) {
+      sessionDraft = await User.findOne({ _id: draftId, role: 'parent', enrollmentDraft: true }).select(OTP_SELECT);
+    }
 
-    if (parent) {
-      // If already a fully-active parent or non-parent, block
-      if (parent.role !== 'parent')
+    // 2. Whatever account currently holds the requested email (email is unique).
+    const byEmail = await User.findOne({ email: normalizedEmail }).select(OTP_SELECT);
+
+    // A finalized (non-draft) account already owns this email → cannot reuse it.
+    if (byEmail && !byEmail.enrollmentDraft) {
+      if (byEmail.role !== 'parent')
         return res.status(409).json({
           success: false,
           message: 'An account with this email already exists. Please log in instead.',
         });
-
-      if (parent.emailVerifiedAt && parent.isActive)
+      if (byEmail.emailVerifiedAt && byEmail.isActive)
         return res.status(409).json({
           success: false,
           message: 'This email is already registered and verified. Please log in.',
         });
+      // else: a legacy unverified/inactive non-draft parent — fall through and reuse it.
+    }
 
-      // Unverified parent → allow re-send (cooldown check)
-      const lastSent = parent.parentOtpLastSentAt;
-      if (lastSent) {
-        const elapsed = Date.now() - new Date(lastSent).getTime();
+    // Mobile number must be free among FINALIZED accounts only (drafts don't reserve).
+    const mobileIsFree = await checkMobileNumberUnique(phoneDigits, byEmail?._id || sessionDraft?._id || null);
+    if (!mobileIsFree) {
+      return res.status(409).json({
+        success: false,
+        message: 'Mobile number is already registered to another account.',
+      });
+    }
+
+    // Prefer the record that owns the email; otherwise reuse the session draft.
+    let parent = byEmail || sessionDraft;
+
+    // If the email moved to a *different* draft, retire the now-orphaned session draft.
+    if (parent && sessionDraft && String(parent._id) !== String(sessionDraft._id)) {
+      await User.deleteOne({ _id: sessionDraft._id, enrollmentDraft: true }).catch(() => {});
+    }
+
+    const { firstName, middleName, lastName } = splitName(cleanName);
+    const emailChanged = !!parent && parent.email !== normalizedEmail;
+
+    if (parent) {
+      // Reuse the draft / legacy record — update its details in place.
+      parent.firstName = firstName;
+      parent.middleName = middleName;
+      parent.lastName = lastName;
+      parent.email = normalizedEmail;
+      parent.phone = phoneDigits;
+      parent.password = password; // re-hashed by the pre-save hook when modified
+      parent.role = 'parent';
+      parent.isActive = false;
+      if (emailChanged) parent.emailVerifiedAt = null; // new address → must verify again
+      if (parent.enrollmentDraft) parent.draftExpiresAt = draftExpiry();
+
+      // Cooldown only matters when we'd resend to the SAME address.
+      if (!emailChanged && parent.parentOtpLastSentAt) {
+        const elapsed = Date.now() - new Date(parent.parentOtpLastSentAt).getTime();
         if (elapsed < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
           const wait = Math.ceil((OTP_RESEND_COOLDOWN_SECONDS * 1000 - elapsed) / 1000);
           return res.status(429).json({
@@ -145,12 +202,7 @@ const registerParent = async (req, res) => {
         }
       }
     } else {
-      // ── Parse name parts ──
-      const nameParts = String(name).trim().split(/\s+/);
-      const firstName = nameParts[0] || '';
-      const lastName = nameParts.length > 1 ? nameParts[nameParts.length - 1] : firstName;
-      const middleName = nameParts.length > 2 ? nameParts.slice(1, -1).join(' ') : '';
-
+      // Brand-new draft account.
       parent = new User({
         firstName,
         middleName,
@@ -161,6 +213,8 @@ const registerParent = async (req, res) => {
         role: 'parent',
         isActive: false,
         emailVerifiedAt: null,
+        enrollmentDraft: true,
+        draftExpiresAt: draftExpiry(),
       });
     }
 
@@ -249,6 +303,7 @@ const sendParentOtp = async (req, res) => {
     parent.parentOtpExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
     parent.parentOtpAttempts = 0;
     parent.parentOtpLastSentAt = new Date();
+    if (parent.enrollmentDraft) parent.draftExpiresAt = new Date(Date.now() + DRAFT_TTL_MS);
     await parent.save();
 
     try {
@@ -338,6 +393,8 @@ const verifyParentOtp = async (req, res) => {
     parent.parentOtpHash = undefined;
     parent.parentOtpExpires = undefined;
     parent.parentOtpAttempts = 0;
+    // Verifying the email buys the draft a fresh survival window.
+    if (parent.enrollmentDraft) parent.draftExpiresAt = new Date(Date.now() + DRAFT_TTL_MS);
     await parent.save();
 
     const token = issueEnrollmentToken(parent._id);
@@ -364,4 +421,29 @@ const verifyParentOtp = async (req, res) => {
   }
 };
 
-module.exports = { registerParent, sendParentOtp, verifyParentOtp };
+/**
+ * POST /api/auth/check-mobile   { mobile }
+ * Public. Real-time uniqueness feedback for the enrollment wizard (parent mobile,
+ * alternate guardian / emergency contact). Format errors are reported too.
+ */
+const checkMobileAvailability = async (req, res) => {
+  try {
+    const { mobile } = req.body || {};
+    const formatErr = validatePhMobile(mobile, 'Mobile number');
+    if (formatErr) {
+      return res.status(200).json({ success: true, available: false, valid: false, message: formatErr });
+    }
+    const available = await checkMobileNumberUnique(mobile, null);
+    return res.status(200).json({
+      success: true,
+      valid: true,
+      available,
+      message: available ? null : 'This number is already registered/used by another account.',
+    });
+  } catch (err) {
+    console.error('checkMobileAvailability error:', err);
+    return res.status(500).json({ success: false, message: 'Could not check the mobile number.' });
+  }
+};
+
+module.exports = { registerParent, sendParentOtp, verifyParentOtp, checkMobileAvailability };

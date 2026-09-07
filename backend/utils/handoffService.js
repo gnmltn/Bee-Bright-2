@@ -80,26 +80,29 @@ function isUnhelpfulReply(reply) {
 }
 
 // ── Handoff acknowledgement copy ───────────────────────────────────────────
+// Bee Bright has only `admin` and `super_admin` roles — no "staff" role. Wording
+// says "a Bee Bright admin" and routes to those roles (see escalationRoutes.js,
+// which authorize('admin') opens to super_admin too).
 const ACK = {
   human_requested: {
-    english: "I've passed this to the Bee Bright team, and a staff member will follow up with you through your registered contact details. Is there anything I can help you with in the meantime?",
-    filipino: "Naipasa ko na ito sa Bee Bright team, at may staff na makikipag-ugnayan sa iyo gamit ang iyong nakarehistrong contact details. May maitutulong pa ba ako habang naghihintay?",
-    taglish: "Naipasa ko na 'to sa Bee Bright team, at may staff na mag-fofollow up sa iyo through your registered contact details. May maitutulong pa ba ako in the meantime?",
+    english: "I've flagged this for a Bee Bright admin, who will follow up with you through your registered contact details. Is there anything I can help you with in the meantime?",
+    filipino: "Na-flag ko na ito para sa isang Bee Bright admin, na makikipag-ugnayan sa iyo gamit ang iyong nakarehistrong contact details. May maitutulong pa ba ako habang naghihintay?",
+    taglish: "Na-flag ko na 'to para sa isang Bee Bright admin, na mag-fofollow up sa iyo through your registered contact details. May maitutulong pa ba ako in the meantime?",
   },
   billing_dispute: {
-    english: "A billing concern like this needs a staff member to review it. I've flagged it for the Bee Bright admin team and they'll follow up with you through your registered contact. In the meantime, you can see your payment records in your dashboard.",
-    filipino: "Ang ganitong billing concern ay kailangang suriin ng staff. Na-flag ko na ito para sa Bee Bright admin team at makikipag-ugnayan sila sa iyo gamit ang iyong nakarehistrong contact. Samantala, makikita mo ang iyong payment records sa iyong dashboard.",
-    taglish: "Ang billing concern na 'to ay kailangang i-review ng staff. Na-flag ko na 'to para sa Bee Bright admin team at mag-fofollow up sila sa iyo through your registered contact. In the meantime, makikita mo ang payment records mo sa dashboard.",
+    english: "A billing concern like this needs a Bee Bright admin to review it. I've flagged it, and an admin will follow up with you through your registered contact. In the meantime, you can see your payment records in your dashboard.",
+    filipino: "Ang ganitong billing concern ay kailangang suriin ng isang Bee Bright admin. Na-flag ko na ito, at may admin na makikipag-ugnayan sa iyo gamit ang iyong nakarehistrong contact. Samantala, makikita mo ang iyong payment records sa iyong dashboard.",
+    taglish: "Ang billing concern na 'to ay kailangang i-review ng isang Bee Bright admin. Na-flag ko na 'to, at may admin na mag-fofollow up sa iyo through your registered contact. In the meantime, makikita mo ang payment records mo sa dashboard.",
   },
   complaint: {
-    english: "Thank you for letting us know. I've forwarded this to the Bee Bright admin team so a person can look into it and follow up with you.",
-    filipino: "Salamat sa pagpapaalam. Naipasa ko na ito sa Bee Bright admin team para may taong mag-imbestiga at makipag-ugnayan sa iyo.",
-    taglish: "Salamat sa pag-let us know. Na-forward ko na 'to sa Bee Bright admin team para may taong mag-look into it at mag-follow up sa iyo.",
+    english: "Thank you for letting us know. I've forwarded this to a Bee Bright admin so they can look into it and follow up with you.",
+    filipino: "Salamat sa pagpapaalam. Naipasa ko na ito sa isang Bee Bright admin para masuri nila ito at makipag-ugnayan sa iyo.",
+    taglish: "Salamat sa pag-let us know. Na-forward ko na 'to sa isang Bee Bright admin para ma-look into nila 'to at mag-follow up sa iyo.",
   },
   repeated_no_match: {
-    english: "It looks like I'm not able to answer this one well. I've flagged it for a Bee Bright staff member to follow up with you. You can also reach the admin office directly through the contact details on the website.",
-    filipino: "Mukhang hindi ko ito masagot nang maayos. Na-flag ko na ito para may Bee Bright staff na makikipag-ugnayan sa iyo. Maaari mo ring direktang kontakin ang admin office gamit ang contact details sa website.",
-    taglish: "Mukhang hindi ko 'to masagot nang maayos. Na-flag ko na 'to para may Bee Bright staff na mag-fofollow up sa iyo. Pwede mo rin direktang i-contact ang admin office through the contact details sa website.",
+    english: "It looks like I'm not able to answer this one well. I've flagged it for a Bee Bright admin to follow up with you. You can also reach the admin office directly through the contact details on the website.",
+    filipino: "Mukhang hindi ko ito masagot nang maayos. Na-flag ko na ito para may Bee Bright admin na makikipag-ugnayan sa iyo. Maaari mo ring direktang kontakin ang admin office gamit ang contact details sa website.",
+    taglish: "Mukhang hindi ko 'to masagot nang maayos. Na-flag ko na 'to para may Bee Bright admin na mag-fofollow up sa iyo. Pwede mo rin direktang i-contact ang admin office through the contact details sa website.",
   },
 };
 

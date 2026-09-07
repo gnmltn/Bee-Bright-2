@@ -122,3 +122,26 @@ test('handleLessonPrepRequest: non-tutor → null', async () => {
     assert.equal(out, null);
   });
 });
+
+// ⚠️ Scoping rule (Round 5): a tutor may only see remarks for students assigned to them.
+test('buildTutorStudentNotesContext: a student NOT assigned to this tutor is never queried', async () => {
+  const oS = Schedule.find;
+  const oG = Grade.find;
+  let gradeQuery = null;
+  // This tutor is assigned only to Ana.
+  const chain = { populate() { return chain; }, sort() { return chain; }, lean() { return Promise.resolve([{ student: { _id: 'ana', firstName: 'Ana', lastName: 'Cruz' }, students: [] }]); } };
+  Schedule.find = () => chain;
+  Grade.find = (q) => { gradeQuery = q; return { populate() { return this; }, sort() { return this; }, lean() { return Promise.resolve([]); } }; };
+  try {
+    // Tutor asks about "Ben", who belongs to another tutor.
+    const ctx = await buildTutorStudentNotesContext('t1', 'summarize my remarks on Ben');
+    // Ben was not matched → the digest never issues a Grade query for him.
+    assert.equal(gradeQuery, null);
+    assert.match(ctx.fallbackReply, /Which student\?/);
+    assert.match(ctx.fallbackReply, /Ana Cruz/);
+    assert.doesNotMatch(ctx.fallbackReply, /Ben/);
+  } finally {
+    Schedule.find = oS;
+    Grade.find = oG;
+  }
+});

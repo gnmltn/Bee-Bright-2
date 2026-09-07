@@ -10,6 +10,7 @@ const {
   registerParent,
   sendParentOtp,
   verifyParentOtp,
+  checkMobileAvailability,
 } = require('../controllers/parentAuthController');
 const {
   register,
@@ -55,12 +56,18 @@ router.get('/captcha-challenge', getCaptchaChallenge);
 
 // ── Parent/Guardian enrollment registration ──────────────────────────────
 router.post(
+  '/check-mobile',
+  validate([body('mobile').notEmpty().withMessage('Mobile number is required')]),
+  checkMobileAvailability,
+);
+router.post(
   '/register-parent',
   validate([
     body('name').notEmpty().trim().withMessage('Name is required'),
     body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
     body('mobile').notEmpty().withMessage('Mobile number is required'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+    body('draftId').optional({ nullable: true }).isMongoId().withMessage('Invalid draft reference'),
   ]),
   registerParent
 );

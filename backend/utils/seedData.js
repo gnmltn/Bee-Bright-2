@@ -65,13 +65,13 @@ const seedData = async () => {
 
     // Create sample subjects – all programs Mon-Sat 8:00 AM - 6:00 PM
     const defaultSchedule = 'Mon - Sat 8:00 AM - 6:00 PM';
+    // Task 25 — Bee Bright prices three programs. Pre-kindergarten readiness, kindergarten
+    // readiness and SPED are scope areas within Academic Tutorial, not separate priced
+    // programs, so they are not seeded as their own Subject rows.
     const subjects = [
       { name: 'Toddlers Playgroup', code: 'TPG101', description: 'Socialization, sensory play, early development', schedule: defaultSchedule, price: 3000, duration: '2 hours per session', capacity: 15 },
-      { name: 'Pre-Kindergarten Readiness Program', code: 'PKR105', description: 'Foundational academic skills, phonics, basic reading & writing', schedule: defaultSchedule, price: 3200, duration: '2 hours per session', capacity: 15 },
-      { name: 'Academic Tutorial', code: 'ACT102', description: 'Subject-based support Grade 1 to Junior High', schedule: defaultSchedule, price: 2500, duration: '2 hours per session', capacity: 20 },
-      { name: 'SPED Tutorial', code: 'SPT103', description: 'Individualized learning support, IEP-based', schedule: defaultSchedule, price: 3500, duration: '2 hours per session', capacity: 10 },
-      { name: 'Examination Preparation', code: 'EXP106', description: 'Test mastery, mock exams, test-taking strategies', schedule: defaultSchedule, price: 3500, duration: '2 hours per session', capacity: 15 },
-      { name: 'Kindergarten Readiness Program', code: 'KRP104', description: 'School-entry preparation, reading & writing readiness', schedule: defaultSchedule, price: 3000, duration: '2 hours per session', capacity: 12 }
+      { name: 'Academic Tutorial', code: 'ACT102', description: 'One-on-one subject tutoring, pre-school to high school — includes pre-kindergarten/kindergarten readiness, reading/writing/numeracy, homework assistance, lesson advancement, and individualized (SPED) support', schedule: defaultSchedule, price: 2500, duration: '2 hours per session', capacity: 20 },
+      { name: 'Examination Preparation', code: 'EXP106', description: 'Test mastery, mock exams, test-taking strategies', schedule: defaultSchedule, price: 3500, duration: '2 hours per session', capacity: 15 }
     ];
 
     const createdSubjects = await Subject.insertMany(subjects);

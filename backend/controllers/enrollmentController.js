@@ -10,12 +10,11 @@ const mongoose = require('mongoose');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
-const Subject = require('../models/Subject');
 const Pricing = require('../models/Pricing');
 const EnrollmentVerification = require('../models/EnrollmentVerification');
 const { logAudit } = require('../utils/auditService');
-const { validateName, validatePhoneNoLetters } = require('../utils/validation');
-const { computeAge, checkProgramEligibility } = require('../utils/ageEligibility');
+const { validateName, validatePhoneNoLetters, validateFullName, toTitleCase, checkMobileNumberUnique } = require('../utils/validation');
+const { computeAge, checkProgramEligibility, validateEnrollmentAge } = require('../utils/ageEligibility');
 const {
   generateEnrollmentId,
   computeAmounts,
@@ -31,6 +30,8 @@ const { getEmailErrorMessage, logEmailError } = require('../utils/emailService')
 
 // ── Constants ────────────────────────────────────────────────────────────
 const PROOF_DIR = path.join(__dirname, '..', 'uploads', 'payments');
+const REQUIREMENTS_DIR = path.join(__dirname, '..', 'uploads', 'requirements');
+const MAX_REQUIREMENT_BYTES = 5 * 1024 * 1024; // 5 MB
 const MAX_PROOF_BYTES = 8 * 1024 * 1024; // 8 MB
 const ALLOWED_PROOF_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
 const ENROLLMENT_OTP_EXPIRES_MINUTES = 5;
@@ -65,34 +66,27 @@ function saveProofFromDataUrl(dataUrl, enrollmentId) {
   return `/uploads/payments/${filename}`;
 }
 
-// ── Legacy subject catalog (kept for backward compat) ────────────────────
-const SERVICE_CODE_MAP = {
-  toddlers: 'TPG101', prek: 'PKR105', academic: 'ACT102',
-  sped: 'SPT103', examprep: 'EXP106', kinder: 'KRP104',
-};
-const SUBJECT_CATALOG = {
-  TPG101: { name: 'Toddlers Playgroup', price: 2800, description: 'Socialization, sensory play, early development' },
-  PKR105: { name: 'Pre-Kindergarten Readiness Program', price: 3200, description: 'Foundational academic skills' },
-  ACT102: { name: 'Academic Tutorial', price: 2400, description: 'Subject-based support' },
-  SPT103: { name: 'SPED Tutorial', price: 3500, description: 'Individualized learning support' },
-  EXP106: { name: 'Examination Preparation', price: 1250, description: 'Test mastery, mock exams' },
-  KRP104: { name: 'Kindergarten Readiness Program', price: 3000, description: 'School-entry preparation' },
-};
-async function ensureSubjectsByCodes(codes) {
-  const ids = [];
-  for (const code of codes) {
-    let s = await Subject.findOne({ code });
-    if (!s) {
-      const def = SUBJECT_CATALOG[code];
-      if (!def) continue;
-      s = await Subject.create({ code, name: def.name, price: def.price,
-        description: def.description, duration: '2 hours per session', capacity: 20,
-        schedule: 'Mon - Sat 8:00 AM - 6:00 PM' });
-    }
-    ids.push(s._id);
-  }
-  return ids;
+/** Save one enrollment-requirement document (birth cert / photo / guardian ID) to disk. */
+function saveRequirementFromDataUrl(dataUrl, enrollmentId, kind) {
+  if (!dataUrl || typeof dataUrl !== 'string') return null;
+  if (dataUrl.startsWith('/uploads/requirements/')) return dataUrl;
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg)|application\/pdf);base64,(.+)$/i);
+  if (!match) throw Object.assign(new Error(`${kind} must be a JPG, PNG, or PDF.`), { statusCode: 400 });
+  const buf = Buffer.from(match[2], 'base64');
+  if (!buf.length) throw Object.assign(new Error(`${kind} file is empty.`), { statusCode: 400 });
+  if (buf.length > MAX_REQUIREMENT_BYTES) throw Object.assign(new Error(`${kind} file must be 5 MB or less.`), { statusCode: 400 });
+  if (!fs.existsSync(REQUIREMENTS_DIR)) fs.mkdirSync(REQUIREMENTS_DIR, { recursive: true });
+  const ext = match[1].includes('pdf') ? 'pdf' : (match[1].includes('png') ? 'png' : 'jpg');
+  const filename = `${kind}-${String(enrollmentId)}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+  fs.writeFileSync(path.join(REQUIREMENTS_DIR, filename), buf);
+  return `/uploads/requirements/${filename}`;
 }
+
+// Task 25c — the legacy SERVICE_CODE_MAP / SUBJECT_CATALOG / ensureSubjectsByCodes()
+// helpers were removed here: they had no call sites, and they still listed the retired
+// PKR105 / SPT103 / KRP104 as separately-priced programs. The live enrollment flow
+// resolves packages against the Pricing collection (see `pricedPackages` below) and age
+// eligibility via utils/ageEligibility.js — both already limited to TPG101/ACT102/EXP106.
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  LEGACY EMAIL OTP  (used by old 3-step enrollment form still at /enrollment)
@@ -190,6 +184,18 @@ const submitEnrollment = async (req, res) => {
       parentId = parentUser._id;
     }
 
+    // ── Draft account: mobile must still be free among finalized accounts ──
+    // (drafts don't reserve numbers, so two people could have drafted the same one).
+    if (parentUser?.enrollmentDraft && parentUser.phone) {
+      const stillFree = await checkMobileNumberUnique(parentUser.phone, parentUser._id);
+      if (!stillFree) {
+        return res.status(409).json({
+          success: false,
+          message: 'That mobile number was just registered to another account. Please go back to the Account step and use a different number.',
+        });
+      }
+    }
+
     // ── Validate packages ──
     const packages = Array.isArray(body.packages) ? body.packages : [];
     if (packages.length === 0)
@@ -214,7 +220,12 @@ const submitEnrollment = async (req, res) => {
       };
     });
 
-    const childAge = computeAge(body.birthdate);
+    // ── Age gate (min 2, max 18, real date) — recomputed server-side, never trust the UI ──
+    const ageCheck = validateEnrollmentAge(body.birthdate);
+    if (!ageCheck.valid) {
+      return res.status(400).json({ success: false, message: ageCheck.reason });
+    }
+    const childAge = ageCheck.ageYears;
     for (const item of canonicalPackages) {
       const eligibility = checkProgramEligibility(item.programCode, childAge);
       if (!eligibility.eligible) {
@@ -230,16 +241,25 @@ const submitEnrollment = async (req, res) => {
     // Payment is always 50% down — ignore any 'full' sent by client
     const paymentOption = 'down';
 
-    // ── Student snapshot ──
+    // ── Student snapshot (names validated + Title-Cased) ──
+    const rawFirst = String(body.studentFirstName || body.firstName || '').trim();
+    const rawMiddle = String(body.studentMiddleName || body.middleName || '').trim();
+    const rawLast = String(body.studentLastName || body.lastName || '').trim();
+    for (const [val, label, required] of [
+      [rawFirst, 'Student first name', true],
+      [rawMiddle, 'Student middle name', false],
+      [rawLast, 'Student last name', true],
+    ]) {
+      const err = validateFullName(val, label, { minParts: 1, required });
+      if (err) return res.status(400).json({ success: false, message: err });
+    }
     const snapshot = {
-      firstName: String(body.studentFirstName || body.firstName || '').trim(),
-      lastName:  String(body.studentLastName  || body.lastName  || '').trim(),
-      middleName: String(body.studentMiddleName || body.middleName || '').trim(),
-      birthdate:  body.birthdate ? new Date(body.birthdate) : null,
-      computedAge: body.birthdate ? computeAge(body.birthdate) : null,
+      firstName: toTitleCase(rawFirst),
+      lastName:  toTitleCase(rawLast),
+      middleName: rawMiddle ? toTitleCase(rawMiddle) : '',
+      birthdate:  new Date(body.birthdate),
+      computedAge: childAge,
     };
-    if (!snapshot.firstName || !snapshot.lastName)
-      return res.status(400).json({ success: false, message: 'Student first and last name are required.' });
 
     // ── Health info ──
     const healthInfo = {
@@ -281,6 +301,23 @@ const submitEnrollment = async (req, res) => {
     // ── Generate enrollment ID ──
     const enrollmentId = await generateEnrollmentId();
 
+    // ── Requirement documents (optional; saved to disk, linked to this enrollment) ──
+    const reqDocsInput = body.requirementDocuments || {};
+    const requirementDocuments = {};
+    for (const [field, kind] of [
+      ['birthCertificate', 'birth-certificate'],
+      ['studentPhoto', 'student-photo'],
+      ['guardianId', 'guardian-id'],
+    ]) {
+      const doc = reqDocsInput[field];
+      if (doc && doc.dataUrl) {
+        const savedPath = saveRequirementFromDataUrl(doc.dataUrl, enrollmentId, kind);
+        if (savedPath) {
+          requirementDocuments[field] = { path: savedPath, fileName: String(doc.fileName || `${kind}`).slice(0, 200), uploadedAt: new Date() };
+        }
+      }
+    }
+
     // ── Create Enrollment ──
     const enrollment = new Enrollment({
       enrollmentId,
@@ -291,6 +328,7 @@ const submitEnrollment = async (req, res) => {
       preferredTime,
       preferredDays,
       healthInfo,
+      requirementDocuments,
       paymentOption,
       totalFee,
       consentVersion,
@@ -315,9 +353,17 @@ const submitEnrollment = async (req, res) => {
     });
     await payment.save();
 
-    // ── Update parent enrollmentStatus ──
+    // ── Finalize the parent account ──
+    // The Step-2 record has been a draft until now. The parent has completed the
+    // wizard and the enrollment is submitted / awaiting payment verification, so
+    // the account becomes permanent: uniqueness now applies to it and the TTL
+    // that would have auto-deleted an abandoned draft is removed. Login stays
+    // gated on admin approval (isActive is unchanged here).
     if (parentUser) {
-      await User.findByIdAndUpdate(parentId, { enrollmentStatus: 'pending_payment' });
+      await User.findByIdAndUpdate(parentId, {
+        $set: { enrollmentStatus: 'pending_payment', enrollmentDraft: false },
+        $unset: { draftExpiresAt: 1 },
+      });
     }
 
     // ── Fetch payment instructions ──
@@ -570,7 +616,9 @@ const getEnrollmentById = async (req, res) => {
     if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
     const payments = await Payment.find({ enrollment: enrollment._id })
       .sort({ createdAt: -1 }).lean();
-    return res.status(200).json({ success: true, enrollment: { ...enrollment, payments } });
+    // `payments` at the top level (the admin modal reads res.data.payments); also nested
+    // on `enrollment` for any older caller that expected it there.
+    return res.status(200).json({ success: true, enrollment: { ...enrollment, payments }, payments });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -694,8 +742,8 @@ const adminApproveEnrollment = async (req, res) => {
 
     // ── Activate the Parent account ───────────────────────────────────────
     await User.findByIdAndUpdate(enrollment.parent, {
-      isActive: true,
-      enrollmentStatus: 'active',
+      $set: { isActive: true, enrollmentStatus: 'active', enrollmentDraft: false },
+      $unset: { draftExpiresAt: 1 },
     });
 
     // ── Send approval email to Parent ─────────────────────────────────────

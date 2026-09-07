@@ -14,7 +14,7 @@ const PROGRAMS = [
     description:
       "A fun, nurturing group program that helps toddlers develop social skills, creativity, and early learning foundations through play-based activities.",
     schedule: "Playgroup sessions: 8:00 AM – 10:00 AM  &  1:00 PM – 3:00 PM (fixed times)",
-    ageRange: "1.5 – 3 years old",
+    ageRange: "2 – 4 years old",
     sessionType: "Group sessions",
     icon: Baby,
     color: "from-pink-500 to-rose-500",
@@ -78,7 +78,7 @@ const PROGRAMS = [
     description:
       "Focused exam review sessions designed to build test mastery, boost confidence, and sharpen test-taking strategies for any major examination.",
     schedule: "Mon – Sat  8:00 AM – 6:00 PM",
-    ageRange: "3 years old and up",
+    ageRange: "2 to 4 years old",
     sessionType: "1-on-1 sessions only",
     icon: GraduationCap,
     color: "from-emerald-500 to-teal-500",
