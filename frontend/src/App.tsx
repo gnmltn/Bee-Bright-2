@@ -25,7 +25,6 @@ import SuperAdminDashboard from "./pages/SuperAdminDashboard";
 import EnrollmentWizard from "./pages/EnrollmentWizard";
 import EnrollmentTracking from "./pages/EnrollmentTracking";
 import EnrollmentSuccess from "./pages/EnrollmentSuccess";
-import ParentDashboard from "./pages/ParentDashboard";
 import AdminEscalations from "./pages/AdminEscalations";
 import ProfileSettings from "./pages/ProfileSettings";
 import Maintenance from "./pages/Maintenance";
@@ -203,8 +202,17 @@ const App = () => (
               <Route path="/enroll" element={<EnrollmentWizard />} />
               <Route path="/enrollment-success" element={<EnrollmentSuccess />} />
               <Route path="/track-enrollment" element={<EnrollmentTracking />} />
-              {/* /parent-dashboard redirects to /student-dashboard — same joined account */}
-              <Route path="/parent-dashboard" element={<Navigate to="/student-dashboard" replace />} />
+              {/* Same reframed dashboard component as /student-dashboard (joined account),
+                  rendered directly here rather than redirected — see StudentDashboard.tsx's
+                  isParent branching for the parent-framed copy + child selector. */}
+              <Route
+                path="/parent-dashboard"
+                element={
+                  <ProtectedRoute allowedRole="parent">
+                    <StudentDashboard />
+                  </ProtectedRoute>
+                }
+              />
               <Route path="/maintenance" element={<Maintenance />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />

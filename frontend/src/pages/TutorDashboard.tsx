@@ -61,7 +61,7 @@ import {
   type AnnouncementItem,
   type AuditLogItem,
 } from "@/services/api";
-import { PROGRAM_CATEGORIES } from "@/constants/programs";
+import { PROGRAM_CATEGORIES, PROGRAM_LABELS } from "@/constants/programs";
 import { AITab } from "@/components/ai/AITab";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
 
@@ -544,11 +544,11 @@ export default function TutorDashboard() {
   const materialProgramOptions = PROGRAM_CATEGORIES;
 
   // Map programCategory id -> subject names used in backend Subject catalog / schedules
-  // Only the 3 active programs
+  // Only the 3 active programs (see constants/programs.ts PROGRAM_LABELS)
   const MATERIAL_PROGRAM_SUBJECT_NAME_MAP: Record<string, string[]> = {
-    toddlers_playgroup: ["Toddlers Playgroup"],
-    academic_tutorial:  ["Academic Tutorial"],
-    exam_prep:          ["Examination Preparation"],
+    toddlers_playgroup: [PROGRAM_LABELS.TPG101],
+    academic_tutorial:  [PROGRAM_LABELS.ACT102],
+    exam_prep:          [PROGRAM_LABELS.EXP106],
   };
 
   const materialProgramSubjectItems = useMemo(() => {

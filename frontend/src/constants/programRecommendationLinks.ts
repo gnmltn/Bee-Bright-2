@@ -1,6 +1,10 @@
 /**
  * Program-specific recommendation links for tutors.
  * Maps program/subject names (from API) to curated resource URLs.
+ * ONLY the 3 active programs — TPG101, ACT102, EXP106 (see constants/programs.ts).
+ * Pre-Kindergarten Readiness / Kindergarten Readiness / SPED Tutorial were their
+ * own retired programs (PKR105/KRP104/SPT103) and no longer have dedicated
+ * entries; Pre-K/SPED support is now offered as part of Academic Tutorial.
  */
 export const PROGRAM_RECOMMENDATION_LINKS: { keywords: string[]; url: string; label: string }[] = [
   {
@@ -9,24 +13,9 @@ export const PROGRAM_RECOMMENDATION_LINKS: { keywords: string[]; url: string; la
     label: "Early Math & Readiness Resources",
   },
   {
-    keywords: ["Pre-Kindergarten Readiness", "Pre-Kindergarten"],
-    url: "https://www.khanacademy.org/early-math/cc-early-math-counting-topic",
-    label: "Pre-K Math & Literacy",
-  },
-  {
-    keywords: ["Kindergarten Readiness", "Kindergarten"],
-    url: "https://www.khanacademy.org/early-math",
-    label: "Kindergarten Readiness Resources",
-  },
-  {
     keywords: ["Academic Tutorial", "Academic"],
     url: "https://www.khanacademy.org",
     label: "Academic Subject Resources (Math, Science, English)",
-  },
-  {
-    keywords: ["SPED Tutorial", "SPED"],
-    url: "https://www.understood.org",
-    label: "Special Education & IEP Resources",
   },
   {
     keywords: ["Examination Preparation", "Exam Prep"],

@@ -106,3 +106,44 @@ export function useMyRequests(pollMs = 60000) {
 
   return { items, loading, error, unreadCount, markSeen, refresh };
 }
+
+/** Fired by the Requests page after a status change so the sidebar badge updates at once. */
+export const REQUESTS_CHANGED_EVENT = 'bb:requests-changed';
+export function notifyRequestsChanged() {
+  try { window.dispatchEvent(new Event(REQUESTS_CHANGED_EVENT)); } catch { /* no-op */ }
+}
+
+/**
+ * Admin / super_admin: count of requests still needing attention (open + being handled).
+ * Powers the badge on the sidebar "Requests" nav item (replaces the old bell). Polls on
+ * an interval, on window focus, and whenever the Requests page reports a change.
+ */
+export function useOpenRequestsCount(enabled: boolean, pollMs = 60000) {
+  const [count, setCount] = useState(0);
+
+  const refresh = useCallback(async () => {
+    if (!enabled) return;
+    try {
+      const res = await escalationService.getStats();
+      if (res.data?.success) setCount(res.data.stats.openOrAcknowledged || 0);
+    } catch {
+      /* keep last-known */
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) { setCount(0); return; }
+    refresh();
+    const id = window.setInterval(refresh, pollMs);
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
+    window.addEventListener(REQUESTS_CHANGED_EVENT, refresh);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener(REQUESTS_CHANGED_EVENT, refresh);
+    };
+  }, [enabled, refresh, pollMs]);
+
+  return count;
+}

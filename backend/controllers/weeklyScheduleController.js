@@ -173,10 +173,10 @@ const createWeeklyScheduleTemplate = async (req, res) => {
       const timeError = validateTimeWindow({ date: entryDate, startTime: normalizeTime(startTime), endTime: normalizeTime(endTime), policy });
       if (timeError) return res.status(400).json({ success: false, message: timeError });
       if (new Set(tutorIds).size !== tutorIds.length) return res.status(400).json({ success: false, message: 'A tutor cannot be assigned more than once.' });
-      // For playgroup templates: accept 1–4 tutors (exact count validated at enrollment).
-      // For one-on-one: exactly 1 tutor.
+      // For playgroup templates: at least 1 tutor, no upper bound (exact minimum
+      // ratio is validated once children are enrolled). For one-on-one: exactly 1 tutor.
       const slotPolicy = policy || (sessionType === 'playgroup'
-        ? { minTutors: 1, maxTutors: 4, sessionType: 'playgroup' }
+        ? { minTutors: 1, maxTutors: Infinity, sessionType: 'playgroup' }
         : { minTutors: 1, maxTutors: 1 });
       const tutorCountError = validateTutorCount(slotPolicy, tutorIds.length);
       if (tutorCountError) return res.status(400).json({ success: false, message: tutorCountError });

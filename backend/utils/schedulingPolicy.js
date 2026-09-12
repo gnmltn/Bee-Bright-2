@@ -7,38 +7,38 @@ const OPERATING_END_MINUTES = 17 * 60;
 // ─── Playgroup constants ───────────────────────────────────────────────────────
 // Toddlers Playgroup is a GROUP session — minimum 2 children required.
 // Tutor count scales with child count using a deterministic supervision ratio.
+//
+// Policy (BeeBright program-manager-confirmed, supersedes the earlier 1:3-ratio /
+// 4-tutor-cap rule): base ratio is 1 tutor per 2 children, max 12 children per
+// session. There is NO upper cap on tutors — staff may assign more than the
+// computed minimum at any time (e.g. based on the toddlers' behavior that day),
+// and the system must never block that; it only blocks going BELOW the minimum.
 const PLAYGROUP_MIN_CHILDREN = 2;
-const PLAYGROUP_MAX_CHILDREN = 10;
+const PLAYGROUP_MAX_CHILDREN = 12;
 
 /**
- * Calculate the required number of tutors for a Toddlers Playgroup session
- * based on the number of enrolled children.
+ * Calculate the MINIMUM number of tutors required for a Toddlers Playgroup
+ * session, based on the number of enrolled children.
  *
- * Supervision ratio rule (1 tutor per ≤3 children, rounded up):
- *   2–3  children → 1 tutor   (ratio: 1:3)
- *   4–6  children → 2 tutors  (ratio: 1:3)
- *   7–9  children → 3 tutors  (ratio: 1:3)
- *   10   children → 4 tutors  (ratio: 1:2.5 — extra safety for max group)
- *
- * Rule is deterministic: requiredTutors = ceil(childCount / 3), capped to 4.
- * Minimum: 1 tutor (enforced by max with 1).
- * Maximum: 4 tutors (any group of 10 needs at most 4).
+ * Supervision ratio rule: 1 tutor per 2 children, rounded up —
+ * requiredTutors = ceil(childCount / 2). There is no maximum: assigning more
+ * tutors than this minimum is always allowed (admin discretion), never warned
+ * or blocked.
  *
  * @param {number} childCount — number of children enrolled in the session
- * @returns {{ min: number, max: number, recommended: number }}
+ * @returns {{ min: number, recommended: number }}
  */
 function calculatePlaygroupTutorRequirement(childCount) {
   const count = Math.max(0, Number(childCount) || 0);
   if (count < PLAYGROUP_MIN_CHILDREN) {
-    // Below minimum — caller should reject, but return the minimum valid requirement
-    return { min: 1, max: 1, recommended: 1 };
+    // Below minimum children — caller should reject the child count itself
+    // (validatePlaygroupChildCount); still return a sane minimum tutor count.
+    return { min: 1, recommended: 1 };
   }
-  // 1 tutor for every 3 children, always round up
-  const recommended = Math.min(Math.ceil(count / 3), 4);
+  const min = Math.ceil(count / 2);
   return {
-    min: Math.max(1, recommended - 1), // allow one fewer in a pinch
-    max: recommended,                  // hard cap; never assign more than needed
-    recommended,                       // the definitive required count
+    min,          // the minimum required count — the only bound ever enforced
+    recommended: min,
   };
 }
 
@@ -61,10 +61,13 @@ const PROGRAM_POLICIES = {
     sessionType: 'playgroup',
     minChildren: PLAYGROUP_MIN_CHILDREN,
     maxStudents: PLAYGROUP_MAX_CHILDREN,
-    // minTutors/maxTutors are dynamic — use calculatePlaygroupTutorRequirement(childCount)
-    // These static fields reflect the absolute bounds across all valid child counts:
-    minTutors: 1,   // 2 children → 1 tutor
-    maxTutors: 4,   // 10 children → 4 tutors
+    // The real per-session minimum is dynamic — use
+    // calculatePlaygroupTutorRequirement(childCount). These static fields are only
+    // used before a child count is known (e.g. creating an empty slot or a weekly
+    // template entry): minTutors is the absolute floor (2 children → 1 tutor);
+    // maxTutors is intentionally uncapped — admin may always assign more tutors.
+    minTutors: 1,
+    maxTutors: Infinity,
     fixedSlots: [
       { startTime: '08:00', endTime: '10:00' },
       { startTime: '13:00', endTime: '15:00' },
@@ -118,14 +121,13 @@ function validateTimeWindow({ date, startTime, endTime, policy }) {
 function validateTutorCount(policy, count, childCount) {
   if (!policy) return null;
 
-  // Playgroup: tutor requirement is dynamic based on child count
+  // Playgroup: minimum tutor requirement is dynamic based on child count. Only
+  // the lower bound is ever enforced — assigning MORE tutors than the minimum
+  // is always allowed (admin discretion, e.g. the toddlers' behavior that day).
   if (policy.sessionType === 'playgroup' && childCount != null) {
     const req = calculatePlaygroupTutorRequirement(childCount);
-    if (count < req.min || count > req.max) {
-      if (req.min === req.max) {
-        return `${childCount} children require exactly ${req.min} tutor${req.min !== 1 ? 's' : ''}.`;
-      }
-      return `${childCount} children require ${req.min}–${req.max} tutors (${count} selected).`;
+    if (count < req.min) {
+      return `${childCount} children require at least ${req.min} tutor${req.min !== 1 ? 's' : ''} (${count} selected).`;
     }
     return null;
   }

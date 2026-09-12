@@ -3,13 +3,14 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Baby, BookOpen, GraduationCap, Calendar, ArrowRight, X, CheckCircle2, Clock, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
+import { PROGRAM_LABELS } from "@/constants/programs";
 
 // ── Program data based on brochure ─────────────────────────────────────────
 const PROGRAMS = [
   {
     id: "toddlers",
     code: "TPG101",
-    name: "Toddlers Playgroup",
+    name: PROGRAM_LABELS.TPG101,
     tagline: "Give your child a joyful start to a lifelong journey of learning!",
     description:
       "A fun, nurturing group program that helps toddlers develop social skills, creativity, and early learning foundations through play-based activities.",
@@ -39,7 +40,7 @@ const PROGRAMS = [
   {
     id: "academic",
     code: "ACT102",
-    name: "Academic Tutorial",
+    name: PROGRAM_LABELS.ACT102,
     tagline: "One-on-one tutoring that makes a difference!",
     description:
       "Guaranteed 1-on-1 tutorial sessions with advancement in lessons, homework assistance, and enhancement across all subjects — from Pre-school to Senior High School.",
@@ -73,7 +74,7 @@ const PROGRAMS = [
   {
     id: "examprep",
     code: "EXP106",
-    name: "Examination Preparation",
+    name: PROGRAM_LABELS.EXP106,
     tagline: "Comprehensive review for improved performance!",
     description:
       "Focused exam review sessions designed to build test mastery, boost confidence, and sharpen test-taking strategies for any major examination.",

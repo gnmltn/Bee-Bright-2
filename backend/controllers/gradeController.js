@@ -1,6 +1,7 @@
 const Grade = require('../models/Grade');
 const { logAudit } = require('../utils/auditService');
 const Schedule = require('../models/Schedule');
+const { parentOwnsStudent } = require('../utils/parentChildAccess');
 
 // Task 25c — Bee Bright has three programs. "Pre-Kindergarten Readiness", "Kindergarten
 // Readiness" and "SPED" are scope areas WITHIN Academic Tutorial, not their own programs,
@@ -271,11 +272,17 @@ const getGradesForStudent = async (req, res) => {
 // @access  Private (Student)
 const getMyProgress = async (req, res) => {
   try {
-    if (req.user.role !== 'student') {
-      return res.status(403).json({ success: false, message: 'Only students can view their progress' });
+    let studentId = req.user._id;
+    if (req.user.role === 'parent') {
+      studentId = String(req.query.studentId || '');
+      if (!studentId || !(await parentOwnsStudent(req.user._id, studentId))) {
+        return res.status(403).json({ success: false, message: 'Select one of your own children to view their progress.' });
+      }
+    } else if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Only students and parents can view progress' });
     }
 
-    const grades = await Grade.find({ student: req.user._id })
+    const grades = await Grade.find({ student: studentId })
       .populate('tutor', 'firstName lastName')
       .sort({ programCategory: 1, subjectItem: 1, createdAt: -1 })
       .lean();

@@ -139,6 +139,11 @@ export default function StudentDashboard() {
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const isParent = user?.role === "parent";
+
+  // Parent Dashboard reframe (Final Implementation Prompt Section 2): a parent
+  // account can have multiple children; track which one is currently selected.
+  const [activeChildId, setActiveChildId] = useState<string>("");
 
   const [enrollments, setEnrollments] = useState<{
     _id: string;
@@ -146,6 +151,10 @@ export default function StudentDashboard() {
     status?: string;
     studentSnapshot?: { firstName?: string; lastName?: string; birthdate?: string };
     studentId?: string;
+    /** The child's actual User._id, once one has been created (see backend
+     *  ensureStudentUserForEnrollment) — needed to fetch a parent's child's
+     *  own schedule/grades/materials. Absent until the child's first class. */
+    student?: string;
     selectedSubjects?: { _id: string; name: string }[];
     packages?: { displayName?: string }[];
     preEnrollmentAssessment?: PreEnrollmentAssessment | null;
@@ -205,36 +214,6 @@ export default function StudentDashboard() {
   const [scheduleWeekStart, setScheduleWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
 
   useEffect(() => {
-    setProgressGradesLoading(true);
-    gradeService
-      .getMyProgress()
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.grades)) {
-          setProgressGrades(res.data.grades);
-        } else {
-          setProgressGrades([]);
-        }
-      })
-      .catch(() => setProgressGrades([]))
-      .finally(() => setProgressGradesLoading(false));
-  }, []);
-
-  useEffect(() => {
-    setAssignedMaterialsLoading(true);
-    materialService
-      .getAssignedMaterials()
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.materials)) {
-          setAssignedMaterials(res.data.materials);
-        } else {
-          setAssignedMaterials([]);
-        }
-      })
-      .catch(() => setAssignedMaterials([]))
-      .finally(() => setAssignedMaterialsLoading(false));
-  }, []);
-
-  useEffect(() => {
     enrollmentService
       .getMyEnrollments()
       .then((res) => {
@@ -248,9 +227,92 @@ export default function StudentDashboard() {
       .finally(() => setEnrollmentsLoading(false));
   }, []);
 
+  // Every enrollment record is one child. A parent may have several; a student
+  // account only ever has their own single (implicit) record.
+  const children = useMemo(
+    () =>
+      enrollments.map((e) => ({
+        key: e._id,
+        studentUserId: e.student || null,
+        name: [e.studentSnapshot?.firstName, e.studentSnapshot?.lastName].filter(Boolean).join(" ") || e.studentId || "Child",
+        status: e.status,
+      })),
+    [enrollments]
+  );
+
+  // Default to the first (most recent) child once the list loads; keep the
+  // current selection if it's still valid.
   useEffect(() => {
+    if (!isParent) return;
+    if (children.length === 0) {
+      if (activeChildId) setActiveChildId("");
+      return;
+    }
+    if (!children.some((c) => c.key === activeChildId)) {
+      setActiveChildId(children[0].key);
+    }
+  }, [isParent, children, activeChildId]);
+
+  const activeChild = isParent ? children.find((c) => c.key === activeChildId) : undefined;
+  // For a parent, the child's real User._id (needed by the schedule/grades/
+  // materials endpoints) may not exist yet if no class has ever been scheduled
+  // for them — that's a legitimate "nothing to show yet" state, not an error.
+  const activeChildUserId = isParent ? activeChild?.studentUserId ?? null : user?.id ?? null;
+  const readyToFetchChildData = isParent ? Boolean(activeChild) : true;
+
+  useEffect(() => {
+    if (!readyToFetchChildData) return;
+    if (isParent && !activeChildUserId) {
+      // Selected child has no linked User yet — nothing to fetch, but not loading forever.
+      setProgressGrades([]);
+      setProgressGradesLoading(false);
+      return;
+    }
+    setProgressGradesLoading(true);
+    gradeService
+      .getMyProgress(isParent ? activeChildUserId ?? undefined : undefined)
+      .then((res) => {
+        if (res.data?.success && Array.isArray(res.data.grades)) {
+          setProgressGrades(res.data.grades);
+        } else {
+          setProgressGrades([]);
+        }
+      })
+      .catch(() => setProgressGrades([]))
+      .finally(() => setProgressGradesLoading(false));
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
+
+  useEffect(() => {
+    if (!readyToFetchChildData) return;
+    if (isParent && !activeChildUserId) {
+      setAssignedMaterials([]);
+      setAssignedMaterialsLoading(false);
+      return;
+    }
+    setAssignedMaterialsLoading(true);
+    materialService
+      .getAssignedMaterials(isParent ? activeChildUserId ?? undefined : undefined)
+      .then((res) => {
+        if (res.data?.success && Array.isArray(res.data.materials)) {
+          setAssignedMaterials(res.data.materials);
+        } else {
+          setAssignedMaterials([]);
+        }
+      })
+      .catch(() => setAssignedMaterials([]))
+      .finally(() => setAssignedMaterialsLoading(false));
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
+
+  useEffect(() => {
+    if (!readyToFetchChildData) return;
+    if (isParent && !activeChildUserId) {
+      setSchedules([]);
+      setSchedulesLoading(false);
+      return;
+    }
+    setSchedulesLoading(true);
     scheduleService
-      .getMyClasses()
+      .getMyClasses(isParent ? activeChildUserId ?? undefined : undefined)
       .then((res) => {
         if (res.data?.success && Array.isArray(res.data.schedules)) {
           setSchedules(res.data.schedules);
@@ -260,7 +322,7 @@ export default function StudentDashboard() {
       })
       .catch(() => setSchedules([]))
       .finally(() => setSchedulesLoading(false));
-  }, []);
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
 
   const fetchAnnouncements = () => {
     setAnnouncementsLoading(true);
@@ -906,10 +968,33 @@ export default function StudentDashboard() {
           >
             <div>
               <h1 className="font-display text-2xl md:text-3xl font-bold text-foreground">
-                Student Dashboard
+                {isParent ? "Parent Dashboard" : "Student Dashboard"}
               </h1>
-              <p className="text-muted-foreground">Welcome back, {user?.name || "Student"}!</p>
+              <p className="text-muted-foreground">
+                {isParent
+                  ? `Welcome back, ${user?.name || "Parent"}! Here's an overview of ${activeChild?.name || "your child"}'s progress.`
+                  : `Welcome back, ${user?.name || "Student"}!`}
+              </p>
             </div>
+            {isParent && children.length > 1 && (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="active-child-select" className="text-sm text-muted-foreground whitespace-nowrap">
+                  Viewing child:
+                </Label>
+                <select
+                  id="active-child-select"
+                  value={activeChildId}
+                  onChange={(e) => setActiveChildId(e.target.value)}
+                  className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground"
+                >
+                  {children.map((child) => (
+                    <option key={child.key} value={child.key}>
+                      {child.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </motion.div>
 
           <div className="grid items-start lg:grid-cols-4 gap-6">
@@ -928,22 +1013,31 @@ export default function StudentDashboard() {
                     />
                   </div>
                   <h3 className="font-display font-bold text-lg text-foreground">
-                    {user?.name || "Student"}
+                    {isParent ? (activeChild?.name || "Your child") : (user?.name || "Student")}
                   </h3>
-                  <p className="text-sm text-muted-foreground">{user?.email ?? "—"}</p>
-                  {user?.phone && (
+                  {!isParent && <p className="text-sm text-muted-foreground">{user?.email ?? "—"}</p>}
+                  {!isParent && user?.phone && (
                     <p className="text-sm text-muted-foreground">Phone: {user.phone}</p>
                   )}
-                  <span className="inline-block mt-2 px-3 py-1 bg-primary/10 text-primary text-sm rounded-full font-medium">
-                    {user?.gradeLevel ?? "—"}
-                  </span>
+                  {!isParent && (
+                    <span className="inline-block mt-2 px-3 py-1 bg-primary/10 text-primary text-sm rounded-full font-medium">
+                      {user?.gradeLevel ?? "—"}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-6 pt-6 border-t border-border space-y-1">
-                  {(user?.guardianName || user?.guardianPhone) && (
+                  {isParent ? (
                     <>
-                      <p className="text-sm text-muted-foreground text-center">Guardian: {user?.guardianName ?? "—"}</p>
-                      <p className="text-sm text-muted-foreground text-center">Guardian phone: {user?.guardianPhone ?? "—"}</p>
+                      <p className="text-sm text-muted-foreground text-center">Parent account: {user?.name ?? "—"}</p>
+                      <p className="text-sm text-muted-foreground text-center">{user?.email ?? "—"}</p>
                     </>
+                  ) : (
+                    (user?.guardianName || user?.guardianPhone) && (
+                      <>
+                        <p className="text-sm text-muted-foreground text-center">Guardian: {user?.guardianName ?? "—"}</p>
+                        <p className="text-sm text-muted-foreground text-center">Guardian phone: {user?.guardianPhone ?? "—"}</p>
+                      </>
+                    )
                   )}
                 </div>
               </div>

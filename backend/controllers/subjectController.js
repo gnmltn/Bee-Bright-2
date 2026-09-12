@@ -4,7 +4,7 @@ const Subject = require('../models/Subject');
 const DEFAULT_SCHEDULE = 'Mon – Sat 8:00 AM – 5:00 PM';
 
 const ACTIVE_PROGRAMS = [
-  { code: 'TPG101', name: 'Toddlers Playgroup', price: 3000, description: 'Socialization, sensory play, early development (group sessions, age 1.5–3)' },
+  { code: 'TPG101', name: 'Toddlers Playgroup', price: 3000, description: 'Socialization, sensory play, early development (group sessions, ages 2–4)' },
   { code: 'ACT102', name: 'Academic Tutorial',  price: 2500, description: 'Subject-based support, Grade 1 to Junior High (1-on-1, age 2+)' },
   { code: 'EXP106', name: 'Examination Preparation', price: 3500, description: 'Test mastery, mock exams, test-taking strategies (1-on-1, age 3+)' },
 ];

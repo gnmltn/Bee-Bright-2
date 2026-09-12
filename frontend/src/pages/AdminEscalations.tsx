@@ -6,14 +6,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { escalationService, type AdminEscalation, type EscalationStatus } from '@/services/api';
-import { categoryLabel, STATUS_LABEL, STATUS_TONE, formatWhen } from '@/lib/escalations';
+import { categoryLabel, STATUS_LABEL, STATUS_TONE, formatWhen, notifyRequestsChanged } from '@/lib/escalations';
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'open', label: 'Open' },
+  { value: 'unresolved', label: 'Open' },          // open + being handled — default
   { value: 'acknowledged', label: 'Being handled' },
   { value: 'resolved', label: 'Resolved' },
+  { value: 'all', label: 'All statuses' },
 ];
+
+// Which rows a given filter should keep visible (used after an inline status change).
+function matchesStatusFilter(rowStatus: EscalationStatus, filter: string): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'unresolved') return rowStatus === 'open' || rowStatus === 'acknowledged';
+  return rowStatus === filter;
+}
 
 const REASON_OPTIONS: { value: string; label: string }[] = [
   { value: 'all', label: 'All reasons' },
@@ -38,7 +45,7 @@ export default function AdminEscalations() {
   const [params, setParams] = useSearchParams();
   const [rows, setRows] = useState<AdminEscalation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState<string>(params.get('status') || 'open');
+  const [status, setStatus] = useState<string>(params.get('status') || 'unresolved');
   const [reason, setReason] = useState<string>('all');
   const [expanded, setExpanded] = useState<string | null>(params.get('focus'));
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -47,7 +54,7 @@ export default function AdminEscalations() {
     setLoading(true);
     try {
       const query: Record<string, string> = {};
-      if (status !== 'all') query.status = status as EscalationStatus;
+      if (status !== 'all') query.status = status;
       if (reason !== 'all') {
         if (reason === 'child_safety') query.source = 'child_safety';
         else query.category = reason;
@@ -71,7 +78,11 @@ export default function AdminEscalations() {
     try {
       const res = await escalationService.update(id, { status: next });
       if (res.data?.success) {
-        setRows((cur) => cur.map((r) => (r._id === id ? { ...r, ...res.data.escalation } : r)));
+        // Acknowledged rows stay in the "Open" (unresolved) view; resolved rows drop out.
+        setRows((cur) => cur
+          .map((r) => (r._id === id ? { ...r, ...res.data.escalation } : r))
+          .filter((r) => matchesStatusFilter(r.status, status)));
+        notifyRequestsChanged(); // refresh the sidebar "Requests" badge immediately
         toast({ title: `Marked ${STATUS_LABEL[next].toLowerCase()}` });
       }
     } catch {
@@ -84,7 +95,7 @@ export default function AdminEscalations() {
   const changeStatusFilter = (v: string) => {
     setStatus(v);
     const p = new URLSearchParams(params);
-    if (v === 'open') p.delete('status'); else p.set('status', v);
+    if (v === 'unresolved') p.delete('status'); else p.set('status', v);
     p.delete('focus');
     setParams(p, { replace: true });
   };
@@ -176,7 +187,26 @@ export default function AdminEscalations() {
                           )}
                         </div>
 
-                        {e.conversationSnippet && (
+                        {(e.concernReason || e.concernExplanation) && (
+                          <div className="space-y-2">
+                            {e.concernReason && (
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reason</p>
+                                <p className="mt-1 text-sm text-foreground">{e.concernReason}</p>
+                              </div>
+                            )}
+                            {e.concernExplanation && (
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Explanation</p>
+                                <p className="mt-1 whitespace-pre-wrap rounded-lg border border-border bg-card p-3 text-sm text-foreground">
+                                  {e.concernExplanation}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {e.conversationSnippet && !e.concernExplanation && (
                           <div>
                             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                               Conversation snippet

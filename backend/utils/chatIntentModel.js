@@ -5,6 +5,11 @@ const INTENTS_PATH = path.resolve(__dirname, '../ai_training/chat_intents.json')
 const METRICS_PATH = path.resolve(__dirname, '../ai_training/model_metrics.json');
 const MIN_CONFIDENCE = 0.34;
 const KEYWORD_BOOST = 2.0;
+// Task 35 Fix 1 — "address" is one of the "location" intent's keywords, but "email
+// address" is a contact question, not a physical-location one, so it must not win on
+// the bare word alone. Only override when there's no stronger, unambiguous location
+// signal alongside it.
+const STRONG_LOCATION_SIGNAL = /\b(located|locate|barangay|dagupan|visit|map|directions|get to)\b/;
 const STOP_WORDS = new Set([
   'a', 'an', 'the', 'is', 'are', 'am', 'was', 'were', 'be', 'been', 'being',
   'i', 'me', 'my', 'you', 'your', 'yours', 'we', 'our', 'ours',
@@ -154,7 +159,13 @@ function predictIntent(model, message) {
   const probabilities = Object.fromEntries(
     Object.entries(scores).map(([intent, value]) => [intent, value / sumScores])
   );
-  const [bestIntent, confidence] = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  let [bestIntent, confidence] = ranked[0];
+
+  if (bestIntent === 'location' && /\bemail\b/.test(normalizedMessage) && !STRONG_LOCATION_SIGNAL.test(normalizedMessage) && ranked.length > 1) {
+    [bestIntent, confidence] = ranked[1];
+  }
+
   return {
     intent: bestIntent,
     confidence,

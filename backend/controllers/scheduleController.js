@@ -25,8 +25,10 @@ const {
   validatePlaygroupChildCount,
   calculatePlaygroupTutorRequirement,
   enrollmentCoversSubject,
+  PLAYGROUP_MAX_CHILDREN,
 } = require('../utils/schedulingPolicy');
 const { matchesParentPreference } = require('../utils/schedulePreferences');
+const { parentOwnsStudent } = require('../utils/parentChildAccess');
 const { isRoomDoubleBooked } = require('../utils/weeklySchedulingUtils');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
@@ -242,11 +244,12 @@ async function findCompatibleOpenSlots({ subjectId, sessionType, enrollment, exc
     .filter((row) => {
       if (sessionType === 'playgroup') {
         const count = Array.isArray(row.students) ? row.students.length : 0;
-        if (count >= (row.maxCapacity || 10)) return false;
+        if (count >= (row.maxCapacity || PLAYGROUP_MAX_CHILDREN)) return false;
       }
       return matchesParentPreference({
         preferredStartDate: enrollment.preferredStartDate,
         preferredTime: enrollment.preferredTime,
+        preferredDays: enrollment.preferredDays,
         date: row.date,
         startTime: row.startTime,
       }).ok;
@@ -1064,19 +1067,21 @@ const createSchedule = async (req, res) => {
 
     // Validate tutor count based on session type
     // For playgroup: count is dynamic based on actual child count in this session.
-    // When creating an empty playgroup slot (no students yet), accept 1–4 tutors.
-    // When children are provided at creation time, apply the ratio immediately.
+    // When creating an empty playgroup slot (no students yet), only a floor of
+    // 1 tutor applies (no upper bound). When children are provided at creation
+    // time, apply the minimum ratio immediately.
     let tutorCountError = null;
     if (sessionType === 'playgroup') {
       const childCountNow = Array.isArray(studentsRaw) ? studentsRaw.filter(Boolean).length
         : studentId ? 1 : 0;
       if (childCountNow >= 2) {
-        // Children provided — enforce exact ratio
+        // Children provided — enforce the minimum ratio (never an upper bound)
         tutorCountError = validateTutorCount(policy || { sessionType: 'playgroup' }, finalTutorIds.length, childCountNow);
       } else {
-        // Empty slot creation — accept 1–4 tutors (ratio enforced at enrollment time)
-        if (finalTutorIds.length < 1 || finalTutorIds.length > 4) {
-          tutorCountError = 'Toddlers Playgroup requires 1–4 tutors (exact count determined by number of enrolled children).';
+        // Empty slot creation — child count not known yet, so only the floor
+        // applies (ratio enforced once children are enrolled); no upper bound.
+        if (finalTutorIds.length < 1) {
+          tutorCountError = 'Toddlers Playgroup requires at least 1 tutor.';
         }
       }
     } else {
@@ -1405,6 +1410,7 @@ const enrollStudentInSession = async (req, res) => {
     const preferenceCheck = matchesParentPreference({
       preferredStartDate: enrollment.preferredStartDate,
       preferredTime: enrollment.preferredTime,
+      preferredDays: enrollment.preferredDays,
       date: schedule.date,
       startTime: schedule.startTime,
     });
@@ -2042,16 +2048,25 @@ const getMySessions = async (req, res) => {
 // @access  Private (Student)
 const getStudentClasses = async (req, res) => {
   try {
-    if (req.user.role !== 'student') {
+    let studentId = req.user.id;
+    if (req.user.role === 'parent') {
+      studentId = String(req.query.studentId || '');
+      if (!studentId || !(await parentOwnsStudent(req.user._id, studentId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Select one of your own children to view their classes.'
+        });
+      }
+    } else if (req.user.role !== 'student') {
       return res.status(403).json({
         success: false,
-        message: 'Only students can access my classes'
+        message: 'Only students and parents can access my classes'
       });
     }
     const schedulesRaw = await Schedule.find({
       $or: [
-        { student: req.user.id },
-        { students: req.user.id }
+        { student: studentId },
+        { students: studentId }
       ]
     })
       .populate('tutor', 'firstName lastName middleName email profileImage')

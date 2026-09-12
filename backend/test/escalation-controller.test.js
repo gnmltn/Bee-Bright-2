@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Escalation = require('../models/Escalation');
-const { listMyEscalations, listEscalations } = require('../controllers/escalationController');
+const { listMyEscalations, listEscalations, updateEscalation } = require('../controllers/escalationController');
 
 function fakeRes() {
   return {
@@ -65,4 +65,43 @@ test('listEscalations (admin list): no user filter — returns all, ordered open
     assert.equal(res.body.escalations[0]._id, 'b'); // open + urgent (safety) floats to top
     assert.equal(res.body.escalations[2]._id, 'a'); // resolved sinks
   } finally { s.restore(); }
+});
+
+test('Task 31b: status=unresolved → filters to open + acknowledged (the default admin view)', async () => {
+  const s = stubFind([]);
+  try {
+    await listEscalations({ query: { status: 'unresolved' } }, fakeRes());
+    assert.deepEqual(s.getFilter(), { status: { $in: ['open', 'acknowledged'] } });
+  } finally { s.restore(); }
+});
+
+test('Task 31b: an exact status is still passed through unchanged', async () => {
+  const s = stubFind([]);
+  try {
+    await listEscalations({ query: { status: 'acknowledged' } }, fakeRes());
+    assert.deepEqual(s.getFilter(), { status: 'acknowledged' });
+  } finally { s.restore(); }
+});
+
+test('Task 31b: updateEscalation acknowledges non-destructively and returns the re-populated row', async () => {
+  const origFindById = Escalation.findById;
+  const saved = { _id: 'x1', status: 'open', source: 'handoff', category: 'human_requested',
+    save: async function () { this._saved = true; return this; } };
+  let populateChain = null;
+  Escalation.findById = (id) => {
+    if (populateChain) { // second call — the re-populate
+      return { populate() { return this; }, lean: async () => ({ _id: id, status: 'acknowledged', user: { firstName: 'Mara' } }) };
+    }
+    populateChain = true;
+    return Promise.resolve(saved);
+  };
+  try {
+    const res = fakeRes();
+    await updateEscalation({ params: { id: 'x1' }, body: { status: 'acknowledged' }, user: { _id: '5f9d88b9c1a2b34d5e6f7a8b' } }, res);
+    assert.equal(saved.status, 'acknowledged');   // status changed, row NOT deleted
+    assert.equal(saved._saved, true);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.escalation.status, 'acknowledged');
+    assert.equal(res.body.escalation.user.firstName, 'Mara'); // populated, not a bare id
+  } finally { Escalation.findById = origFindById; }
 });

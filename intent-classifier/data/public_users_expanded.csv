@@ -1,0 +1,559 @@
+user_query,intent,role,requires_login
+What programs do you offer?,programs_overview,public,no
+What programs are available?,programs_overview,public,no
+Ano ang mga program na ino-offer ninyo?,programs_overview,public,no
+Anong programs ang meron kayo?,programs_overview,public,no
+What learning programs can I choose from?,programs_overview,public,no
+May programs ba kayo for different learners?,programs_overview,public,no
+Can you help me with this: what programs do you offer?,programs_overview,public,no
+Quick question: what programs are available?,programs_overview,public,no
+"Just checking, ano ang mga program na ino-offer ninyo?",programs_overview,public,no
+Please tell me anong programs ang meron kayo??,programs_overview,public,no
+Can you tell me what learning programs can i choose from??,programs_overview,public,no
+"Paki-explain, may programs ba kayo for different learners??",programs_overview,public,no
+Gusto kong malaman: what programs do you offer?,programs_overview,public,no
+"Pwede bang sabihin, what programs are available??",programs_overview,public,no
+"Hi, ano ang mga program na ino-offer ninyo??",programs_overview,public,no
+"Hello, what learning programs can i choose from??",programs_overview,public,no
+"Pwede po bang malaman, what programs do you offer?",programs_overview,public,no
+Can you list all the programs you have?,programs_overview,public,no
+What is the Toddlers Playgroup?,toddlers_playgroup,public,no
+Tell me about Toddlers Playgroup.,toddlers_playgroup,public,no
+Para saan ang Toddlers Playgroup?,toddlers_playgroup,public,no
+Ano ang ginagawa sa Toddlers Playgroup?,toddlers_playgroup,public,no
+Is there a program for toddlers?,toddlers_playgroup,public,no
+May playgroup ba para sa toddlers?,toddlers_playgroup,public,no
+Can you help me with this: what is the toddlers playgroup?,toddlers_playgroup,public,no
+Quick question: tell me about toddlers playgroup.,toddlers_playgroup,public,no
+"Just checking, para saan ang toddlers playgroup?",toddlers_playgroup,public,no
+Please tell me ano ang ginagawa sa toddlers playgroup??,toddlers_playgroup,public,no
+Can you tell me is there a program for toddlers??,toddlers_playgroup,public,no
+"Paki-explain, may playgroup ba para sa toddlers??",toddlers_playgroup,public,no
+Gusto kong malaman: what is the toddlers playgroup?,toddlers_playgroup,public,no
+"Pwede bang sabihin, tell me about toddlers playgroup.?",toddlers_playgroup,public,no
+"Hi, para saan ang toddlers playgroup??",toddlers_playgroup,public,no
+"Hello, is there a program for toddlers??",toddlers_playgroup,public,no
+"Pwede po bang malaman, what is the toddlers playgroup?",toddlers_playgroup,public,no
+"Pa-help naman, tell me about toddlers playgroup.",toddlers_playgroup,public,no
+What is Academic Tutorial?,academic_tutorial,public,no
+Tell me about Academic Tutorial.,academic_tutorial,public,no
+Ano ang Academic Tutorial?,academic_tutorial,public,no
+What does the Academic Tutorial program do?,academic_tutorial,public,no
+May regular academic tutorial ba kayo?,academic_tutorial,public,no
+Para saan ang Academic Tutorial?,academic_tutorial,public,no
+Can you help me with this: what is academic tutorial?,academic_tutorial,public,no
+Quick question: tell me about academic tutorial.,academic_tutorial,public,no
+"Just checking, ano ang academic tutorial?",academic_tutorial,public,no
+Please tell me what does the academic tutorial program do??,academic_tutorial,public,no
+Can you tell me may regular academic tutorial ba kayo??,academic_tutorial,public,no
+"Paki-explain, para saan ang academic tutorial??",academic_tutorial,public,no
+Gusto kong malaman: what is academic tutorial?,academic_tutorial,public,no
+"Pwede bang sabihin, tell me about academic tutorial.?",academic_tutorial,public,no
+"Hi, ano ang academic tutorial??",academic_tutorial,public,no
+"Hello, may regular academic tutorial ba kayo??",academic_tutorial,public,no
+"Pwede po bang malaman, what is academic tutorial?",academic_tutorial,public,no
+"Pa-help naman, tell me about academic tutorial.",academic_tutorial,public,no
+What is Examination Preparation?,examination_preparation,public,no
+Tell me about the exam preparation program.,examination_preparation,public,no
+Ano ang Examination Preparation?,examination_preparation,public,no
+May program ba for exam review?,examination_preparation,public,no
+Which program focuses on exams?,examination_preparation,public,no
+"Para sa exam preparation, anong program ang kailangan?",examination_preparation,public,no
+Can you help me with this: what is examination preparation?,examination_preparation,public,no
+Quick question: tell me about the exam preparation program.,examination_preparation,public,no
+"Just checking, ano ang examination preparation?",examination_preparation,public,no
+Please tell me may program ba for exam review??,examination_preparation,public,no
+Can you tell me which program focuses on exams??,examination_preparation,public,no
+"Paki-explain, para sa exam preparation, anong program ang kailangan??",examination_preparation,public,no
+Gusto kong malaman: what is examination preparation?,examination_preparation,public,no
+"Pwede bang sabihin, tell me about the exam preparation program.?",examination_preparation,public,no
+"Hi, ano ang examination preparation??",examination_preparation,public,no
+"Hello, which program focuses on exams??",examination_preparation,public,no
+"Pwede po bang malaman, what is examination preparation?",examination_preparation,public,no
+"Pa-help naman, tell me about the exam preparation program.",examination_preparation,public,no
+What is the difference between the programs?,program_comparison,public,no
+How are the three programs different?,program_comparison,public,no
+Ano ang pagkakaiba ng mga programs?,program_comparison,public,no
+Which program is different from the others?,program_comparison,public,no
+Can you compare the programs?,program_comparison,public,no
+"Paano nagkakaiba ang Toddlers, Academic Tutorial, at Exam Preparation?",program_comparison,public,no
+Can you help me with this: what is the difference between the programs?,program_comparison,public,no
+Quick question: how are the three programs different?,program_comparison,public,no
+"Just checking, ano ang pagkakaiba ng mga programs?",program_comparison,public,no
+Please tell me which program is different from the others??,program_comparison,public,no
+Can you tell me can you compare the programs??,program_comparison,public,no
+"Paki-explain, paano nagkakaiba ang toddlers, academic tutorial, at exam preparation??",program_comparison,public,no
+Gusto kong malaman: what is the difference between the programs?,program_comparison,public,no
+"Pwede bang sabihin, how are the three programs different??",program_comparison,public,no
+"Hi, ano ang pagkakaiba ng mga programs??",program_comparison,public,no
+"Hello, can you compare the programs??",program_comparison,public,no
+"Pwede po bang malaman, what is the difference between the programs?",program_comparison,public,no
+"Pa-help naman, how are the three programs different?",program_comparison,public,no
+What does Academic Tutorial include?,academic_features,public,no
+What features are included in Academic Tutorial?,academic_features,public,no
+Ano ang kasama sa Academic Tutorial?,academic_features,public,no
+What support can I get under Academic Tutorial?,academic_features,public,no
+Ano-anong academic support ang kasama?,academic_features,public,no
+What services are part of Academic Tutorial?,academic_features,public,no
+Can you help me with this: what does academic tutorial include?,academic_features,public,no
+Quick question: what features are included in academic tutorial?,academic_features,public,no
+"Just checking, ano ang kasama sa academic tutorial?",academic_features,public,no
+Please tell me what support can i get under academic tutorial??,academic_features,public,no
+Can you tell me ano-anong academic support ang kasama??,academic_features,public,no
+"Paki-explain, what services are part of academic tutorial??",academic_features,public,no
+Gusto kong malaman: what does academic tutorial include?,academic_features,public,no
+"Pwede bang sabihin, what features are included in academic tutorial??",academic_features,public,no
+"Hi, ano ang kasama sa academic tutorial??",academic_features,public,no
+"Hello, ano-anong academic support ang kasama??",academic_features,public,no
+"Pwede po bang malaman, what does academic tutorial include?",academic_features,public,no
+"Pa-help naman, what features are included in academic tutorial?",academic_features,public,no
+Do you offer SPED assistance?,sped,public,no
+Is SPED support available?,sped,public,no
+May SPED assistance ba kayo?,sped,public,no
+May support ba for learners with special educational needs?,sped,public,no
+Can Academic Tutorial include SPED support?,sped,public,no
+Available ba ang SPED support?,sped,public,no
+Can you help me with this: do you offer sped assistance?,sped,public,no
+Quick question: is sped support available?,sped,public,no
+"Just checking, may sped assistance ba kayo?",sped,public,no
+Please tell me may support ba for learners with special educational needs??,sped,public,no
+Can you tell me can academic tutorial include sped support??,sped,public,no
+"Paki-explain, available ba ang sped support??",sped,public,no
+Gusto kong malaman: do you offer sped assistance?,sped,public,no
+"Pwede bang sabihin, is sped support available??",sped,public,no
+"Hi, may sped assistance ba kayo??",sped,public,no
+"Hello, can academic tutorial include sped support??",sped,public,no
+"Pwede po bang malaman, do you offer sped assistance?",sped,public,no
+"Pa-help naman, is sped support available?",sped,public,no
+Do you provide homework assistance?,homework_assistance,public,no
+Can tutors help with homework?,homework_assistance,public,no
+May homework assistance ba?,homework_assistance,public,no
+Pwede bang humingi ng tulong sa assignments?,homework_assistance,public,no
+Does Academic Tutorial help with homework?,homework_assistance,public,no
+May help ba sa school homework?,homework_assistance,public,no
+Can you help me with this: do you provide homework assistance?,homework_assistance,public,no
+Quick question: can tutors help with homework?,homework_assistance,public,no
+"Just checking, may homework assistance ba?",homework_assistance,public,no
+Please tell me pwede bang humingi ng tulong sa assignments??,homework_assistance,public,no
+Can you tell me does academic tutorial help with homework??,homework_assistance,public,no
+"Paki-explain, may help ba sa school homework??",homework_assistance,public,no
+Gusto kong malaman: do you provide homework assistance?,homework_assistance,public,no
+"Pwede bang sabihin, can tutors help with homework??",homework_assistance,public,no
+"Hi, may homework assistance ba??",homework_assistance,public,no
+"Hello, does academic tutorial help with homework??",homework_assistance,public,no
+"Pwede po bang malaman, do you provide homework assistance?",homework_assistance,public,no
+"Pa-help naman, can tutors help with homework?",homework_assistance,public,no
+How much do the programs cost?,program_pricing,public,no
+What are your program prices?,program_pricing,public,no
+Magkano ang programs?,program_pricing,public,no
+How much is the tuition for each program?,program_pricing,public,no
+Pwede malaman ang pricing ng programs?,program_pricing,public,no
+What is the price of the tutorial programs?,program_pricing,public,no
+Can you help me with this: how much do the programs cost?,program_pricing,public,no
+Quick question: what are your program prices?,program_pricing,public,no
+"Just checking, magkano ang programs?",program_pricing,public,no
+Please tell me how much is the tuition for each program??,program_pricing,public,no
+Can you tell me pwede malaman ang pricing ng programs??,program_pricing,public,no
+"Paki-explain, what is the price of the tutorial programs??",program_pricing,public,no
+Gusto kong malaman: how much do the programs cost?,program_pricing,public,no
+"Pwede bang sabihin, what are your program prices??",program_pricing,public,no
+"Hi, magkano ang programs??",program_pricing,public,no
+"Hello, pwede malaman ang pricing ng programs??",program_pricing,public,no
+"Pwede po bang malaman, how much do the programs cost?",program_pricing,public,no
+"Pa-help naman, what are your program prices?",program_pricing,public,no
+What payment methods do you accept?,payment_methods,public,no
+How can I pay?,payment_methods,public,no
+Ano ang accepted payment methods?,payment_methods,public,no
+Anong payment options ang available?,payment_methods,public,no
+What ways can I use to pay?,payment_methods,public,no
+Paano ako makakapagbayad?,payment_methods,public,no
+Can you help me with this: what payment methods do you accept?,payment_methods,public,no
+Quick question: how can i pay?,payment_methods,public,no
+"Just checking, ano ang accepted payment methods?",payment_methods,public,no
+Please tell me anong payment options ang available??,payment_methods,public,no
+Can you tell me what ways can i use to pay??,payment_methods,public,no
+"Paki-explain, paano ako makakapagbayad??",payment_methods,public,no
+Gusto kong malaman: what payment methods do you accept?,payment_methods,public,no
+"Pwede bang sabihin, how can i pay??",payment_methods,public,no
+"Hi, ano ang accepted payment methods??",payment_methods,public,no
+"Hello, what ways can i use to pay??",payment_methods,public,no
+"Pwede po bang malaman, what payment methods do you accept?",payment_methods,public,no
+"Pa-help naman, how can i pay?",payment_methods,public,no
+Can I pay using GCash?,gcash,public,no
+Is GCash accepted?,gcash,public,no
+Pwede ba GCash ang payment?,gcash,public,no
+Tumatanggap ba kayo ng GCash?,gcash,public,no
+Can I use my GCash account to pay?,gcash,public,no
+Okay ba ang GCash for payment?,gcash,public,no
+Can you help me with this: can i pay using gcash?,gcash,public,no
+Quick question: is gcash accepted?,gcash,public,no
+"Just checking, pwede ba gcash ang payment?",gcash,public,no
+Please tell me tumatanggap ba kayo ng gcash??,gcash,public,no
+Can you tell me can i use my gcash account to pay??,gcash,public,no
+"Paki-explain, okay ba ang gcash for payment??",gcash,public,no
+Gusto kong malaman: can i pay using gcash?,gcash,public,no
+"Pwede bang sabihin, is gcash accepted??",gcash,public,no
+"Hi, pwede ba gcash ang payment??",gcash,public,no
+"Hello, can i use my gcash account to pay??",gcash,public,no
+"Pwede po bang malaman, can i pay using gcash?",gcash,public,no
+"Pa-help naman, is gcash accepted?",gcash,public,no
+Can I pay using SeaBank?,seabank,public,no
+Is SeaBank accepted?,seabank,public,no
+Pwede ba SeaBank ang gamitin?,seabank,public,no
+Tumatanggap ba kayo ng SeaBank?,seabank,public,no
+Can I pay through SeaBank?,seabank,public,no
+Allowed ba ang SeaBank payment?,seabank,public,no
+Can you help me with this: can i pay using seabank?,seabank,public,no
+Quick question: is seabank accepted?,seabank,public,no
+"Just checking, pwede ba seabank ang gamitin?",seabank,public,no
+Please tell me tumatanggap ba kayo ng seabank??,seabank,public,no
+Can you tell me can i pay through seabank??,seabank,public,no
+"Paki-explain, allowed ba ang seabank payment??",seabank,public,no
+Gusto kong malaman: can i pay using seabank?,seabank,public,no
+"Pwede bang sabihin, is seabank accepted??",seabank,public,no
+"Hi, pwede ba seabank ang gamitin??",seabank,public,no
+"Hello, can i pay through seabank??",seabank,public,no
+"Pwede po bang malaman, can i pay using seabank?",seabank,public,no
+"Pa-help naman, is seabank accepted?",seabank,public,no
+Can I pay using BDO?,bdo,public,no
+Is BDO accepted for payment?,bdo,public,no
+Pwede ba BDO ang payment?,bdo,public,no
+Tumatanggap ba kayo ng BDO?,bdo,public,no
+Can I pay through BDO?,bdo,public,no
+Okay ba ang BDO for payment?,bdo,public,no
+Can you help me with this: can i pay using bdo?,bdo,public,no
+Quick question: is bdo accepted for payment?,bdo,public,no
+"Just checking, pwede ba bdo ang payment?",bdo,public,no
+Please tell me tumatanggap ba kayo ng bdo??,bdo,public,no
+Can you tell me can i pay through bdo??,bdo,public,no
+"Paki-explain, okay ba ang bdo for payment??",bdo,public,no
+Gusto kong malaman: can i pay using bdo?,bdo,public,no
+"Pwede bang sabihin, is bdo accepted for payment??",bdo,public,no
+"Hi, pwede ba bdo ang payment??",bdo,public,no
+"Hello, can i pay through bdo??",bdo,public,no
+"Pwede po bang malaman, can i pay using bdo?",bdo,public,no
+"Pa-help naman, is bdo accepted for payment?",bdo,public,no
+Can I get a refund?,refund_policy,public,no
+Are payments refundable?,refund_policy,public,no
+Pwede bang ma-refund ang payment?,refund_policy,public,no
+May refund ba kapag nagbayad na?,refund_policy,public,no
+Can I request my money back?,refund_policy,public,no
+Refundable ba ang bayad?,refund_policy,public,no
+Can you help me with this: can i get a refund?,refund_policy,public,no
+Quick question: are payments refundable?,refund_policy,public,no
+"Just checking, pwede bang ma-refund ang payment?",refund_policy,public,no
+Please tell me may refund ba kapag nagbayad na??,refund_policy,public,no
+Can you tell me can i request my money back??,refund_policy,public,no
+"Paki-explain, refundable ba ang bayad??",refund_policy,public,no
+Gusto kong malaman: can i get a refund?,refund_policy,public,no
+"Pwede bang sabihin, are payments refundable??",refund_policy,public,no
+"Hi, pwede bang ma-refund ang payment??",refund_policy,public,no
+"Hello, can i request my money back??",refund_policy,public,no
+"Pwede po bang malaman, can i get a refund?",refund_policy,public,no
+What happens to my payment if I decide not to continue?,refund_policy,public,no
+Can my payment be transferred?,transfer_payment,public,no
+Can I transfer my paid session to someone else?,transfer_payment,public,no
+Pwede bang i-transfer ang payment?,transfer_payment,public,no
+Transferable ba ang payment?,transfer_payment,public,no
+Can a payment be transferred instead of refunded?,transfer_payment,public,no
+Puwede bang ilipat ang paid session?,transfer_payment,public,no
+Can you help me with this: can my payment be transferred?,transfer_payment,public,no
+Quick question: can i transfer my paid session to someone else?,transfer_payment,public,no
+"Just checking, pwede bang i-transfer ang payment?",transfer_payment,public,no
+Please tell me transferable ba ang payment??,transfer_payment,public,no
+Can you tell me can a payment be transferred instead of refunded??,transfer_payment,public,no
+"Paki-explain, puwede bang ilipat ang paid session??",transfer_payment,public,no
+Gusto kong malaman: can my payment be transferred?,transfer_payment,public,no
+"Pwede bang sabihin, can i transfer my paid session to someone else??",transfer_payment,public,no
+"Hi, pwede bang i-transfer ang payment??",transfer_payment,public,no
+"Hello, can a payment be transferred instead of refunded??",transfer_payment,public,no
+"Pwede po bang malaman, can my payment be transferred?",transfer_payment,public,no
+"Pa-help naman, can i transfer my paid session to someone else?",transfer_payment,public,no
+When is payment due?,payment_due,public,no
+When should I pay?,payment_due,public,no
+Kailan ang payment due?,payment_due,public,no
+May fixed payment date ba?,payment_due,public,no
+Kailan kailangan bayaran ang session?,payment_due,public,no
+When do I need to settle the payment?,payment_due,public,no
+Can you help me with this: when is payment due?,payment_due,public,no
+Quick question: when should i pay?,payment_due,public,no
+"Just checking, kailan ang payment due?",payment_due,public,no
+Please tell me may fixed payment date ba??,payment_due,public,no
+Can you tell me kailan kailangan bayaran ang session??,payment_due,public,no
+"Paki-explain, when do i need to settle the payment??",payment_due,public,no
+Gusto kong malaman: when is payment due?,payment_due,public,no
+"Pwede bang sabihin, when should i pay??",payment_due,public,no
+"Hi, kailan ang payment due??",payment_due,public,no
+"Hello, kailan kailangan bayaran ang session??",payment_due,public,no
+"Pwede po bang malaman, when is payment due?",payment_due,public,no
+"Pa-help naman, when should i pay?",payment_due,public,no
+What is the attendance policy for Toddlers Playgroup?,playgroup_attendance,public,no
+How does attendance work for Playgroup?,playgroup_attendance,public,no
+Ano ang attendance policy ng Playgroup?,playgroup_attendance,public,no
+What happens if a toddler misses Playgroup?,playgroup_attendance,public,no
+Paano ang attendance sa Toddlers Playgroup?,playgroup_attendance,public,no
+May special attendance rule ba for Playgroup?,playgroup_attendance,public,no
+Can you help me with this: what is the attendance policy for toddlers playgroup?,playgroup_attendance,public,no
+Quick question: how does attendance work for playgroup?,playgroup_attendance,public,no
+"Just checking, ano ang attendance policy ng playgroup?",playgroup_attendance,public,no
+Please tell me what happens if a toddler misses playgroup??,playgroup_attendance,public,no
+Can you tell me paano ang attendance sa toddlers playgroup??,playgroup_attendance,public,no
+"Paki-explain, may special attendance rule ba for playgroup??",playgroup_attendance,public,no
+Gusto kong malaman: what is the attendance policy for toddlers playgroup?,playgroup_attendance,public,no
+"Pwede bang sabihin, how does attendance work for playgroup??",playgroup_attendance,public,no
+"Hi, ano ang attendance policy ng playgroup??",playgroup_attendance,public,no
+"Hello, paano ang attendance sa toddlers playgroup??",playgroup_attendance,public,no
+"Pwede po bang malaman, what is the attendance policy for toddlers playgroup?",playgroup_attendance,public,no
+"Pa-help naman, how does attendance work for playgroup?",playgroup_attendance,public,no
+What is the attendance policy for Academic Tutorial?,tutorial_attendance,public,no
+How does attendance work for Academic Tutorial?,tutorial_attendance,public,no
+Ano ang attendance policy ng Academic Tutorial?,tutorial_attendance,public,no
+What happens if I miss an Academic Tutorial session?,tutorial_attendance,public,no
+Paano ang attendance sa tutorial?,tutorial_attendance,public,no
+May attendance rule ba for Academic Tutorial?,tutorial_attendance,public,no
+Can you help me with this: what is the attendance policy for academic tutorial?,tutorial_attendance,public,no
+Quick question: how does attendance work for academic tutorial?,tutorial_attendance,public,no
+"Just checking, ano ang attendance policy ng academic tutorial?",tutorial_attendance,public,no
+Please tell me what happens if i miss an academic tutorial session??,tutorial_attendance,public,no
+Can you tell me paano ang attendance sa tutorial??,tutorial_attendance,public,no
+"Paki-explain, may attendance rule ba for academic tutorial??",tutorial_attendance,public,no
+Gusto kong malaman: what is the attendance policy for academic tutorial?,tutorial_attendance,public,no
+"Pwede bang sabihin, how does attendance work for academic tutorial??",tutorial_attendance,public,no
+"Hi, ano ang attendance policy ng academic tutorial??",tutorial_attendance,public,no
+"Hello, paano ang attendance sa tutorial??",tutorial_attendance,public,no
+"Pwede po bang malaman, what is the attendance policy for academic tutorial?",tutorial_attendance,public,no
+"Pa-help naman, how does attendance work for academic tutorial?",tutorial_attendance,public,no
+What is a pre-enrollment assessment?,pre_enrollment_assessment,public,no
+Why do you assess learners before enrollment?,pre_enrollment_assessment,public,no
+Ano ang pre-enrollment assessment?,pre_enrollment_assessment,public,no
+Kailangan ba ng assessment bago mag-enroll?,pre_enrollment_assessment,public,no
+What happens during the pre-enrollment assessment?,pre_enrollment_assessment,public,no
+Para saan ang assessment bago enrollment?,pre_enrollment_assessment,public,no
+Can you help me with this: what is a pre-enrollment assessment?,pre_enrollment_assessment,public,no
+Quick question: why do you assess learners before enrollment?,pre_enrollment_assessment,public,no
+"Just checking, ano ang pre-enrollment assessment?",pre_enrollment_assessment,public,no
+Please tell me kailangan ba ng assessment bago mag-enroll??,pre_enrollment_assessment,public,no
+Can you tell me what happens during the pre-enrollment assessment??,pre_enrollment_assessment,public,no
+"Paki-explain, para saan ang assessment bago enrollment??",pre_enrollment_assessment,public,no
+Gusto kong malaman: what is a pre-enrollment assessment?,pre_enrollment_assessment,public,no
+"Pwede bang sabihin, why do you assess learners before enrollment??",pre_enrollment_assessment,public,no
+"Hi, ano ang pre-enrollment assessment??",pre_enrollment_assessment,public,no
+"Hello, what happens during the pre-enrollment assessment??",pre_enrollment_assessment,public,no
+"Pwede po bang malaman, what is a pre-enrollment assessment?",pre_enrollment_assessment,public,no
+"Pa-help naman, why do you assess learners before enrollment?",pre_enrollment_assessment,public,no
+Where are you located?,location,public,no
+Where is Bee Bright Tutorial Center?,location,public,no
+Saan located ang tutorial center?,location,public,no
+What is your location?,location,public,no
+Saan ang center ninyo?,location,public,no
+Can you tell me where your center is?,location,public,no
+Can you help me with this: where are you located?,location,public,no
+Quick question: where is bee bright tutorial center?,location,public,no
+"Just checking, saan located ang tutorial center?",location,public,no
+Please tell me what is your location??,location,public,no
+Can you tell me saan ang center ninyo??,location,public,no
+"Paki-explain, can you tell me where your center is??",location,public,no
+Gusto kong malaman: where are you located?,location,public,no
+"Pwede bang sabihin, where is bee bright tutorial center??",location,public,no
+"Hi, saan located ang tutorial center??",location,public,no
+"Hello, saan ang center ninyo??",location,public,no
+"Pwede po bang malaman, where are you located?",location,public,no
+"Pa-help naman, where is bee bright tutorial center?",location,public,no
+What are your operating hours?,hours,public,no
+When are you open?,hours,public,no
+Ano ang operating hours ninyo?,hours,public,no
+Anong oras kayo bukas?,hours,public,no
+What time does the center open and close?,hours,public,no
+Kailan kayo available onsite?,hours,public,no
+Can you help me with this: what are your operating hours?,hours,public,no
+Quick question: when are you open?,hours,public,no
+"Just checking, ano ang operating hours ninyo?",hours,public,no
+Please tell me anong oras kayo bukas??,hours,public,no
+Can you tell me what time does the center open and close??,hours,public,no
+"Paki-explain, kailan kayo available onsite??",hours,public,no
+Gusto kong malaman: what are your operating hours?,hours,public,no
+"Pwede bang sabihin, when are you open??",hours,public,no
+"Hi, ano ang operating hours ninyo??",hours,public,no
+"Hello, what time does the center open and close??",hours,public,no
+"Pwede po bang malaman, what are your operating hours?",hours,public,no
+"Pa-help naman, when are you open?",hours,public,no
+What is your email address?,email,public,no
+How can I email the center?,email,public,no
+Ano ang email address ninyo?,email,public,no
+May official email ba kayo?,email,public,no
+What email should I use to contact you?,email,public,no
+Saan ako puwedeng mag-email?,email,public,no
+Can you help me with this: what is your email address?,email,public,no
+Quick question: how can i email the center?,email,public,no
+"Just checking, ano ang email address ninyo?",email,public,no
+Please tell me may official email ba kayo??,email,public,no
+Can you tell me what email should i use to contact you??,email,public,no
+"Paki-explain, saan ako puwedeng mag-email??",email,public,no
+Gusto kong malaman: what is your email address?,email,public,no
+"Pwede bang sabihin, how can i email the center??",email,public,no
+"Hi, ano ang email address ninyo??",email,public,no
+"Hello, what email should i use to contact you??",email,public,no
+"Pwede po bang malaman, what is your email address?",email,public,no
+"Pa-help naman, how can i email the center?",email,public,no
+Can I track my enrollment without logging in?,track_enrollment,public,no
+Can I check enrollment progress without an account?,track_enrollment,public,no
+Pwede bang i-track ang enrollment kahit hindi logged in?,track_enrollment,public,no
+Can I track enrollment as a visitor?,track_enrollment,public,no
+How can I track my enrollment without signing in?,track_enrollment,public,no
+May enrollment tracking ba without login?,track_enrollment,public,no
+Can you help me with this: can i track my enrollment without logging in?,track_enrollment,public,no
+Quick question: can i check enrollment progress without an account?,track_enrollment,public,no
+"Just checking, pwede bang i-track ang enrollment kahit hindi logged in?",track_enrollment,public,no
+Please tell me can i track enrollment as a visitor??,track_enrollment,public,no
+Can you tell me how can i track my enrollment without signing in??,track_enrollment,public,no
+"Paki-explain, may enrollment tracking ba without login??",track_enrollment,public,no
+Gusto kong malaman: can i track my enrollment without logging in?,track_enrollment,public,no
+"Pwede bang sabihin, can i check enrollment progress without an account??",track_enrollment,public,no
+"Hi, pwede bang i-track ang enrollment kahit hindi logged in??",track_enrollment,public,no
+"Hello, how can i track my enrollment without signing in??",track_enrollment,public,no
+"Pwede po bang malaman, can i track my enrollment without logging in?",track_enrollment,public,no
+"Pa-help naman, can i check enrollment progress without an account?",track_enrollment,public,no
+Do you have a mobile app?,mobile_app,public,no
+Is there a Bee Bright mobile app?,mobile_app,public,no
+May mobile app ba kayo?,mobile_app,public,no
+Can I use a phone app for the service?,mobile_app,public,no
+Is the system available as a mobile app?,mobile_app,public,no
+May app ba ang Bee Bright?,mobile_app,public,no
+Can you help me with this: do you have a mobile app?,mobile_app,public,no
+Quick question: is there a bee bright mobile app?,mobile_app,public,no
+"Just checking, may mobile app ba kayo?",mobile_app,public,no
+Please tell me can i use a phone app for the service??,mobile_app,public,no
+Can you tell me is the system available as a mobile app??,mobile_app,public,no
+"Paki-explain, may app ba ang bee bright??",mobile_app,public,no
+Gusto kong malaman: do you have a mobile app?,mobile_app,public,no
+"Pwede bang sabihin, is there a bee bright mobile app??",mobile_app,public,no
+"Hi, may mobile app ba kayo??",mobile_app,public,no
+"Hello, is the system available as a mobile app??",mobile_app,public,no
+"Pwede po bang malaman, do you have a mobile app?",mobile_app,public,no
+"Pa-help naman, is there a bee bright mobile app?",mobile_app,public,no
+Do you offer online classes?,online_classes,public,no
+Are online classes available?,online_classes,public,no
+May online classes ba?,online_classes,public,no
+Can I attend remotely?,online_classes,public,no
+Online ba ang classes ninyo?,online_classes,public,no
+Pwede bang remote ang tutorial?,online_classes,public,no
+Can you help me with this: do you offer online classes?,online_classes,public,no
+Quick question: are online classes available?,online_classes,public,no
+"Just checking, may online classes ba?",online_classes,public,no
+Please tell me can i attend remotely??,online_classes,public,no
+Can you tell me online ba ang classes ninyo??,online_classes,public,no
+"Paki-explain, pwede bang remote ang tutorial??",online_classes,public,no
+Gusto kong malaman: do you offer online classes?,online_classes,public,no
+"Pwede bang sabihin, are online classes available??",online_classes,public,no
+"Hi, may online classes ba??",online_classes,public,no
+"Hello, online ba ang classes ninyo??",online_classes,public,no
+"Pwede po bang malaman, do you offer online classes?",online_classes,public,no
+Are the classes onsite only?,online_classes,public,no
+Are the classes onsite?,onsite_only,public,no
+Are your programs onsite only?,onsite_only,public,no
+Onsite lang ba ang classes?,onsite_only,public,no
+Do I need to go to the center?,onsite_only,public,no
+Physical attendance ba ang programs?,onsite_only,public,no
+Face-to-face lang ba?,onsite_only,public,no
+Can you help me with this: are the classes onsite?,onsite_only,public,no
+Quick question: are your programs onsite only?,onsite_only,public,no
+"Just checking, onsite lang ba ang classes?",onsite_only,public,no
+Please tell me do i need to go to the center??,onsite_only,public,no
+Can you tell me physical attendance ba ang programs??,onsite_only,public,no
+"Paki-explain, face-to-face lang ba??",onsite_only,public,no
+Gusto kong malaman: are the classes onsite?,onsite_only,public,no
+"Pwede bang sabihin, are your programs onsite only??",onsite_only,public,no
+"Hi, onsite lang ba ang classes??",onsite_only,public,no
+"Hello, physical attendance ba ang programs??",onsite_only,public,no
+"Pwede po bang malaman, are the classes onsite?",onsite_only,public,no
+Are all your classes conducted in person?,onsite_only,public,no
+Is child-safety detection active without logging in?,child_safety,public,no
+Does safety protection work for visitors?,child_safety,public,no
+Active ba ang child-safety detection kahit walang login?,child_safety,public,no
+Can the safety system work before sign-in?,child_safety,public,no
+Does child safety still operate for public users?,child_safety,public,no
+Gumagana ba ang child safety kahit visitor lang?,child_safety,public,no
+Can you help me with this: is child-safety detection active without logging in?,child_safety,public,no
+Quick question: does safety protection work for visitors?,child_safety,public,no
+"Just checking, active ba ang child-safety detection kahit walang login?",child_safety,public,no
+Please tell me can the safety system work before sign-in??,child_safety,public,no
+Can you tell me does child safety still operate for public users??,child_safety,public,no
+"Paki-explain, gumagana ba ang child safety kahit visitor lang??",child_safety,public,no
+Gusto kong malaman: is child-safety detection active without logging in?,child_safety,public,no
+"Pwede bang sabihin, does safety protection work for visitors??",child_safety,public,no
+"Hi, active ba ang child-safety detection kahit walang login??",child_safety,public,no
+"Hello, does child safety still operate for public users??",child_safety,public,no
+"Pwede po bang malaman, is child-safety detection active without logging in?",child_safety,public,no
+"Pa-help naman, does safety protection work for visitors?",child_safety,public,no
+Can you show me my account information?,account_data,public,yes
+Can you access my account details?,account_data,public,yes
+Makikita mo ba ang account information ko?,account_data,public,yes
+Can you check my private account data?,account_data,public,yes
+Pwede bang makita ang account details ko?,account_data,public,yes
+Can you pull up my account?,account_data,public,yes
+Can you help me with this: can you show me my account information?,account_data,public,yes
+Quick question: can you access my account details?,account_data,public,yes
+"Just checking, makikita mo ba ang account information ko?",account_data,public,yes
+Please tell me can you check my private account data??,account_data,public,yes
+Can you tell me pwede bang makita ang account details ko??,account_data,public,yes
+"Paki-explain, can you pull up my account??",account_data,public,yes
+Gusto kong malaman: can you show me my account information?,account_data,public,yes
+"Pwede bang sabihin, can you access my account details??",account_data,public,yes
+"Hi, makikita mo ba ang account information ko??",account_data,public,yes
+"Hello, pwede bang makita ang account details ko??",account_data,public,yes
+"Pwede po bang malaman, can you show me my account information?",account_data,public,yes
+Do you have access to my account information?,account_data,public,yes
+Can you check my enrollment details?,personal_data,public,yes
+Can you show my personal enrollment information?,personal_data,public,yes
+Pwede bang makita ang personal enrollment details ko?,personal_data,public,yes
+Can you access my private information?,personal_data,public,yes
+Makikita ba ang personal data ko?,personal_data,public,yes
+Can you check my private records?,personal_data,public,yes
+Can you help me with this: can you check my enrollment details?,personal_data,public,yes
+Quick question: can you show my personal enrollment information?,personal_data,public,yes
+"Just checking, pwede bang makita ang personal enrollment details ko?",personal_data,public,yes
+Please tell me can you access my private information??,personal_data,public,yes
+Can you tell me makikita ba ang personal data ko??,personal_data,public,yes
+"Paki-explain, can you check my private records??",personal_data,public,yes
+Gusto kong malaman: can you check my enrollment details?,personal_data,public,yes
+"Pwede bang sabihin, can you show my personal enrollment information??",personal_data,public,yes
+"Hi, pwede bang makita ang personal enrollment details ko??",personal_data,public,yes
+"Hello, makikita ba ang personal data ko??",personal_data,public,yes
+"Pwede po bang malaman, can you check my enrollment details?",personal_data,public,yes
+"Pa-help naman, can you show my personal enrollment information?",personal_data,public,yes
+Can I talk to a human?,human_support,public,yes
+Can I speak with a staff member?,human_support,public,yes
+Pwede ba akong makausap ng human support?,human_support,public,yes
+Can I chat with a real person?,human_support,public,yes
+May human support ba?,human_support,public,yes
+Puwede bang may staff na kausapin?,human_support,public,yes
+Can you help me with this: can i talk to a human?,human_support,public,yes
+Quick question: can i speak with a staff member?,human_support,public,yes
+"Just checking, pwede ba akong makausap ng human support?",human_support,public,yes
+Please tell me can i chat with a real person??,human_support,public,yes
+Can you tell me may human support ba??,human_support,public,yes
+"Paki-explain, puwede bang may staff na kausapin??",human_support,public,yes
+Gusto kong malaman: can i talk to a human?,human_support,public,yes
+"Pwede bang sabihin, can i speak with a staff member??",human_support,public,yes
+"Hi, pwede ba akong makausap ng human support??",human_support,public,yes
+"Hello, may human support ba??",human_support,public,yes
+"Pwede po bang malaman, can i talk to a human?",human_support,public,yes
+Is it possible to speak with someone from your support team?,human_support,public,yes
+Can I contact a staff member?,human_agent,public,yes
+Can I reach a human agent?,human_agent,public,yes
+Pwede ba akong mag-contact ng staff?,human_agent,public,yes
+Can someone from the center assist me directly?,human_agent,public,yes
+May staff ba akong puwedeng makausap?,human_agent,public,yes
+Can I talk directly to an employee?,human_agent,public,yes
+Can you help me with this: can i contact a staff member?,human_agent,public,yes
+Quick question: can i reach a human agent?,human_agent,public,yes
+"Just checking, pwede ba akong mag-contact ng staff?",human_agent,public,yes
+Please tell me can someone from the center assist me directly??,human_agent,public,yes
+Can you tell me may staff ba akong puwedeng makausap??,human_agent,public,yes
+"Paki-explain, can i talk directly to an employee??",human_agent,public,yes
+Gusto kong malaman: can i contact a staff member?,human_agent,public,yes
+"Pwede bang sabihin, can i reach a human agent??",human_agent,public,yes
+"Hi, pwede ba akong mag-contact ng staff??",human_agent,public,yes
+"Hello, may staff ba akong puwedeng makausap??",human_agent,public,yes
+"Pwede po bang malaman, can i contact a staff member?",human_agent,public,yes
+"Pa-help naman, can i reach a human agent?",human_agent,public,yes

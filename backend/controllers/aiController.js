@@ -14,7 +14,14 @@ const AIResponseDatasets = require('../ai_training/aiResponseDatasets');
 const { logAiInteraction } = require('../utils/aiAuditService');
 const { screenMessageForDistress, getChildSafetyMessage } = require('../utils/childSafetyFilter');
 const { createEscalation } = require('../utils/escalationService');
-const { detectExplicitHandoffTrigger, isUnhelpfulReply, getHandoffAcknowledgement } = require('../utils/handoffService');
+const {
+  detectExplicitHandoffTrigger, isUnhelpfulReply, getHandoffAcknowledgement,
+  detectConcernFlowState, parseConcernFields, readEmbeddedReason, readEmbeddedExplanation,
+  concernAskDetails, concernAskExplanation, concernAskReason, concernConfirm,
+  concernSubmitted, concernCancelled, isConcernCancel, isConcernYes, isConcernNo,
+  MAX_REASON_LEN, MAX_EXPLANATION_LEN,
+} = require('../utils/handoffService');
+const { predictIntent, INTENT_CLASSIFIER_CONFIDENCE_THRESHOLD } = require('../utils/intentClassifierClient');
 const {
   TUTORING_ENABLED,
   detectTutoringIntent,
@@ -1461,7 +1468,15 @@ function getTutorAccountCreationReply(languageProfile = 'english') {
 }
 
 function isLocationQuestion(normalized) {
-  return /(location|address|located|locate|barangay|dagupan|visit|\bmap\b|find bee ?bright|saan (ang |ba )?(ang )?bee ?bright|nasaan (ang )?bee ?bright|where('?s| is) bee ?bright)/.test(normalized);
+  if (/(location|located|locate|barangay|dagupan|visit|\bmap\b|find bee ?bright|saan (ang |ba )?(ang )?bee ?bright|nasaan (ang )?bee ?bright|where('?s| is) bee ?bright)/.test(normalized)) {
+    return true;
+  }
+  // Bare "address" alone can mean physical location, but "email address" is a contact-info
+  // question, not a location one — don't let it fall into the location reply (Task 35 Fix 1).
+  if (/\baddress\b/.test(normalized)) {
+    return !/\bemail\b/.test(normalized);
+  }
+  return false;
 }
 
 function isMaterialsQuestion(normalized) {
@@ -1567,10 +1582,14 @@ function isProgramComparisonQuestion(normalized) {
  * 22e — the comparison intent gets its OWN reply: a one-line differentiator per program.
  * If the user names exactly two programs, answers just those two. Sourced from
  * PROGRAM_CATALOG (age / format / focus), not invented.
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 34: lets the classifier shortcut
+ *   (already confident this message is program_comparison) reach this same reply for
+ *   phrasings the regex below misses. The one existing call site omits it, so its
+ *   behavior is unchanged.
  */
-function getProgramComparisonReply(message, languageProfile = 'english') {
+function getProgramComparisonReply(message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isProgramComparisonQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isProgramComparisonQuestion(normalized)) {
     return null;
   }
 
@@ -2288,9 +2307,13 @@ async function getPaymentStatusReply(user, message, languageProfile = 'english')
   );
 }
 
-async function getEnrollmentStatisticsReply(user, message, languageProfile = 'english') {
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 34 Batch 3: lets the classifier
+ *   shortcut reach this already admin-gated handler for phrasings the regex misses.
+ */
+async function getEnrollmentStatisticsReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isEnrollmentStatisticsQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isEnrollmentStatisticsQuestion(normalized)) {
     return null;
   }
 
@@ -2524,9 +2547,12 @@ async function getProgramEnrollmentCountReply(user, message, languageProfile = '
 // "How many students do we have" — counts ENROLLED CHILDREN (approved/active enrollments),
 // matching dashboardController. Children are not User accounts in the guardian flow, so
 // counting User{role:'student'} would under-report (Task 15).
-async function getStudentCountReply(user, message, languageProfile = 'english') {
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 34 Batch 3: same skip pattern.
+ */
+async function getStudentCountReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isStudentCountQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isStudentCountQuestion(normalized)) {
     return null;
   }
 
@@ -2544,9 +2570,12 @@ async function getStudentCountReply(user, message, languageProfile = 'english') 
   );
 }
 
-async function getTutorCountReply(user, message, languageProfile = 'english') {
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 34 Batch 3: same skip pattern.
+ */
+async function getTutorCountReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isTutorCountQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isTutorCountQuestion(normalized)) {
     return null;
   }
 
@@ -3606,9 +3635,15 @@ async function getIntentKeywordDatasetReply(user, message, languageProfile = 'en
   return null;
 }
 
-async function getStudentGradesReply(user, message, languageProfile = 'english') {
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 34 Batch 2: lets the trained
+ *   classifier shortcut reach this already-scoped handler for grades/progress phrasings
+ *   isStudentGradesQuestion's regex misses. Existing call sites omit this option, so
+ *   their behavior is unchanged.
+ */
+async function getStudentGradesReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isStudentGradesQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isStudentGradesQuestion(normalized)) {
     return null;
   }
 
@@ -3648,9 +3683,15 @@ async function getStudentGradesReply(user, message, languageProfile = 'english')
   );
 }
 
-async function getTutorContactReply(user, message, languageProfile = 'english') {
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 34 Batch 2: lets the trained
+ *   classifier shortcut reach this already-scoped handler for contact_tutor/parent_contact
+ *   phrasings isTutorContactQuestion's regex misses. Existing call sites omit this option,
+ *   so their behavior is unchanged.
+ */
+async function getTutorContactReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isTutorContactQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isTutorContactQuestion(normalized)) {
     return null;
   }
 
@@ -3677,9 +3718,17 @@ function isTicketStatusQuestion(normalized) {
   return aboutRequest && askingStatus;
 }
 
-async function getTicketStatusReply(user, message, languageProfile = 'english') {
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts] - Task 32: the trained intent classifier
+ *   already establishes "this message is about ticket status" via its own confidence
+ *   threshold, so its shortcut (tryClassifierShortcut) passes skipKeywordCheck to reach
+ *   this same already-scoped handler for phrasings the regex below would otherwise miss.
+ *   Both existing call sites (getResolvedReply / getOllamaBypassReply) omit this option,
+ *   so their behavior is byte-for-byte unchanged.
+ */
+async function getTicketStatusReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
-  if (!isTicketStatusQuestion(normalized)) {
+  if (!opts.skipKeywordCheck && !isTicketStatusQuestion(normalized)) {
     return null;
   }
 
@@ -3764,6 +3813,324 @@ async function getTicketStatusReply(user, message, languageProfile = 'english') 
     `May ${rows.length} kang support requests: ${counts.fil.join(' at ')}.${tail.fil}`,
     `May ${rows.length} kang support requests: ${counts.tgl.join(' at ')}.${tail.tgl}`
   );
+}
+
+// ── Task 32/34 Part 4 — trained intent classifier (Python microservice), additional
+// signal only, wired alongside the existing weighted keyword matcher ────────────────
+//
+// Deliberately NOT a mapping for all 129 intents the classifier was trained on: only
+// intents routed here go to a handler that is (a) already standalone/exported (or, for
+// a couple of "dumb" reply-text functions with no self-gating, has that gate replicated
+// exactly at the call site below — noted per route), (b) already fully role/account-
+// scoped internally OR touches no account data at all, and (c) read-only / side-effect-
+// free, so calling it speculatively on a confident-but-maybe-wrong prediction can never
+// leak data or take an unwanted action. Every other trained intent is simply not looked
+// up, so those messages fall through to the existing pipeline completely unchanged,
+// exactly as if this classifier were never called.
+//
+// Deliberately EXCLUDED (Task 34 guardrails — do not add):
+//  - `raise_concern` and anything ticket-creation related: Task 30 gates ticket
+//    creation behind explicit phrasing + an explicit yes/no confirmation on purpose; a
+//    second, statistical trigger would undercut that guardrail.
+//  - Anything safety/distress-related (child_safety, safety_detection, crisis_support,
+//    crisis_hotline, student_distress, distress_detection, student_discussion,
+//    student_safety): these stay on Task 3's dedicated, carefully-tuned detection path
+//    only, never routed through the general classifier.
+//  - Anything that mutates a record — this is read-only dispatch expansion only.
+//  - Tutor own-student-scoped intents (`student_privacy`, `at_risk`, `at_risk_details`,
+//    `at_risk_other`, `mark_attendance`) and ALL admin system-wide oversight intents
+//    (`escalation_dashboard`, `notification_bell`, `requester_information/name/email`,
+//    `escalation_status`, `remarks_oversight`, `ratings_oversight`, `system_wide_remarks`,
+//    `audit_log`, `remarks_history`, `at_risk_students`, `at_risk_system_wide`,
+//    `tutor_performance`, `tutor_oversight`, `tutor_complaints`, `complaint_management`,
+//    `tutor_ratings`) — audited in Task 34 Batch 3 and found to have NO existing
+//    chat-reply handler at all (only REST `(req,res)` controllers that return JSON to a
+//    dashboard, or no implementation whatsoever). Wiring them would mean writing new
+//    business logic, not wiring an existing one — out of scope here. `mark_attendance`
+//    is additionally excluded as a write action regardless of handler availability.
+//  - `student_distress`, `distress_detection`, `student_discussion` — Batch 3's brief
+//    proposed these as tutor-oversight questions ("is my student showing distress"), but
+//    no such oversight handler exists, and all three are the exact intent names Task 3's
+//    dedicated safety-screening path already owns exclusively (see the safety exclusion
+//    above). Per Batch 3's own instruction ("if these overlap with Task 3's trigger,
+//    exclude and flag rather than deciding unilaterally") — excluded and flagged in the
+//    Batch 3 report rather than wired.
+//
+// `route` values and what each one does:
+//  'ticket_status'        -> getTicketStatusReply (Task 32) — own account's own tickets.
+//  'program_comparison'   -> getProgramComparisonReply — static program-catalog text.
+//  'class_format'         -> getClassFormatReply — fixed "onsite only" static text.
+//  'academic_subfeature'  -> getAcademicSubFeatureReply — static text; getAcademicSub
+//    FeatureReply itself does not self-gate (the two existing call sites both gate on
+//    "public or parent" externally), so that same gate is replicated here explicitly.
+//    Low-risk: it is audience-targeting for a marketing blurb, not an access check on
+//    any account/personal data — replicating it exactly does not weaken anything.
+//  'dataset'               -> getContextualDatasetResponse — static aiResponseDatasets.js
+//    lookup, already scoped by the caller-supplied role string, never touches the DB.
+//    Verified empirically (Task 34) against each mapped intent's canonical phrasing.
+//  'grades'                -> getStudentGradesReply — own grades only (Grade.find by
+//    req.user._id); role-gated internally, generic text for any non-student.
+//  'grounded_grades'/'grounded_schedule'/'grounded_enrollment'/'grounded_payments' ->
+//    resolveGroundedContextForTopic(user, message, topic) — the SAME data-fetching
+//    function the live grounded-chat pipeline already calls (after its own
+//    detectGroundedTopic keyword gate). It branches strictly on req.user.role and reads
+//    only that user's own records — a parent's read is scoped to children linked via
+//    Enrollment.parent (resolveParentChild only ever narrows within that set, and asks
+//    to disambiguate rather than guessing when more than one child matches). Batch 2
+//    bypasses the *gate* (detectGroundedTopic's regexes) only, never the *scoping*
+//    inside the builder — same principle as `skipKeywordCheck` elsewhere in this file.
+//  'materials_by_role'    -> getMaterialsReplyByRole — no DB access at all, pure static
+//    text keyed only on req.user.role.
+//  'tutor_contact'         -> getTutorContactReply — own assigned tutor only (Schedule
+//    lookup by req.user._id) for a student; generic non-personal text for every other
+//    role. Used ONLY by `contact_tutor` (student-facing) — untouched by Task 36.
+//  'grounded_tutor_contact' -> resolveGroundedContextForTopic(user, message,
+//    'tutor_contact') — Task 36: a parent's own child's assigned tutor (was the flagged
+//    gap from Batch 2). Same Schedule -> User lookup as getStudentTutorContactReply,
+//    just scoped to the parent's resolved child instead of req.user directly.
+//  'grounded_student_notes' -> resolveGroundedContextForTopic(user, message,
+//    'student_notes') — reuses the exact same Batch-2 dispatcher. Its tutor branch calls
+//    buildTutorStudentNotesContext(tutorId, message), which resolves the named student
+//    ONLY against getTutorStudents(tutorId) (that tutor's own Schedule-assigned students)
+//    — a student named in the message who isn't this tutor's own is simply not in that
+//    list, so resolveNamedPerson returns null and the function asks "which student?"
+//    rather than ever falling back to a broader/unscoped lookup. Grades queried via
+//    Grade.find({tutor: tutorId, student: target._id}) — doubly scoped. Non-tutor roles
+//    fall through this branch and return null (grounded pipeline unaffected).
+//  'tutor_attendance_static' -> getAttendanceReply — no account data at all, the exact
+//    same static "check the Attendance section" text already given to every role today;
+//    there is no real per-student attendance-history query handler to wire to, so this
+//    is a safe deflection, not a new capability.
+//  'admin_count'           -> getStudentCountReply / getTutorCountReply /
+//    getEnrollmentStatisticsReply (selected by trained intent) — each already checks
+//    `['admin','super_admin'].includes(user.role)` internally and returns the standard
+//    "not available" reply otherwise; each gained `{skipKeywordCheck}`. System-wide
+//    aggregate counts are intentionally the same for every admin — not a per-user leak.
+//  'out_of_scope_metrics'  -> getOutOfScopeMetricsReply — a deliberate, role-agnostic
+//    REFUSAL (Task 20: "system/AI usage metrics are dashboard-only, not through this
+//    assistant"). Routing here only reinforces the existing decision, never answers it.
+const CLASSIFIER_INTENT_HANDLERS = Object.freeze({
+  ticket_status: 'ticket_status',
+  pending_ticket: 'ticket_status',
+  resolved_ticket: 'ticket_status',
+  track_concern: 'ticket_status',
+
+  // Batch 1 (Task 34) — static/informational intents, no personal data scoping at all.
+  program_comparison: 'program_comparison',
+  online_classes: 'class_format',
+  onsite_only: 'class_format',
+  academic_features: 'academic_subfeature',
+  sped: 'academic_subfeature',
+  homework_assistance: 'academic_subfeature',
+  programs_overview: 'dataset',
+  payment_methods: 'dataset',
+  gcash: 'dataset',
+  seabank: 'dataset',
+  bdo: 'dataset',
+  refund_policy: 'dataset',
+  transfer_payment: 'dataset',
+  payment_due: 'dataset',
+  playgroup_attendance: 'dataset',
+  tutorial_attendance: 'dataset',
+  pre_enrollment_assessment: 'dataset', // dataset-only source (V012) = the static "what is it" half, never per-student results (D2)
+  location: 'dataset',
+  hours: 'dataset',
+  email: 'dataset',
+  track_enrollment: 'dataset',
+  mobile_app: 'dataset',
+  // theme_toggle: not trained as one of the classifier's 129 intents — nothing to wire.
+
+  // Batch 2 (Task 34) — account-scoped, read-only intents. Each maps to a handler that
+  // already scopes itself strictly to req.user's own account (or, for a parent, their
+  // own linked children) — see the route-meaning notes above.
+  grades: 'grades',
+  progress: 'grades',
+  parent_progress: 'grounded_grades',
+  schedule: 'grounded_schedule',
+  parent_schedule: 'grounded_schedule',
+  enrollment_status: 'grounded_enrollment',
+  parent_enrollment: 'grounded_enrollment',
+  payment_status: 'grounded_payments',
+  parent_payment: 'grounded_payments',
+  materials: 'materials_by_role',
+  soft_copy: 'materials_by_role',
+  tutor_materials: 'materials_by_role',
+  contact_tutor: 'tutor_contact',
+  // Task 36 — parent_contact now reaches its own grounded lookup (buildParentTutorContact
+  // Context) instead of the generic fallback getTutorContactReply gave every non-student
+  // role; contact_tutor (student-facing) is untouched, still routes to 'tutor_contact'.
+  parent_contact: 'grounded_tutor_contact',
+
+  // Batch 3 (Task 34) — tutor own-student-scoped + admin system-wide intents.
+  student_notes: 'grounded_student_notes',
+  notes_digest: 'grounded_student_notes',
+  student_remarks: 'grounded_student_notes',
+  student_progress: 'grounded_student_notes',
+  attendance_history: 'tutor_attendance_static',
+  student_attendance: 'tutor_attendance_static',
+
+  tutor_count: 'admin_count',
+  student_count: 'admin_count',
+  enrollment_count: 'admin_count',
+  aggregate_analytics: 'out_of_scope_metrics',
+  analytics_bug: 'out_of_scope_metrics',
+  analytics_accuracy: 'out_of_scope_metrics',
+
+  // Task 34 Batch 4 (2026-09-12, owner-confirmed: tutor sees own students, admin sees
+  // system-wide — same dual-scoping precedent as student_notes/the count intents).
+  at_risk: 'grounded_at_risk',
+  at_risk_details: 'grounded_at_risk',
+  // Explicit denials — a tutor asking IN GENERAL for another tutor's or system-wide
+  // at-risk/student data, with no name to naturally fall through on. See
+  // getTutorScopeDenialReply's docstring for why this needs an explicit reply rather
+  // than reusing the implicit "which student?" denial pattern.
+  student_privacy: 'tutor_scope_denial',
+  at_risk_other: 'tutor_scope_denial',
+  at_risk_students: 'admin_at_risk',
+  at_risk_system_wide: 'admin_at_risk',
+  // Owner-confirmed: a NEW, separately-named intent for tutor wellbeing-oversight
+  // questions — NOT student_distress/distress_detection/student_discussion, which stay
+  // reserved for Task 3's active safety-screening path and are never routed through
+  // this classifier. Never assesses a child's emotional state; always redirects to the
+  // human-reviewed raise-a-concern flow. See buildTutorWellbeingCheckContext.
+  tutor_wellbeing_check: 'grounded_wellbeing_check',
+
+  // mark_attendance (write action), and every admin oversight intent NOT listed above
+  // (escalation_dashboard, notification_bell, requester_*, escalation_status,
+  // remarks_oversight, ratings_oversight, system_wide_remarks, audit_log,
+  // remarks_history, tutor_performance, tutor_oversight, tutor_complaints,
+  // complaint_management, tutor_ratings) are deliberately NOT wired — owner-confirmed
+  // "none of these right now" (2026-09-12) — see the exclusion notes above.
+});
+
+/**
+ * Ask the trained intent classifier what this message is about; if it's confident AND
+ * the predicted intent has a wired handler above, call that handler directly — same
+ * role/account scoping as the existing keyword-matcher path, just reached via a
+ * different signal (so it can also catch phrasings the keyword regex misses).
+ *
+ * Returns null — meaning "fall through, nothing changes" — whenever: not logged in
+ * (Task 9 owns the public/anon surface), the classifier service is unreachable or
+ * times out (predictIntent already resolves to null in that case), confidence is
+ * below the threshold derived in the training notebook, the predicted intent has no
+ * wired handler, or the wired handler itself found nothing to say. A down or wrong
+ * classifier can never break or alter a reply here.
+ */
+async function tryClassifierShortcut(req, message, history = []) {
+  if (!req || !req.user) return null;
+
+  const prediction = await predictIntent(message);
+  if (!prediction || prediction.confidence < INTENT_CLASSIFIER_CONFIDENCE_THRESHOLD) {
+    return null;
+  }
+
+  const route = CLASSIFIER_INTENT_HANDLERS[prediction.intent];
+  if (!route) return null;
+
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+  const role = req.user.role || 'student';
+  let reply = null;
+
+  switch (route) {
+    case 'ticket_status':
+      reply = await getTicketStatusReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      break;
+    case 'program_comparison':
+      reply = getProgramComparisonReply(message, languageProfile, { skipKeywordCheck: true });
+      break;
+    case 'class_format':
+      // getClassFormatReply has no self-gate at all (always the same static onsite-only
+      // text) — nothing to replicate, safe to call directly once the classifier is confident.
+      reply = getClassFormatReply(languageProfile);
+      break;
+    case 'academic_subfeature':
+      // getAcademicSubFeatureReply does not self-gate; both existing call sites restrict
+      // it to public-or-parent externally. Replicated exactly here (req.user is always
+      // truthy in this function, so the "public" half of that OR can never apply).
+      if (role === 'parent') {
+        reply = getAcademicSubFeatureReply(languageProfile);
+      }
+      break;
+    case 'dataset':
+      reply = getContextualDatasetResponse(message, role, languageProfile, history);
+      break;
+    case 'grades':
+      // getStudentGradesReply already checks role === 'student' internally and returns
+      // generic non-personal text for every other role — safe regardless of caller role.
+      reply = await getStudentGradesReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      break;
+    case 'grounded_grades':
+    case 'grounded_schedule':
+    case 'grounded_enrollment':
+    case 'grounded_payments':
+    case 'grounded_student_notes':
+    case 'grounded_tutor_contact':
+    case 'grounded_at_risk':
+    case 'grounded_wellbeing_check': {
+      const topic = {
+        grounded_grades: 'grades',
+        grounded_schedule: 'schedule',
+        grounded_enrollment: 'enrollment',
+        grounded_payments: 'payments',
+        grounded_student_notes: 'student_notes',
+        grounded_tutor_contact: 'tutor_contact',
+        grounded_at_risk: 'at_risk',
+        grounded_wellbeing_check: 'wellbeing_check',
+      }[route];
+      const context = await resolveGroundedContextForTopic(req.user, message, topic);
+      reply = context?.fallbackReply || null;
+      break;
+    }
+    case 'materials_by_role':
+      // No DB access at all — pure static text keyed only on role.
+      reply = getMaterialsReplyByRole(req.user, languageProfile);
+      break;
+    case 'tutor_contact':
+      // Role-gated internally (student's own assigned tutor only); generic non-personal
+      // text for every other role, including parent.
+      reply = await getTutorContactReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      break;
+    case 'tutor_attendance_static':
+      // No account data at all — the same static text every role already gets.
+      reply = getAttendanceReply(languageProfile);
+      break;
+    case 'admin_count':
+      // Three distinct handlers, each already role-gated internally to admin/super_admin
+      // — dispatch on the original predicted intent (not just the shared route name).
+      if (prediction.intent === 'tutor_count') {
+        reply = await getTutorCountReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      } else if (prediction.intent === 'student_count') {
+        reply = await getStudentCountReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      } else if (prediction.intent === 'enrollment_count') {
+        reply = await getEnrollmentStatisticsReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      }
+      break;
+    case 'out_of_scope_metrics':
+      // Deliberate, role-agnostic refusal (Task 20) — reinforces the existing decision.
+      reply = getOutOfScopeMetricsReply(languageProfile);
+      break;
+    case 'tutor_scope_denial':
+      // Static, no DB access — same denial regardless of what was asked.
+      reply = getTutorScopeDenialReply(languageProfile);
+      break;
+    case 'admin_at_risk':
+      // Role-gated internally to admin/super_admin; system-wide by design (owner-confirmed).
+      reply = await getAdminAtRiskStudentsReply(req.user, message, languageProfile, { skipKeywordCheck: true });
+      break;
+    default:
+      reply = null;
+  }
+
+  if (reply) {
+    await logAiInteraction({
+      req,
+      message,
+      reply,
+      groundingPath: 'classifier',
+      language: languageProfile,
+    });
+  }
+  return reply;
 }
 
 async function getResolvedReply(user, message, classifierResult, groundedContext, languageProfile = 'english', history = []) {
@@ -4330,6 +4697,19 @@ function detectGroundedTopic(user, message) {
   // intent classifier below — so "how do payments work" still gets the process answer.
   // Scoped to role 'parent' so students, tutors, and admins keep their pipeline unchanged.
   if (user.role === 'parent') {
+    // Task 36 follow-up (priority fix): checked BEFORE isPersonInfoQuery below —
+    // isPersonInfoQuery's broad "contact/phone/number" match is meant to block generic
+    // "give me person X's info" lookups, but it also swallows a legitimate "contact my
+    // child's tutor" request (which contains the word "contact"), silently defeating this
+    // check if placed after it. This is a specific, safe, intentional exception: it only
+    // grounds when "tutor" is explicitly present, and buildParentTutorContactContext is
+    // scoped to the parent's own child regardless of how the topic was detected. Gives a
+    // named-child "contact the tutor" question a real answer even before any classifier
+    // retraining happens (see the Task 36 memory note on the confidence-drop finding).
+    if (/\btutor\b/.test(normalized) && /(contact|reach|email|phone|number|message|talk to|get in touch|kontak)/.test(normalized)) {
+      return 'tutor_contact';
+    }
+
     if (isPersonInfoQuery(normalized)) return null;
     // Task 25a — "may SPED tutorial / homework assistance / lesson advancement ba kayo?"
     // is a program-scope question, not a request about this child's own schedule/grades.
@@ -4637,6 +5017,187 @@ async function buildTutorStudentNotesContext(tutorId, message) {
   return {
     contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\n${digest}`,
     fallbackReply: digest,
+  };
+}
+
+// Task 34 Batch 4 (2026-09-12, owner-confirmed scope: "tutor sees own students, admin
+// sees system-wide" — same dual-scoping pattern as student_notes/the count intents).
+// "At risk" = recorded average below AT_RISK_THRESHOLD% — reuses the exact 75% cutoff
+// already used elsewhere (buildParentGradesContext / buildTutorStudentNotesContext's
+// "below the 75% mark" framing), not a newly-invented number.
+const AT_RISK_THRESHOLD = 75;
+
+function averagePercentage(grades) {
+  if (!grades.length) return null;
+  const pcts = grades.map((g) => (g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0));
+  return Math.round(pcts.reduce((sum, n) => sum + n, 0) / pcts.length);
+}
+
+/**
+ * Tutor-facing at_risk / at_risk_details. Own-students-only by construction:
+ * getTutorStudents(tutorId) is the tutor's own Schedule-assigned roster, and grades are
+ * further double-scoped to Grade.tutor === tutorId (same pattern as
+ * buildTutorStudentNotesContext). A student named who isn't this tutor's own is simply
+ * not in `students`, so resolveNamedPerson returns null and this asks "which student?"
+ * against the tutor's real roster — never a broader/unscoped lookup.
+ */
+async function buildTutorAtRiskContext(tutorId, message) {
+  const students = await getTutorStudents(tutorId);
+  if (!students.length) {
+    return {
+      contextText: 'Role: tutor\nThis tutor has no assigned students.',
+      fallbackReply: 'I could not find any students assigned to you yet.',
+    };
+  }
+
+  const target = resolveNamedPerson(message, students);
+
+  if (target) {
+    const grades = await Grade.find({ tutor: tutorId, student: target._id }).lean();
+    const avg = averagePercentage(grades);
+    if (avg === null) {
+      return {
+        contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nNo grades recorded yet.`,
+        fallbackReply: `No grades have been recorded for ${personDisplayName(target)} yet, so there isn't enough data to tell if they're at risk.`,
+      };
+    }
+    const atRisk = avg < AT_RISK_THRESHOLD;
+    return {
+      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nAverage: ${avg}%\nAt risk (below ${AT_RISK_THRESHOLD}%): ${atRisk}`,
+      fallbackReply: atRisk
+        ? `${personDisplayName(target)}'s recorded average is ${avg}%, below the ${AT_RISK_THRESHOLD}% mark based on the grades you've recorded — worth a closer look.`
+        : `${personDisplayName(target)}'s recorded average is ${avg}%, at or above the ${AT_RISK_THRESHOLD}% mark — not currently flagged based on recorded grades.`,
+    };
+  }
+
+  const atRiskEntries = [];
+  for (const s of students) {
+    const grades = await Grade.find({ tutor: tutorId, student: s._id }).lean();
+    const avg = averagePercentage(grades);
+    if (avg !== null && avg < AT_RISK_THRESHOLD) {
+      atRiskEntries.push(`${personDisplayName(s)} (${avg}%)`);
+    }
+  }
+
+  if (!atRiskEntries.length) {
+    return {
+      contextText: `Role: tutor\nAssigned students: ${students.length}\nNone below ${AT_RISK_THRESHOLD}% based on recorded grades.`,
+      fallbackReply: `None of your students are currently below the ${AT_RISK_THRESHOLD}% mark based on the grades you've recorded.`,
+    };
+  }
+
+  return {
+    contextText: `Role: tutor\nStudents below ${AT_RISK_THRESHOLD}%: ${atRiskEntries.join(', ')}`,
+    fallbackReply: `Based on the grades you've recorded, these of your students are below the ${AT_RISK_THRESHOLD}% mark: ${atRiskEntries.join(', ')}.`,
+  };
+}
+
+/**
+ * Explicit denial for student_privacy / at_risk_other — a tutor asking to see another
+ * tutor's students' data or a system-wide at-risk view, in general terms with no name to
+ * naturally fall through on (unlike student_notes/at_risk, where an unrecognized name
+ * already produces an implicit denial). Static text, no DB access, same for every tutor.
+ */
+function getTutorScopeDenialReply(languageProfile = 'english') {
+  return pickByLanguage(
+    languageProfile,
+    'For student privacy, you can only view students assigned to you — not another tutor\'s students, and not a system-wide view. If you need information about a student outside your own assignment, please ask admin.',
+    'Para sa privacy ng estudyante, makikita mo lamang ang mga student na assigned sa iyo — hindi ang mga estudyante ng ibang tutor, at hindi rin ang system-wide na view. Kung kailangan mo ng impormasyon tungkol sa student na wala sa assignment mo, pakitanong sa admin.',
+    'Para sa student privacy, makikita mo lang ang mga student na assigned sa iyo — hindi yung sa ibang tutor, at hindi rin yung system-wide view. Kung kailangan mo ng info about a student na wala sa assignment mo, i-ask mo na lang sa admin.'
+  );
+}
+
+/**
+ * Admin-facing at_risk_students / at_risk_system_wide — system-wide by design (same
+ * precedent as the count intents: admin's role already permits system-wide aggregate
+ * reads). Groups ALL recorded grades by student, same AT_RISK_THRESHOLD.
+ */
+function isAtRiskAdminQuestion(normalized) {
+  return /(at.?risk|failing|struggling)/.test(normalized) && /(student|students|learner)/.test(normalized);
+}
+
+/**
+ * @param {{skipKeywordCheck?: boolean}} [opts]
+ */
+async function getAdminAtRiskStudentsReply(user, message, languageProfile = 'english', opts = {}) {
+  const normalized = normalizeMessage(message);
+  if (!opts.skipKeywordCheck && !isAtRiskAdminQuestion(normalized)) {
+    return null;
+  }
+  if (!user || !['admin', 'super_admin'].includes(user.role)) {
+    return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
+  }
+
+  const grades = await Grade.find({}).select('student score maxScore').lean();
+  const byStudent = new Map();
+  for (const g of grades) {
+    const key = String(g.student);
+    if (!byStudent.has(key)) byStudent.set(key, []);
+    byStudent.get(key).push(g);
+  }
+
+  const atRiskIds = [];
+  for (const [studentId, list] of byStudent) {
+    const avg = averagePercentage(list);
+    if (avg !== null && avg < AT_RISK_THRESHOLD) atRiskIds.push(studentId);
+  }
+
+  if (!atRiskIds.length) {
+    return pickByLanguage(
+      languageProfile,
+      `No students are currently below the ${AT_RISK_THRESHOLD}% mark based on recorded grades.`,
+      `Walang estudyanteng kasalukuyang bababa sa ${AT_RISK_THRESHOLD}% batay sa mga naitalang grades.`,
+      `Walang studyanteng currently below the ${AT_RISK_THRESHOLD}% mark batay sa mga recorded grades.`
+    );
+  }
+
+  const students = await User.find({ _id: { $in: atRiskIds } }).select('firstName lastName').lean();
+  const names = students.map((s) => [s.firstName, s.lastName].filter(Boolean).join(' ')).filter(Boolean);
+  const count = atRiskIds.length;
+
+  return pickByLanguage(
+    languageProfile,
+    `There ${count === 1 ? 'is' : 'are'} currently ${count} student${count === 1 ? '' : 's'} below the ${AT_RISK_THRESHOLD}% mark based on recorded grades: ${names.join(', ')}.`,
+    `May kasalukuyang ${count} estudyante na bababa sa ${AT_RISK_THRESHOLD}% batay sa mga naitalang grades: ${names.join(', ')}.`,
+    `May currently ${count} student na below the ${AT_RISK_THRESHOLD}% mark batay sa recorded grades: ${names.join(', ')}.`
+  );
+}
+
+/**
+ * Task 34 Batch 4 — new, separately-named intent (owner-confirmed: NOT student_distress/
+ * distress_detection/student_discussion, which stay reserved for Task 3's active safety-
+ * screening path and are never routed through this classifier). A tutor asking an
+ * oversight question about a student's wellbeing/behavior. Deliberately does NOT attempt
+ * any automated assessment of a child's emotional state from grades/remarks text — that
+ * would be a real risk (false reassurance or missed signals). Instead it always redirects
+ * to the existing human-reviewed raise-a-concern flow (Task 30), consistent with the
+ * system's established principle that anything safety-adjacent goes to a human, never an
+ * AI judgment call. Own-students-only scoped the same way as student_notes/at_risk.
+ */
+async function buildTutorWellbeingCheckContext(tutorId, message) {
+  const students = await getTutorStudents(tutorId);
+  const centerNote = "Bee Bright's system does not automatically track or assess a student's emotional wellbeing or behavior.";
+
+  if (!students.length) {
+    return {
+      contextText: 'Role: tutor\nThis tutor has no assigned students.\nWellbeing check requested — no automated tracking exists.',
+      fallbackReply: `${centerNote} If you're concerned about a student, just tell me you'd like to raise a concern and I can guide you through it so an admin can follow up.`,
+    };
+  }
+
+  const target = resolveNamedPerson(message, students);
+  const names = students.map(personDisplayName);
+
+  if (target) {
+    return {
+      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nWellbeing check requested — no automated tracking exists; directing to raise-a-concern.`,
+      fallbackReply: `${centerNote} If you're genuinely concerned about ${personDisplayName(target)}, the best next step is to raise a concern so an admin can follow up directly — just tell me you'd like to raise a concern and I can guide you through it.`,
+    };
+  }
+
+  return {
+    contextText: `Role: tutor\nAssigned students: ${names.join(', ')}\nWellbeing check requested, no student named (or named student not assigned to this tutor).`,
+    fallbackReply: `${centerNote} If you're concerned about one of your students (${names.join(', ')}), please name them, or just tell me you'd like to raise a concern and I can guide you through it so an admin can follow up.`,
   };
 }
 
@@ -4965,6 +5526,88 @@ async function buildParentGradesContext(parentId, message) {
   };
 }
 
+/**
+ * Task 36 — a parent asking for their child's assigned tutor's contact info. Mirrors
+ * getStudentTutorContactReply's own lookup exactly (most-recent Schedule with a tutor,
+ * then that tutor's contact fields) and the same reply shape/pieces, just scoped to the
+ * parent's resolved child instead of req.user directly, so the two stay consistent.
+ *
+ * Single vs. multi-child behavior is deliberately NOT identical to
+ * buildParentScheduleContext/buildParentGradesContext (which always ask for a name, even
+ * with one child on record): a parent with exactly one child is answered directly, no
+ * name needed; disambiguation only fires with 2+ children and no name match. This is
+ * explicit in Task 36's own testing checklist, not an oversight.
+ */
+async function buildParentTutorContactContext(parentId, message) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
+      fallbackReply: 'I could not find any enrolled child linked to your account yet, so there is no tutor contact to show.',
+    };
+  }
+
+  let matched;
+  if (enrollments.length === 1) {
+    matched = enrollments[0];
+  } else {
+    ({ matched } = resolveParentChild(message, enrollments));
+    if (!matched) {
+      return parentDisambiguationContext(enrollments, "tutor's contact info");
+    }
+  }
+
+  const childName = childDisplayName(matched);
+  const centerLocation = 'Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.';
+
+  if (!matched.student) {
+    return {
+      contextText: `Role: parent\nChild: ${childName}\nEnrollment status: ${formatStatusLabel(matched.status)}\nNo tutor has been assigned to this child yet.`,
+      fallbackReply: `${childName} does not have an assigned tutor yet — the admin assigns a tutor once a class is scheduled. Check back after enrollment is approved and a class has been set.`,
+    };
+  }
+
+  const sched = await Schedule.findOne({ student: matched.student, tutor: { $ne: null } })
+    .select('tutor')
+    .sort({ date: -1, startTime: -1, createdAt: -1 })
+    .lean();
+
+  const tutor = sched?.tutor
+    ? await User.findOne({
+      _id: sched.tutor,
+      role: 'tutor',
+      isArchived: { $ne: true },
+      deletedAt: null,
+    })
+      .select('firstName lastName fullName email phone')
+      .lean()
+    : null;
+
+  if (!tutor) {
+    return {
+      contextText: `Role: parent\nChild: ${childName}\nNo assigned tutor found yet.`,
+      fallbackReply: `${childName} does not have an assigned tutor yet. ${centerLocation}`,
+    };
+  }
+
+  const tutorName = tutor.fullName || [tutor.firstName, tutor.lastName].filter(Boolean).join(' ') || 'the tutor';
+  const contactParts = [];
+  if (tutor.email) contactParts.push(`Email: ${tutor.email}`);
+  if (tutor.phone) contactParts.push(`Phone: ${tutor.phone}`);
+
+  if (!contactParts.length) {
+    return {
+      contextText: `Role: parent\nChild: ${childName}\nTutor: ${tutorName}\nNo direct contact details on file yet.`,
+      fallbackReply: `${childName}'s tutor is ${tutorName}, but direct contact details are not available in the system yet. ${centerLocation}`,
+    };
+  }
+
+  return {
+    contextText: `Role: parent\nChild: ${childName}\nTutor: ${tutorName}\nContact: ${contactParts.join(' | ')}`,
+    fallbackReply: `${childName}'s tutor contact is ${tutorName} - ${contactParts.join(' | ')}. If needed, ${centerLocation}`,
+  };
+}
+
 async function getGroundedChatContext(user, message) {
   const topic = detectGroundedTopic(user, message);
 
@@ -4986,6 +5629,7 @@ async function resolveGroundedContextForTopic(user, message, topic) {
     if (topic === 'payments') return buildParentPaymentContext(user._id, message);
     if (topic === 'schedule') return buildParentScheduleContext(user._id, message);
     if (topic === 'grades') return buildParentGradesContext(user._id, message);
+    if (topic === 'tutor_contact') return buildParentTutorContactContext(user._id, message);
   }
 
   if (user.role === 'student') {
@@ -4996,6 +5640,8 @@ async function resolveGroundedContextForTopic(user, message, topic) {
 
   if (user.role === 'tutor') {
     if (topic === 'student_notes') return buildTutorStudentNotesContext(user._id, message);
+    if (topic === 'at_risk') return buildTutorAtRiskContext(user._id, message);
+    if (topic === 'wellbeing_check') return buildTutorWellbeingCheckContext(user._id, message);
     if (topic === 'schedule') return buildTutorScheduleContext(user._id);
     if (topic === 'payments') {
       return {
@@ -5299,45 +5945,145 @@ async function handleChildSafetyScreen(req, message) {
   return safetyReply;
 }
 
-/**
- * Explicit human-handoff trigger (Task 4). Runs after the safety screen, before the
- * normal pipeline. On a hit it opens a 'handoff' escalation, audit-logs the exchange,
- * and returns the acknowledgement string. Returns null when nothing is triggered.
- *
- * Self-contained: performs its own escalation + audit writes. Authenticated users only;
- * the public/landing path is handled in Task 9.
- */
-async function handleExplicitHandoff(req, message) {
-  if (!req || !req.user) {
-    return null;
-  }
-  const trigger = detectExplicitHandoffTrigger(message);
-  if (!trigger) {
-    return null;
-  }
+// ── Task 30 — "raise a concern": guided intake before any ticket is created ──
 
-  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
-  const ack = getHandoffAcknowledgement(trigger.category, languageProfile);
+const concernOneLine = (v) => String(v || '').replace(/\s+/g, ' ').trim();
 
+function getLastAssistantMessage(history) {
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const m of items) {
+    if (m && m.role === 'assistant' && typeof m.content === 'string') return m.content;
+  }
+  return '';
+}
+
+/** Keep the whole flow in one language: prefer the current message, fall back to the
+ *  user's earlier turns (a bare "yes" carries no signal). */
+function concernFlowLanguage(message, history) {
+  const userTurns = (Array.isArray(history) ? history : [])
+    .filter((m) => m && m.role === 'user' && typeof m.content === 'string')
+    .map((m) => m.content);
+  const sample = [message, ...userTurns.slice(-4)].join(' ');
+  return getEffectiveLanguageProfile(detectLanguageProfile(sample));
+}
+
+/** Route a guided-intake ticket to the closest existing category so the admin filter works. */
+function inferConcernCategory(reason, explanation) {
+  const t = `${reason} ${explanation}`.toLowerCase();
+  if (/\b(billing|payment|paid|bayad|refund|charge|singil|invoice|balance|overcharg|double ?charg)\b/.test(t)) {
+    return 'billing_dispute';
+  }
+  if (/\b(complaint|complain|reklamo|rude|bastos|unprofessional|disrespect|mistreat|hindi maganda ang (turo|serbisyo))\b/.test(t)) {
+    return 'complaint';
+  }
+  return 'human_requested';
+}
+
+async function submitConcernEscalation(req, reason, explanation, lang) {
+  const category = inferConcernCategory(reason, explanation);
   await createEscalation({
     req,
     user: req.user,
     source: 'handoff',
-    category: trigger.category,
-    trigger: `User message matched ${trigger.category} handoff pattern`,
-    severity: trigger.severity || 'normal',
-    snippet: String(message || ''),
+    category,
+    trigger: 'User raised a concern (guided intake)',
+    severity: 'normal',
+    snippet: explanation,
+    concernReason: reason,
+    concernExplanation: explanation,
   });
-
-  await logAiInteraction({
-    req,
-    message,
-    reply: ack,
-    groundingPath: 'handoff',
-    language: languageProfile,
-  });
-
+  const ack = concernSubmitted(lang);
+  await logAiInteraction({ req, message: `[concern] ${reason}`, reply: ack, groundingPath: 'handoff', language: lang });
   return ack;
+}
+
+/**
+ * Explicit "raise a concern" handling (Task 30). Runs after the safety screen, before the
+ * normal pipeline. Authenticated users only — the public/landing path stays removed (D5).
+ *
+ * On a fresh trigger it does NOT create an escalation: it starts a short guided exchange
+ * (reason → explanation → yes/no) whose state lives entirely in `history`. The Escalation
+ * record is created only after an explicit "yes". Returns a string to send, or null to let
+ * the normal pipeline handle the message (no trigger, or the flow was abandoned).
+ *
+ * The child-safety flag and the implicit repeated-no-match handoff are untouched and still
+ * escalate immediately without this intake (see handleChildSafetyScreen / applyRepeatedNoMatchHandoff).
+ */
+async function handleExplicitHandoff(req, message, history = []) {
+  if (!req || !req.user) {
+    return null;
+  }
+
+  const lang = concernFlowLanguage(message, history);
+  const flowState = detectConcernFlowState(history);
+  const lastAssistant = getLastAssistantMessage(history);
+
+  if (flowState === 'awaiting_confirmation') {
+    const reason = readEmbeddedReason(lastAssistant);
+    const explanation = readEmbeddedExplanation(lastAssistant);
+    if (isConcernYes(message) && reason && explanation) {
+      return submitConcernEscalation(req, reason, explanation, lang);
+    }
+    if (isConcernNo(message)) {
+      const out = concernCancelled(lang);
+      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+      return out;
+    }
+    // Anything else at the confirmation step → abandon, let the pipeline answer it. No ticket.
+    return null;
+  }
+
+  if (flowState === 'awaiting_reason' || flowState === 'awaiting_explanation') {
+    if (isConcernCancel(message)) {
+      const out = concernCancelled(lang);
+      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+      return out;
+    }
+    const parsed = parseConcernFields(message);
+    if (flowState === 'awaiting_explanation') {
+      const reason = readEmbeddedReason(lastAssistant);
+      const explanation = (parsed.explanation || concernOneLine(message)).slice(0, MAX_EXPLANATION_LEN);
+      const out = concernConfirm(lang, reason, explanation);
+      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+      return out;
+    }
+    const explanation = readEmbeddedExplanation(lastAssistant);
+    const reason = (parsed.reason || concernOneLine(message)).slice(0, MAX_REASON_LEN);
+    const out = concernConfirm(lang, reason, explanation);
+    await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+    return out;
+  }
+
+  if (flowState === 'awaiting_details') {
+    if (isConcernCancel(message)) {
+      const out = concernCancelled(lang);
+      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+      return out;
+    }
+    const parsed = parseConcernFields(message);
+    let out;
+    if (parsed.reason && parsed.explanation) {
+      out = concernConfirm(lang, parsed.reason, parsed.explanation);
+    } else if (parsed.reason) {
+      out = concernAskExplanation(lang, parsed.reason);
+    } else if (parsed.explanation) {
+      out = concernAskReason(lang, parsed.explanation);
+    } else {
+      // No labels — take the whole message as the explanation, then ask for a short topic.
+      out = concernAskReason(lang, concernOneLine(message).slice(0, MAX_EXPLANATION_LEN));
+    }
+    await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+    return out;
+  }
+
+  // Not mid-flow — is this a fresh "raise a concern" trigger?
+  const trigger = detectExplicitHandoffTrigger(message);
+  if (!trigger) {
+    return null;
+  }
+  const out = concernAskDetails(lang);
+  await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+  return out;
 }
 
 /**
@@ -5659,7 +6405,7 @@ const chat = async (req, res) => {
       return res.status(200).json({ success: true, reply: safetyReply });
     }
 
-    const handoffReply = await handleExplicitHandoff(req, message);
+    const handoffReply = await handleExplicitHandoff(req, message, history);
     if (handoffReply) {
       return res.status(200).json({ success: true, reply: handoffReply });
     }
@@ -5672,6 +6418,15 @@ const chat = async (req, res) => {
     const lessonPrepReply = await handleLessonPrepRequest(req, message);
     if (lessonPrepReply) {
       return res.status(200).json({ success: true, reply: lessonPrepReply });
+    }
+
+    // Task 32 — trained intent classifier (Python microservice), an additional signal
+    // alongside the weighted keyword matcher just below. Only short-circuits for a
+    // narrow, pre-verified set of intents (see CLASSIFIER_INTENT_HANDLERS); a down
+    // service, low confidence, or an unmapped intent all fall through unchanged.
+    const classifierShortcutReply = await tryClassifierShortcut(req, message, history);
+    if (classifierShortcutReply) {
+      return res.status(200).json({ success: true, reply: classifierShortcutReply });
     }
 
     // Task 21 — a vague follow-up ("uli dyan") is resolved against the last concrete
@@ -5767,8 +6522,8 @@ const ollamaChat = async (req, res) => {
       return res.status(200).json({ success: true, reply: safetyReply });
     }
 
-    // Explicit human-handoff request — before the normal pipeline. Logs internally.
-    const handoffReply = await handleExplicitHandoff(req, message);
+    // Explicit "raise a concern" request — before the normal pipeline. Logs internally.
+    const handoffReply = await handleExplicitHandoff(req, message, history);
     if (handoffReply) {
       return res.status(200).json({ success: true, reply: handoffReply });
     }
@@ -5783,6 +6538,16 @@ const ollamaChat = async (req, res) => {
     const lessonPrepReply = await handleLessonPrepRequest(req, message);
     if (lessonPrepReply) {
       return res.status(200).json({ success: true, reply: lessonPrepReply });
+    }
+
+    // Task 32 — trained intent classifier (Python microservice), an additional signal
+    // alongside the weighted keyword matcher just below. Only short-circuits for a
+    // narrow, pre-verified set of intents (see CLASSIFIER_INTENT_HANDLERS); a down
+    // service, low confidence, or an unmapped intent all fall through unchanged. Logs
+    // internally, like handleExplicitHandoff above.
+    const classifierShortcutReply = await tryClassifierShortcut(req, message, history);
+    if (classifierShortcutReply) {
+      return res.status(200).json({ success: true, reply: classifierShortcutReply });
     }
 
     const languageOverride = detectLanguageOverrideCommand(message);
@@ -6322,8 +7087,23 @@ module.exports = {
   ACADEMIC_TUTORIAL_SUBFEATURES,
   isTicketStatusQuestion,
   getTicketStatusReply,
+  tryClassifierShortcut,
+  CLASSIFIER_INTENT_HANDLERS,
   applyConversationContext,
   isOnlineClassQuestion,
   getClassFormatReply,
+  isLocationQuestion,
+  getStudentGradesReply,
+  getTutorContactReply,
+  getMaterialsReplyByRole,
+  resolveGroundedContextForTopic,
+  getEnrollmentStatisticsReply,
+  getAttendanceReply,
+  getOutOfScopeMetricsReply,
+  buildParentTutorContactContext,
+  buildTutorAtRiskContext,
+  getTutorScopeDenialReply,
+  getAdminAtRiskStudentsReply,
+  buildTutorWellbeingCheckContext,
 };
 

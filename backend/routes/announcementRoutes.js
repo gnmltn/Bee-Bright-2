@@ -15,7 +15,7 @@ const {
 
 router.use(protect);
 
-router.get('/student', authorize('student'), getForStudent);
+router.get('/student', authorize('student', 'parent'), getForStudent);
 router.get('/tutor', authorize('tutor'), getForTutor);
 router.get('/my-students', authorize('tutor'), getMyStudents);
 router.get('/admin', authorize('admin'), getForAdmin);

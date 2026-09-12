@@ -2,16 +2,20 @@ const Escalation = require('../models/Escalation');
 const { logAudit } = require('../utils/auditService');
 
 const STATUS_VALUES = ['open', 'acknowledged', 'resolved'];
+// Filter alias for the default admin view: everything that still needs attention.
+const UNRESOLVED_STATUSES = ['open', 'acknowledged'];
 
 /**
  * GET /api/escalations  (admin / super_admin)
- * Filters: status, source, severity, category. Open + urgent float to the top.
+ * Filters: status ('unresolved' = open + acknowledged; or an exact status), source,
+ * severity, category. Open + urgent float to the top.
  */
 const listEscalations = async (req, res) => {
   try {
     const { status, source, severity, category, limit = 100 } = req.query;
     const filter = {};
-    if (status) filter.status = status;
+    if (status === 'unresolved') filter.status = { $in: UNRESOLVED_STATUSES };
+    else if (status) filter.status = status;
     if (source) filter.source = source;
     if (severity) filter.severity = severity;
     if (category) filter.category = category;
@@ -130,7 +134,14 @@ const updateEscalation = async (req, res) => {
       metadata: { escalationId: String(row._id), status: row.status, source: row.source, category: row.category },
     }).catch(() => {});
 
-    res.status(200).json({ success: true, escalation: row });
+    // Return the re-populated row so the client keeps the requester's name/email
+    // (a bare save() strips the populated `user` back to an id).
+    const fresh = await Escalation.findById(row._id)
+      .populate('user', 'firstName lastName email role phone')
+      .populate('handledBy', 'firstName lastName email')
+      .lean();
+
+    res.status(200).json({ success: true, escalation: fresh || row });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message || 'Failed to update escalation.' });
   }

@@ -26,7 +26,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { UserRole } from "@/contexts/AuthContext";
 import { useAuth } from "@/hooks/useAuth";
 import { LogoutConfirmDialog } from "@/components/layout/LogoutConfirmDialog";
-import { AdminNotificationBell } from "@/components/notifications/AdminNotificationBell";
+import { useOpenRequestsCount } from "@/lib/escalations";
 import beeMascot from "@/assets/bee-mascot.png";
 
 interface DashboardLayoutProps {
@@ -114,12 +114,22 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const isAdminRole = user?.role === "admin" || user?.role === "super_admin";
+  // Pending support-request count — shown as a badge on the "Requests" nav item
+  // (replaces the old top-of-dashboard notification bell). Hook must run before any early return.
+  const requestsCount = useOpenRequestsCount(isAdminRole);
+
   if (!user) return null;
 
   const navigation = navigationByRole[user.role];
   const title = dashboardTitles[user.role];
   const overviewHref = navigation[0]?.href || "/";
-  const isAdminRole = user.role === "admin" || user.role === "super_admin";
+  const requestsBadge = (item: { href: string }) =>
+    isAdminRole && item.href.endsWith("/escalations") && requestsCount > 0 ? (
+      <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground">
+        {requestsCount > 99 ? "99+" : requestsCount}
+      </span>
+    ) : null;
 
   const isActive = (href: string) => {
     if (href.includes("#")) {
@@ -155,7 +165,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <p className="text-xs text-muted-foreground truncate">{title}</p>
             </div>
           </div>
-          {isAdminRole && <AdminNotificationBell />}
         </div>
 
         {/* Navigation */}
@@ -172,6 +181,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
+              {requestsBadge(item)}
             </Link>
           ))}
         </nav>
@@ -219,7 +229,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             </span>
           </div>
           <div className="flex items-center gap-1">
-            {isAdminRole && <AdminNotificationBell />}
             <Button
               variant="ghost"
               size="icon"
@@ -281,6 +290,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
+              {requestsBadge(item)}
             </Link>
           ))}
         </nav>

@@ -1,16 +1,20 @@
 [
-  { "programCode": "TPG101", "packageSlug": "16h", "displayName": "Toddlers Playgroup - 16 hours", "priceFull": 2800, "currency": "PHP" },
-  { "programCode": "TPG101", "packageSlug": "24h", "displayName": "Toddlers Playgroup - 24 hours", "priceFull": 4080, "currency": "PHP" },
-  { "programCode": "TPG101", "packageSlug": "32h", "displayName": "Toddlers Playgroup - 32 hours", "priceFull": 5280, "currency": "PHP" },
-  { "programCode": "TPG101", "packageSlug": "40h", "displayName": "Toddlers Playgroup - 40 hours", "priceFull": 6400, "currency": "PHP" },
+  { "programCode": "TPG101", "packageSlug": "16h", "displayName": "Toddlers Playgroup – 16 Hours", "durationDesc": "16 hours (8 sessions / 2× per week)", "sessionCount": 8, "priceFull": 2800, "currency": "PHP", "displayOrder": 1, "ageMin": 2, "ageMax": 4 },
+  { "programCode": "TPG101", "packageSlug": "24h", "displayName": "Toddlers Playgroup – 24 Hours", "durationDesc": "24 hours (12 sessions / 3× per week)", "sessionCount": 12, "priceFull": 4080, "currency": "PHP", "displayOrder": 2, "ageMin": 2, "ageMax": 4 },
+  { "programCode": "TPG101", "packageSlug": "32h", "displayName": "Toddlers Playgroup – 32 Hours", "durationDesc": "32 hours (16 sessions / 4× per week)", "sessionCount": 16, "priceFull": 5280, "currency": "PHP", "displayOrder": 3, "ageMin": 2, "ageMax": 4 },
+  { "programCode": "TPG101", "packageSlug": "40h", "displayName": "Toddlers Playgroup – 40 Hours", "durationDesc": "40 hours (20 sessions / 5× per week)", "sessionCount": 20, "priceFull": 6400, "currency": "PHP", "displayOrder": 4, "ageMin": 2, "ageMax": 4 },
 
-  { "programCode": "EXAM", "packageSlug": "bright_5", "displayName": "Examination Preparation - Bright (5 sessions)", "priceFull": 1250, "currency": "PHP" },
-  { "programCode": "EXAM", "packageSlug": "smart_6", "displayName": "Examination Preparation - Smart (6 sessions)", "priceFull": 1450, "currency": "PHP" },
-  { "programCode": "EXAM", "packageSlug": "brilliant_8", "displayName": "Examination Preparation - Brilliant (8 sessions)", "priceFull": 1850, "currency": "PHP" },
-  { "programCode": "EXAM", "packageSlug": "genius_10", "displayName": "Examination Preparation - Genius (10 sessions)", "priceFull": 2200, "currency": "PHP" },
+  { "programCode": "ACT102", "packageSlug": "premier-elementary", "displayName": "Academic Tutorial – Premier (Pre-School / Elementary)", "durationDesc": "12 sessions (3× per week)", "sessionCount": 12, "priceFull": 2400, "currency": "PHP", "displayOrder": 1, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "premier-highschool", "displayName": "Academic Tutorial – Premier (Junior / Senior High School)", "durationDesc": "12 sessions (3× per week)", "sessionCount": 12, "priceFull": 2600, "currency": "PHP", "displayOrder": 2, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "elite-elementary", "displayName": "Academic Tutorial – Elite (Pre-School / Elementary)", "durationDesc": "20 sessions (5× per week)", "sessionCount": 20, "priceFull": 3800, "currency": "PHP", "displayOrder": 3, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "elite-highschool", "displayName": "Academic Tutorial – Elite (Junior / Senior High School)", "durationDesc": "20 sessions (5× per week)", "sessionCount": 20, "priceFull": 4000, "currency": "PHP", "displayOrder": 4, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "prestige-elementary", "displayName": "Academic Tutorial – Prestige (Pre-School / Elementary)", "durationDesc": "16 sessions (4× per week)", "sessionCount": 16, "priceFull": 3120, "currency": "PHP", "displayOrder": 5, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "prestige-highschool", "displayName": "Academic Tutorial – Prestige (Junior / Senior High School)", "durationDesc": "16 sessions (4× per week)", "sessionCount": 16, "priceFull": 3320, "currency": "PHP", "displayOrder": 6, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "royalty-elementary", "displayName": "Academic Tutorial – Royalty (Pre-School / Elementary)", "durationDesc": "60 sessions / 3 months", "sessionCount": 60, "priceFull": 11000, "currency": "PHP", "displayOrder": 7, "ageMin": 2, "ageMax": null },
+  { "programCode": "ACT102", "packageSlug": "royalty-highschool", "displayName": "Academic Tutorial – Royalty (Junior / Senior High School)", "durationDesc": "60 sessions / 3 months", "sessionCount": 60, "priceFull": 11200, "currency": "PHP", "displayOrder": 8, "ageMin": 2, "ageMax": null },
 
-  { "programCode": "ACT102", "packageSlug": "premier_12", "displayName": "Academic Tutorial - Premier (12 sessions)", "priceFull": 2400, "currency": "PHP" },
-  { "programCode": "ACT102", "packageSlug": "elite", "displayName": "Academic Tutorial - Elite", "priceFull": 3800, "currency": "PHP" },
-  { "programCode": "ACT102", "packageSlug": "prestige", "displayName": "Academic Tutorial - Prestige", "priceFull": 3120, "currency": "PHP" },
-  { "programCode": "ACT102", "packageSlug": "royalty", "displayName": "Academic Tutorial - Royalty", "priceFull": 11000, "currency": "PHP" }
+  { "programCode": "EXP106", "packageSlug": "bright", "displayName": "Exam Prep – Bright Package", "durationDesc": "5 sessions", "sessionCount": 5, "priceFull": 1250, "currency": "PHP", "displayOrder": 1, "ageMin": 3, "ageMax": null },
+  { "programCode": "EXP106", "packageSlug": "smart", "displayName": "Exam Prep – Smart Package", "durationDesc": "6 sessions", "sessionCount": 6, "priceFull": 1450, "currency": "PHP", "displayOrder": 2, "ageMin": 3, "ageMax": null },
+  { "programCode": "EXP106", "packageSlug": "brilliant", "displayName": "Exam Prep – Brilliant Package", "durationDesc": "8 sessions", "sessionCount": 8, "priceFull": 1850, "currency": "PHP", "displayOrder": 3, "ageMin": 3, "ageMax": null },
+  { "programCode": "EXP106", "packageSlug": "genius", "displayName": "Exam Prep – Genius Package", "durationDesc": "10 sessions", "sessionCount": 10, "priceFull": 2200, "currency": "PHP", "displayOrder": 4, "ageMin": 3, "ageMax": null }
 ]

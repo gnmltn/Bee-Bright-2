@@ -1,0 +1,721 @@
+user_query,intent,role,requires_login
+How many tutors are registered?,tutor_count,admin,yes
+How many tutors are in the system?,tutor_count,admin,yes
+Ilang tutors ang registered?,tutor_count,admin,yes
+Can I see the total tutor count?,tutor_count,admin,yes
+What is the current number of tutors?,tutor_count,admin,yes
+Ilang tutor accounts ang meron?,tutor_count,admin,yes
+Can you help me with this: how many tutors are registered?,tutor_count,admin,yes
+Quick question: how many tutors are in the system?,tutor_count,admin,yes
+"Just checking, ilang tutors ang registered?",tutor_count,admin,yes
+Please tell me can i see the total tutor count??,tutor_count,admin,yes
+Can you tell me what is the current number of tutors??,tutor_count,admin,yes
+"Paki-explain, ilang tutor accounts ang meron??",tutor_count,admin,yes
+Gusto kong malaman: how many tutors are registered?,tutor_count,admin,yes
+"Pwede bang sabihin, how many tutors are in the system??",tutor_count,admin,yes
+"Hi, ilang tutors ang registered??",tutor_count,admin,yes
+"Hello, what is the current number of tutors??",tutor_count,admin,yes
+"Pwede po bang malaman, how many tutors are registered?",tutor_count,admin,yes
+What is the current number of registered tutors?,tutor_count,admin,yes
+How many students are registered?,student_count,admin,yes
+How many students are in the system?,student_count,admin,yes
+Ilang students ang registered?,student_count,admin,yes
+Can I see the total student count?,student_count,admin,yes
+What is the current number of students?,student_count,admin,yes
+Ilang student accounts ang meron?,student_count,admin,yes
+Can you help me with this: how many students are registered?,student_count,admin,yes
+Quick question: how many students are in the system?,student_count,admin,yes
+"Just checking, ilang students ang registered?",student_count,admin,yes
+Please tell me can i see the total student count??,student_count,admin,yes
+Can you tell me what is the current number of students??,student_count,admin,yes
+"Paki-explain, ilang student accounts ang meron??",student_count,admin,yes
+Gusto kong malaman: how many students are registered?,student_count,admin,yes
+"Pwede bang sabihin, how many students are in the system??",student_count,admin,yes
+"Hi, ilang students ang registered??",student_count,admin,yes
+"Hello, what is the current number of students??",student_count,admin,yes
+"Pwede po bang malaman, how many students are registered?",student_count,admin,yes
+What is the current total number of enrolled students?,student_count,admin,yes
+How many enrollments are there?,enrollment_count,admin,yes
+What is the total enrollment count?,enrollment_count,admin,yes
+Ilang enrollments ang meron?,enrollment_count,admin,yes
+Can I see the number of enrollments?,enrollment_count,admin,yes
+What is the current enrollment total?,enrollment_count,admin,yes
+Ilang active enrollments ang nasa system?,enrollment_count,admin,yes
+Can you help me with this: how many enrollments are there?,enrollment_count,admin,yes
+Quick question: what is the total enrollment count?,enrollment_count,admin,yes
+"Just checking, ilang enrollments ang meron?",enrollment_count,admin,yes
+Please tell me can i see the number of enrollments??,enrollment_count,admin,yes
+Can you tell me what is the current enrollment total??,enrollment_count,admin,yes
+"Paki-explain, ilang active enrollments ang nasa system??",enrollment_count,admin,yes
+Gusto kong malaman: how many enrollments are there?,enrollment_count,admin,yes
+"Pwede bang sabihin, what is the total enrollment count??",enrollment_count,admin,yes
+"Hi, ilang enrollments ang meron??",enrollment_count,admin,yes
+"Hello, what is the current enrollment total??",enrollment_count,admin,yes
+"Pwede po bang malaman, how many enrollments are there?",enrollment_count,admin,yes
+"Pa-help naman, what is the total enrollment count?",enrollment_count,admin,yes
+Can I see the overall system statistics?,aggregate_analytics,admin,yes
+Where can I view aggregate analytics?,aggregate_analytics,admin,yes
+Makikita ko ba ang overall system statistics?,aggregate_analytics,admin,yes
+"Can I see tutor, student, and enrollment totals together?",aggregate_analytics,admin,yes
+Saan ang aggregate dashboard?,aggregate_analytics,admin,yes
+How do I view the overall analytics?,aggregate_analytics,admin,yes
+Can you help me with this: can i see the overall system statistics?,aggregate_analytics,admin,yes
+Quick question: where can i view aggregate analytics?,aggregate_analytics,admin,yes
+"Just checking, makikita ko ba ang overall system statistics?",aggregate_analytics,admin,yes
+"Please tell me can i see tutor, student, and enrollment totals together??",aggregate_analytics,admin,yes
+Can you tell me saan ang aggregate dashboard??,aggregate_analytics,admin,yes
+"Paki-explain, how do i view the overall analytics??",aggregate_analytics,admin,yes
+Gusto kong malaman: can i see the overall system statistics?,aggregate_analytics,admin,yes
+"Pwede bang sabihin, where can i view aggregate analytics??",aggregate_analytics,admin,yes
+"Hi, makikita ko ba ang overall system statistics??",aggregate_analytics,admin,yes
+"Hello, saan ang aggregate dashboard??",aggregate_analytics,admin,yes
+"Pwede po bang malaman, can i see the overall system statistics?",aggregate_analytics,admin,yes
+"Pa-help naman, where can i view aggregate analytics?",aggregate_analytics,admin,yes
+Why does the dashboard show zero tutors?,analytics_bug,admin,yes
+Why is the tutor count showing 0?,analytics_bug,admin,yes
+Bakit zero ang tutor count sa dashboard?,analytics_bug,admin,yes
+The dashboard says there are no tutors. Why?,analytics_bug,admin,yes
+Bakit 0 ang number of tutors kahit may accounts?,analytics_bug,admin,yes
+Why is the aggregate count incorrectly zero?,analytics_bug,admin,yes
+Can you help me with this: why does the dashboard show zero tutors?,analytics_bug,admin,yes
+Quick question: why is the tutor count showing 0?,analytics_bug,admin,yes
+"Just checking, bakit zero ang tutor count sa dashboard?",analytics_bug,admin,yes
+Please tell me the dashboard says there are no tutors. why??,analytics_bug,admin,yes
+Can you tell me bakit 0 ang number of tutors kahit may accounts??,analytics_bug,admin,yes
+"Paki-explain, why is the aggregate count incorrectly zero??",analytics_bug,admin,yes
+Gusto kong malaman: why does the dashboard show zero tutors?,analytics_bug,admin,yes
+"Pwede bang sabihin, why is the tutor count showing 0??",analytics_bug,admin,yes
+"Hi, bakit zero ang tutor count sa dashboard??",analytics_bug,admin,yes
+"Hello, bakit 0 ang number of tutors kahit may accounts??",analytics_bug,admin,yes
+"Pwede po bang malaman, why does the dashboard show zero tutors?",analytics_bug,admin,yes
+"Pa-help naman, why is the tutor count showing 0?",analytics_bug,admin,yes
+Are the dashboard counts updated?,analytics_accuracy,admin,yes
+Are the analytics numbers current?,analytics_accuracy,admin,yes
+Updated ba ang dashboard counts?,analytics_accuracy,admin,yes
+Can I trust the current aggregate counts?,analytics_accuracy,admin,yes
+Accurate ba ang analytics totals?,analytics_accuracy,admin,yes
+Are tutor and student counts updated?,analytics_accuracy,admin,yes
+Can you help me with this: are the dashboard counts updated?,analytics_accuracy,admin,yes
+Quick question: are the analytics numbers current?,analytics_accuracy,admin,yes
+"Just checking, updated ba ang dashboard counts?",analytics_accuracy,admin,yes
+Please tell me can i trust the current aggregate counts??,analytics_accuracy,admin,yes
+Can you tell me accurate ba ang analytics totals??,analytics_accuracy,admin,yes
+"Paki-explain, are tutor and student counts updated??",analytics_accuracy,admin,yes
+Gusto kong malaman: are the dashboard counts updated?,analytics_accuracy,admin,yes
+"Pwede bang sabihin, are the analytics numbers current??",analytics_accuracy,admin,yes
+"Hi, updated ba ang dashboard counts??",analytics_accuracy,admin,yes
+"Hello, accurate ba ang analytics totals??",analytics_accuracy,admin,yes
+"Pwede po bang malaman, are the dashboard counts updated?",analytics_accuracy,admin,yes
+"Pa-help naman, are the analytics numbers current?",analytics_accuracy,admin,yes
+How do I add a tutor account?,add_tutor,admin,yes
+How can I add a new tutor?,add_tutor,admin,yes
+Paano mag-add ng tutor account?,add_tutor,admin,yes
+Where can I add a tutor?,add_tutor,admin,yes
+Can I add a tutor to the system?,add_tutor,admin,yes
+Saan ako gagawa ng tutor account?,add_tutor,admin,yes
+Can you help me with this: how do i add a tutor account?,add_tutor,admin,yes
+Quick question: how can i add a new tutor?,add_tutor,admin,yes
+"Just checking, paano mag-add ng tutor account?",add_tutor,admin,yes
+Please tell me where can i add a tutor??,add_tutor,admin,yes
+Can you tell me can i add a tutor to the system??,add_tutor,admin,yes
+"Paki-explain, saan ako gagawa ng tutor account??",add_tutor,admin,yes
+Gusto kong malaman: how do i add a tutor account?,add_tutor,admin,yes
+"Pwede bang sabihin, how can i add a new tutor??",add_tutor,admin,yes
+"Hi, paano mag-add ng tutor account??",add_tutor,admin,yes
+"Hello, can i add a tutor to the system??",add_tutor,admin,yes
+"Pwede po bang malaman, how do i add a tutor account?",add_tutor,admin,yes
+"Pa-help naman, how can i add a new tutor?",add_tutor,admin,yes
+Can I create a new tutor account?,create_tutor,admin,yes
+How do I create a tutor account?,create_tutor,admin,yes
+Pwede ba akong gumawa ng bagong tutor account?,create_tutor,admin,yes
+Where do I create tutor accounts?,create_tutor,admin,yes
+Can admins create tutor users?,create_tutor,admin,yes
+Paano gumawa ng tutor account?,create_tutor,admin,yes
+Can you help me with this: can i create a new tutor account?,create_tutor,admin,yes
+Quick question: how do i create a tutor account?,create_tutor,admin,yes
+"Just checking, pwede ba akong gumawa ng bagong tutor account?",create_tutor,admin,yes
+Please tell me where do i create tutor accounts??,create_tutor,admin,yes
+Can you tell me can admins create tutor users??,create_tutor,admin,yes
+"Paki-explain, paano gumawa ng tutor account??",create_tutor,admin,yes
+Gusto kong malaman: can i create a new tutor account?,create_tutor,admin,yes
+"Pwede bang sabihin, how do i create a tutor account??",create_tutor,admin,yes
+"Hi, pwede ba akong gumawa ng bagong tutor account??",create_tutor,admin,yes
+"Hello, can admins create tutor users??",create_tutor,admin,yes
+"Pwede po bang malaman, can i create a new tutor account?",create_tutor,admin,yes
+"Pa-help naman, how do i create a tutor account?",create_tutor,admin,yes
+Can I add an admin account?,add_admin,admin,yes
+How can I add another admin?,add_admin,admin,yes
+Pwede ba akong mag-add ng admin account?,add_admin,admin,yes
+Where can I add an administrator?,add_admin,admin,yes
+Can I create another admin user?,add_admin,admin,yes
+Paano magdagdag ng admin?,add_admin,admin,yes
+Can you help me with this: can i add an admin account?,add_admin,admin,yes
+Quick question: how can i add another admin?,add_admin,admin,yes
+"Just checking, pwede ba akong mag-add ng admin account?",add_admin,admin,yes
+Please tell me where can i add an administrator??,add_admin,admin,yes
+Can you tell me can i create another admin user??,add_admin,admin,yes
+"Paki-explain, paano magdagdag ng admin??",add_admin,admin,yes
+Gusto kong malaman: can i add an admin account?,add_admin,admin,yes
+"Pwede bang sabihin, how can i add another admin??",add_admin,admin,yes
+"Hi, pwede ba akong mag-add ng admin account??",add_admin,admin,yes
+"Hello, can i create another admin user??",add_admin,admin,yes
+"Pwede po bang malaman, can i add an admin account?",add_admin,admin,yes
+"Pa-help naman, how can i add another admin?",add_admin,admin,yes
+How do I create another admin?,create_admin,admin,yes
+Can I create an admin account?,create_admin,admin,yes
+Paano gumawa ng bagong admin?,create_admin,admin,yes
+Where can I create an administrator account?,create_admin,admin,yes
+How do I set up another admin user?,create_admin,admin,yes
+Pwede ba akong gumawa ng bagong admin account?,create_admin,admin,yes
+Can you help me with this: how do i create another admin?,create_admin,admin,yes
+Quick question: can i create an admin account?,create_admin,admin,yes
+"Just checking, paano gumawa ng bagong admin?",create_admin,admin,yes
+Please tell me where can i create an administrator account??,create_admin,admin,yes
+Can you tell me how do i set up another admin user??,create_admin,admin,yes
+"Paki-explain, pwede ba akong gumawa ng bagong admin account??",create_admin,admin,yes
+Gusto kong malaman: how do i create another admin?,create_admin,admin,yes
+"Pwede bang sabihin, can i create an admin account??",create_admin,admin,yes
+"Hi, paano gumawa ng bagong admin??",create_admin,admin,yes
+"Hello, how do i set up another admin user??",create_admin,admin,yes
+"Pwede po bang malaman, how do i create another admin?",create_admin,admin,yes
+"Pa-help naman, can i create an admin account?",create_admin,admin,yes
+Who can create admin accounts?,super_admin_permissions,admin,yes
+Who has permission to add administrators?,super_admin_permissions,admin,yes
+Sino ang puwedeng gumawa ng admin account?,super_admin_permissions,admin,yes
+What permissions are needed to create an admin?,super_admin_permissions,admin,yes
+Sino ang authorized mag-add ng admin?,super_admin_permissions,admin,yes
+Which role can manage admin accounts?,super_admin_permissions,admin,yes
+Can you help me with this: who can create admin accounts?,super_admin_permissions,admin,yes
+Quick question: who has permission to add administrators?,super_admin_permissions,admin,yes
+"Just checking, sino ang puwedeng gumawa ng admin account?",super_admin_permissions,admin,yes
+Please tell me what permissions are needed to create an admin??,super_admin_permissions,admin,yes
+Can you tell me sino ang authorized mag-add ng admin??,super_admin_permissions,admin,yes
+"Paki-explain, which role can manage admin accounts??",super_admin_permissions,admin,yes
+Gusto kong malaman: who can create admin accounts?,super_admin_permissions,admin,yes
+"Pwede bang sabihin, who has permission to add administrators??",super_admin_permissions,admin,yes
+"Hi, sino ang puwedeng gumawa ng admin account??",super_admin_permissions,admin,yes
+"Hello, sino ang authorized mag-add ng admin??",super_admin_permissions,admin,yes
+"Pwede po bang malaman, who can create admin accounts?",super_admin_permissions,admin,yes
+"Pa-help naman, who has permission to add administrators?",super_admin_permissions,admin,yes
+How do I create an announcement?,create_announcement,admin,yes
+Where can I create a new announcement?,create_announcement,admin,yes
+Paano gumawa ng announcement?,create_announcement,admin,yes
+Can I draft an announcement from the admin panel?,create_announcement,admin,yes
+Saan ako gagawa ng bagong announcement?,create_announcement,admin,yes
+How do I add an announcement?,create_announcement,admin,yes
+Can you help me with this: how do i create an announcement?,create_announcement,admin,yes
+Quick question: where can i create a new announcement?,create_announcement,admin,yes
+"Just checking, paano gumawa ng announcement?",create_announcement,admin,yes
+Please tell me can i draft an announcement from the admin panel??,create_announcement,admin,yes
+Can you tell me saan ako gagawa ng bagong announcement??,create_announcement,admin,yes
+"Paki-explain, how do i add an announcement??",create_announcement,admin,yes
+Gusto kong malaman: how do i create an announcement?,create_announcement,admin,yes
+"Pwede bang sabihin, where can i create a new announcement??",create_announcement,admin,yes
+"Hi, paano gumawa ng announcement??",create_announcement,admin,yes
+"Hello, saan ako gagawa ng bagong announcement??",create_announcement,admin,yes
+"Pwede po bang malaman, how do i create an announcement?",create_announcement,admin,yes
+"Pa-help naman, where can i create a new announcement?",create_announcement,admin,yes
+Can I post an announcement to users?,post_announcement,admin,yes
+How do I publish an announcement?,post_announcement,admin,yes
+Pwede ba akong mag-post ng announcement?,post_announcement,admin,yes
+Where do I publish announcements?,post_announcement,admin,yes
+Can admins send announcements to users?,post_announcement,admin,yes
+Paano i-publish ang announcement?,post_announcement,admin,yes
+Can you help me with this: can i post an announcement to users?,post_announcement,admin,yes
+Quick question: how do i publish an announcement?,post_announcement,admin,yes
+"Just checking, pwede ba akong mag-post ng announcement?",post_announcement,admin,yes
+Please tell me where do i publish announcements??,post_announcement,admin,yes
+Can you tell me can admins send announcements to users??,post_announcement,admin,yes
+"Paki-explain, paano i-publish ang announcement??",post_announcement,admin,yes
+Gusto kong malaman: can i post an announcement to users?,post_announcement,admin,yes
+"Pwede bang sabihin, how do i publish an announcement??",post_announcement,admin,yes
+"Hi, pwede ba akong mag-post ng announcement??",post_announcement,admin,yes
+"Hello, can admins send announcements to users??",post_announcement,admin,yes
+"Pwede po bang malaman, can i post an announcement to users?",post_announcement,admin,yes
+"Pa-help naman, how do i publish an announcement?",post_announcement,admin,yes
+Where can I see escalated concerns?,escalation_dashboard,admin,yes
+Where is the escalation dashboard?,escalation_dashboard,admin,yes
+Saan makikita ang escalated concerns?,escalation_dashboard,admin,yes
+Can I view escalations in one dashboard?,escalation_dashboard,admin,yes
+Nasaan ang dashboard ng escalations?,escalation_dashboard,admin,yes
+How do I monitor escalated concerns?,escalation_dashboard,admin,yes
+Can you help me with this: where can i see escalated concerns?,escalation_dashboard,admin,yes
+Quick question: where is the escalation dashboard?,escalation_dashboard,admin,yes
+"Just checking, saan makikita ang escalated concerns?",escalation_dashboard,admin,yes
+Please tell me can i view escalations in one dashboard??,escalation_dashboard,admin,yes
+Can you tell me nasaan ang dashboard ng escalations??,escalation_dashboard,admin,yes
+"Paki-explain, how do i monitor escalated concerns??",escalation_dashboard,admin,yes
+Gusto kong malaman: where can i see escalated concerns?,escalation_dashboard,admin,yes
+"Pwede bang sabihin, where is the escalation dashboard??",escalation_dashboard,admin,yes
+"Hi, saan makikita ang escalated concerns??",escalation_dashboard,admin,yes
+"Hello, nasaan ang dashboard ng escalations??",escalation_dashboard,admin,yes
+"Pwede po bang malaman, where can i see escalated concerns?",escalation_dashboard,admin,yes
+What is the current status of an escalation?,escalation_dashboard,admin,yes
+What is the notification bell for?,notification_bell,admin,yes
+What do the admin notifications show?,notification_bell,admin,yes
+Para saan ang notification bell?,notification_bell,admin,yes
+What alerts appear in the notification bell?,notification_bell,admin,yes
+Ano ang gamit ng notification bell sa admin?,notification_bell,admin,yes
+Can the bell notify me about escalations?,notification_bell,admin,yes
+Can you help me with this: what is the notification bell for?,notification_bell,admin,yes
+Quick question: what do the admin notifications show?,notification_bell,admin,yes
+"Just checking, para saan ang notification bell?",notification_bell,admin,yes
+Please tell me what alerts appear in the notification bell??,notification_bell,admin,yes
+Can you tell me ano ang gamit ng notification bell sa admin??,notification_bell,admin,yes
+"Paki-explain, can the bell notify me about escalations??",notification_bell,admin,yes
+Gusto kong malaman: what is the notification bell for?,notification_bell,admin,yes
+"Pwede bang sabihin, what do the admin notifications show??",notification_bell,admin,yes
+"Hi, para saan ang notification bell??",notification_bell,admin,yes
+"Hello, ano ang gamit ng notification bell sa admin??",notification_bell,admin,yes
+"Pwede po bang malaman, what is the notification bell for?",notification_bell,admin,yes
+"Pa-help naman, what do the admin notifications show?",notification_bell,admin,yes
+Can I see who submitted an escalation?,requester_information,admin,yes
+Can admins see requester details?,requester_information,admin,yes
+Makikita ba ang details ng nag-submit ng escalation?,requester_information,admin,yes
+Can I access the requester's name and email?,requester_information,admin,yes
+Sino ang requester ng escalation?,requester_information,admin,yes
+Can the admin view requester information?,requester_information,admin,yes
+Can you help me with this: can i see who submitted an escalation?,requester_information,admin,yes
+Quick question: can admins see requester details?,requester_information,admin,yes
+"Just checking, makikita ba ang details ng nag-submit ng escalation?",requester_information,admin,yes
+Please tell me can i access the requester's name and email??,requester_information,admin,yes
+Can you tell me sino ang requester ng escalation??,requester_information,admin,yes
+"Paki-explain, can the admin view requester information??",requester_information,admin,yes
+Gusto kong malaman: can i see who submitted an escalation?,requester_information,admin,yes
+"Pwede bang sabihin, can admins see requester details??",requester_information,admin,yes
+"Hi, makikita ba ang details ng nag-submit ng escalation??",requester_information,admin,yes
+"Hello, sino ang requester ng escalation??",requester_information,admin,yes
+"Pwede po bang malaman, can i see who submitted an escalation?",requester_information,admin,yes
+"Pa-help naman, can admins see requester details?",requester_information,admin,yes
+Can I see the name of the person who raised a concern?,requester_name,admin,yes
+Where can I see the requester's name?,requester_name,admin,yes
+Makikita ko ba ang pangalan ng nag-raise ng concern?,requester_name,admin,yes
+Can admins identify the requester by name?,requester_name,admin,yes
+Saan makikita ang requester name?,requester_name,admin,yes
+May access ba ako sa pangalan ng nag-submit?,requester_name,admin,yes
+Can you help me with this: can i see the name of the person who raised a concern?,requester_name,admin,yes
+Quick question: where can i see the requester's name?,requester_name,admin,yes
+"Just checking, makikita ko ba ang pangalan ng nag-raise ng concern?",requester_name,admin,yes
+Please tell me can admins identify the requester by name??,requester_name,admin,yes
+Can you tell me saan makikita ang requester name??,requester_name,admin,yes
+"Paki-explain, may access ba ako sa pangalan ng nag-submit??",requester_name,admin,yes
+Gusto kong malaman: can i see the name of the person who raised a concern?,requester_name,admin,yes
+"Pwede bang sabihin, where can i see the requester's name??",requester_name,admin,yes
+"Hi, makikita ko ba ang pangalan ng nag-raise ng concern??",requester_name,admin,yes
+"Hello, saan makikita ang requester name??",requester_name,admin,yes
+"Pwede po bang malaman, can i see the name of the person who raised a concern?",requester_name,admin,yes
+"Pa-help naman, where can i see the requester's name?",requester_name,admin,yes
+Can I see the requester's email?,requester_email,admin,yes
+Where can I find the requester's email?,requester_email,admin,yes
+Makikita ko ba ang email ng requester?,requester_email,admin,yes
+Can admins access the email of the person who escalated?,requester_email,admin,yes
+Saan makikita ang requester email?,requester_email,admin,yes
+May access ba sa email ng nag-submit ng escalation?,requester_email,admin,yes
+Can you help me with this: can i see the requester's email?,requester_email,admin,yes
+Quick question: where can i find the requester's email?,requester_email,admin,yes
+"Just checking, makikita ko ba ang email ng requester?",requester_email,admin,yes
+Please tell me can admins access the email of the person who escalated??,requester_email,admin,yes
+Can you tell me saan makikita ang requester email??,requester_email,admin,yes
+"Paki-explain, may access ba sa email ng nag-submit ng escalation??",requester_email,admin,yes
+Gusto kong malaman: can i see the requester's email?,requester_email,admin,yes
+"Pwede bang sabihin, where can i find the requester's email??",requester_email,admin,yes
+"Hi, makikita ko ba ang email ng requester??",requester_email,admin,yes
+"Hello, saan makikita ang requester email??",requester_email,admin,yes
+"Pwede po bang malaman, can i see the requester's email?",requester_email,admin,yes
+"Pa-help naman, where can i find the requester's email?",requester_email,admin,yes
+Can I check the status of escalated concerns?,escalation_status,admin,yes
+What is the status of an escalation?,escalation_status,admin,yes
+Paano ko iche-check ang status ng escalation?,escalation_status,admin,yes
+Can I monitor escalation progress?,escalation_status,admin,yes
+Nasaan ang current escalation status?,escalation_status,admin,yes
+Is there a status view for escalated concerns?,escalation_status,admin,yes
+Can you help me with this: can i check the status of escalated concerns?,escalation_status,admin,yes
+Quick question: what is the status of an escalation?,escalation_status,admin,yes
+"Just checking, paano ko iche-check ang status ng escalation?",escalation_status,admin,yes
+Please tell me can i monitor escalation progress??,escalation_status,admin,yes
+Can you tell me nasaan ang current escalation status??,escalation_status,admin,yes
+"Paki-explain, is there a status view for escalated concerns??",escalation_status,admin,yes
+Gusto kong malaman: can i check the status of escalated concerns?,escalation_status,admin,yes
+"Pwede bang sabihin, what is the status of an escalation??",escalation_status,admin,yes
+"Hi, paano ko iche-check ang status ng escalation??",escalation_status,admin,yes
+"Hello, nasaan ang current escalation status??",escalation_status,admin,yes
+"Pwede po bang malaman, can i check the status of escalated concerns?",escalation_status,admin,yes
+"Pa-help naman, what is the status of an escalation?",escalation_status,admin,yes
+Can I view student remarks?,remarks_oversight,admin,yes
+Can admins review student remarks?,remarks_oversight,admin,yes
+Makikita ba ng admin ang student remarks?,remarks_oversight,admin,yes
+Where can I oversee student remarks?,remarks_oversight,admin,yes
+Can I monitor remarks across students?,remarks_oversight,admin,yes
+Saan makikita ang student remarks oversight?,remarks_oversight,admin,yes
+Can you help me with this: can i view student remarks?,remarks_oversight,admin,yes
+Quick question: can admins review student remarks?,remarks_oversight,admin,yes
+"Just checking, makikita ba ng admin ang student remarks?",remarks_oversight,admin,yes
+Please tell me where can i oversee student remarks??,remarks_oversight,admin,yes
+Can you tell me can i monitor remarks across students??,remarks_oversight,admin,yes
+"Paki-explain, saan makikita ang student remarks oversight??",remarks_oversight,admin,yes
+Gusto kong malaman: can i view student remarks?,remarks_oversight,admin,yes
+"Pwede bang sabihin, can admins review student remarks??",remarks_oversight,admin,yes
+"Hi, makikita ba ng admin ang student remarks??",remarks_oversight,admin,yes
+"Hello, can i monitor remarks across students??",remarks_oversight,admin,yes
+"Pwede po bang malaman, can i view student remarks?",remarks_oversight,admin,yes
+Can I monitor the remarks tutors leave for students?,remarks_oversight,admin,yes
+Can I see student ratings?,ratings_oversight,admin,yes
+Can admins review student ratings?,ratings_oversight,admin,yes
+Makikita ba ng admin ang student ratings?,ratings_oversight,admin,yes
+Where can I oversee student ratings?,ratings_oversight,admin,yes
+Can I monitor ratings system-wide?,ratings_oversight,admin,yes
+Saan makikita ang ratings oversight?,ratings_oversight,admin,yes
+Can you help me with this: can i see student ratings?,ratings_oversight,admin,yes
+Quick question: can admins review student ratings?,ratings_oversight,admin,yes
+"Just checking, makikita ba ng admin ang student ratings?",ratings_oversight,admin,yes
+Please tell me where can i oversee student ratings??,ratings_oversight,admin,yes
+Can you tell me can i monitor ratings system-wide??,ratings_oversight,admin,yes
+"Paki-explain, saan makikita ang ratings oversight??",ratings_oversight,admin,yes
+Gusto kong malaman: can i see student ratings?,ratings_oversight,admin,yes
+"Pwede bang sabihin, can admins review student ratings??",ratings_oversight,admin,yes
+"Hi, makikita ba ng admin ang student ratings??",ratings_oversight,admin,yes
+"Hello, can i monitor ratings system-wide??",ratings_oversight,admin,yes
+"Pwede po bang malaman, can i see student ratings?",ratings_oversight,admin,yes
+"Pa-help naman, can admins review student ratings?",ratings_oversight,admin,yes
+Can I view remarks from all tutors?,system_wide_remarks,admin,yes
+Can admins see remarks across the system?,system_wide_remarks,admin,yes
+Makikita ba ang remarks mula sa lahat ng tutors?,system_wide_remarks,admin,yes
+Can I review student remarks system-wide?,system_wide_remarks,admin,yes
+May system-wide view ba ng remarks?,system_wide_remarks,admin,yes
+Can I oversee all student remarks?,system_wide_remarks,admin,yes
+Can you help me with this: can i view remarks from all tutors?,system_wide_remarks,admin,yes
+Quick question: can admins see remarks across the system?,system_wide_remarks,admin,yes
+"Just checking, makikita ba ang remarks mula sa lahat ng tutors?",system_wide_remarks,admin,yes
+Please tell me can i review student remarks system-wide??,system_wide_remarks,admin,yes
+Can you tell me may system-wide view ba ng remarks??,system_wide_remarks,admin,yes
+"Paki-explain, can i oversee all student remarks??",system_wide_remarks,admin,yes
+Gusto kong malaman: can i view remarks from all tutors?,system_wide_remarks,admin,yes
+"Pwede bang sabihin, can admins see remarks across the system??",system_wide_remarks,admin,yes
+"Hi, makikita ba ang remarks mula sa lahat ng tutors??",system_wide_remarks,admin,yes
+"Hello, may system-wide view ba ng remarks??",system_wide_remarks,admin,yes
+"Pwede po bang malaman, can i view remarks from all tutors?",system_wide_remarks,admin,yes
+"Pa-help naman, can admins see remarks across the system?",system_wide_remarks,admin,yes
+Are student remarks audit-logged?,audit_log,admin,yes
+Is there an audit log for remarks?,audit_log,admin,yes
+May audit log ba ang student remarks?,audit_log,admin,yes
+Are changes to remarks recorded?,audit_log,admin,yes
+Naka-log ba ang changes sa remarks?,audit_log,admin,yes
+Can admins audit remark activity?,audit_log,admin,yes
+Can you help me with this: are student remarks audit-logged?,audit_log,admin,yes
+Quick question: is there an audit log for remarks?,audit_log,admin,yes
+"Just checking, may audit log ba ang student remarks?",audit_log,admin,yes
+Please tell me are changes to remarks recorded??,audit_log,admin,yes
+Can you tell me naka-log ba ang changes sa remarks??,audit_log,admin,yes
+"Paki-explain, can admins audit remark activity??",audit_log,admin,yes
+Gusto kong malaman: are student remarks audit-logged?,audit_log,admin,yes
+"Pwede bang sabihin, is there an audit log for remarks??",audit_log,admin,yes
+"Hi, may audit log ba ang student remarks??",audit_log,admin,yes
+"Hello, naka-log ba ang changes sa remarks??",audit_log,admin,yes
+"Pwede po bang malaman, are student remarks audit-logged?",audit_log,admin,yes
+"Pa-help naman, is there an audit log for remarks?",audit_log,admin,yes
+Can I see who changed a student remark?,remarks_history,admin,yes
+Can I view the history of a student remark?,remarks_history,admin,yes
+Makikita ko ba kung sino ang nag-edit ng remark?,remarks_history,admin,yes
+Where can I see remark change history?,remarks_history,admin,yes
+Can admins trace changes to remarks?,remarks_history,admin,yes
+May history ba ng edits sa student remarks?,remarks_history,admin,yes
+Can you help me with this: can i see who changed a student remark?,remarks_history,admin,yes
+Quick question: can i view the history of a student remark?,remarks_history,admin,yes
+"Just checking, makikita ko ba kung sino ang nag-edit ng remark?",remarks_history,admin,yes
+Please tell me where can i see remark change history??,remarks_history,admin,yes
+Can you tell me can admins trace changes to remarks??,remarks_history,admin,yes
+"Paki-explain, may history ba ng edits sa student remarks??",remarks_history,admin,yes
+Gusto kong malaman: can i see who changed a student remark?,remarks_history,admin,yes
+"Pwede bang sabihin, can i view the history of a student remark??",remarks_history,admin,yes
+"Hi, makikita ko ba kung sino ang nag-edit ng remark??",remarks_history,admin,yes
+"Hello, can admins trace changes to remarks??",remarks_history,admin,yes
+"Pwede po bang malaman, can i see who changed a student remark?",remarks_history,admin,yes
+Can I see the edit history of a student's remarks?,remarks_history,admin,yes
+Can I see all at-risk students?,at_risk_students,admin,yes
+Where can I view at-risk students?,at_risk_students,admin,yes
+Makikita ko ba lahat ng at-risk students?,at_risk_students,admin,yes
+Can admins see students flagged at risk?,at_risk_students,admin,yes
+Saan ang list ng at-risk students?,at_risk_students,admin,yes
+Can I review all students who are at risk?,at_risk_students,admin,yes
+Can you help me with this: can i see all at-risk students?,at_risk_students,admin,yes
+Quick question: where can i view at-risk students?,at_risk_students,admin,yes
+"Just checking, makikita ko ba lahat ng at-risk students?",at_risk_students,admin,yes
+Please tell me can admins see students flagged at risk??,at_risk_students,admin,yes
+Can you tell me saan ang list ng at-risk students??,at_risk_students,admin,yes
+"Paki-explain, can i review all students who are at risk??",at_risk_students,admin,yes
+Gusto kong malaman: can i see all at-risk students?,at_risk_students,admin,yes
+"Pwede bang sabihin, where can i view at-risk students??",at_risk_students,admin,yes
+"Hi, makikita ko ba lahat ng at-risk students??",at_risk_students,admin,yes
+"Hello, saan ang list ng at-risk students??",at_risk_students,admin,yes
+"Pwede po bang malaman, can i see all at-risk students?",at_risk_students,admin,yes
+"Pa-help naman, where can i view at-risk students?",at_risk_students,admin,yes
+Can admins monitor students at risk across all tutors?,at_risk_system_wide,admin,yes
+Is at-risk monitoring system-wide?,at_risk_system_wide,admin,yes
+System-wide ba ang at-risk student monitoring?,at_risk_system_wide,admin,yes
+Can I see at-risk learners under every tutor?,at_risk_system_wide,admin,yes
+Can admins monitor all at-risk students?,at_risk_system_wide,admin,yes
+Paano makita ang at-risk students across the system?,at_risk_system_wide,admin,yes
+Can you help me with this: can admins monitor students at risk across all tutors?,at_risk_system_wide,admin,yes
+Quick question: is at-risk monitoring system-wide?,at_risk_system_wide,admin,yes
+"Just checking, system-wide ba ang at-risk student monitoring?",at_risk_system_wide,admin,yes
+Please tell me can i see at-risk learners under every tutor??,at_risk_system_wide,admin,yes
+Can you tell me can admins monitor all at-risk students??,at_risk_system_wide,admin,yes
+"Paki-explain, paano makita ang at-risk students across the system??",at_risk_system_wide,admin,yes
+Gusto kong malaman: can admins monitor students at risk across all tutors?,at_risk_system_wide,admin,yes
+"Pwede bang sabihin, is at-risk monitoring system-wide??",at_risk_system_wide,admin,yes
+"Hi, system-wide ba ang at-risk student monitoring??",at_risk_system_wide,admin,yes
+"Hello, can admins monitor all at-risk students??",at_risk_system_wide,admin,yes
+"Pwede po bang malaman, can admins monitor students at risk across all tutors?",at_risk_system_wide,admin,yes
+"Pa-help naman, is at-risk monitoring system-wide?",at_risk_system_wide,admin,yes
+Can I monitor tutor performance?,tutor_performance,admin,yes
+Where can I view tutor performance?,tutor_performance,admin,yes
+Makikita ba ang tutor performance?,tutor_performance,admin,yes
+Can admins review how tutors are performing?,tutor_performance,admin,yes
+Saan ang tutor performance data?,tutor_performance,admin,yes
+Can I evaluate tutor performance?,tutor_performance,admin,yes
+Can you help me with this: can i monitor tutor performance?,tutor_performance,admin,yes
+Quick question: where can i view tutor performance?,tutor_performance,admin,yes
+"Just checking, makikita ba ang tutor performance?",tutor_performance,admin,yes
+Please tell me can admins review how tutors are performing??,tutor_performance,admin,yes
+Can you tell me saan ang tutor performance data??,tutor_performance,admin,yes
+"Paki-explain, can i evaluate tutor performance??",tutor_performance,admin,yes
+Gusto kong malaman: can i monitor tutor performance?,tutor_performance,admin,yes
+"Pwede bang sabihin, where can i view tutor performance??",tutor_performance,admin,yes
+"Hi, makikita ba ang tutor performance??",tutor_performance,admin,yes
+"Hello, saan ang tutor performance data??",tutor_performance,admin,yes
+"Pwede po bang malaman, can i monitor tutor performance?",tutor_performance,admin,yes
+How can I assess how well a tutor is doing?,tutor_performance,admin,yes
+Can I oversee all tutors?,tutor_oversight,admin,yes
+Where can I manage tutor oversight?,tutor_oversight,admin,yes
+Mao-oversee ba ng admin ang lahat ng tutors?,tutor_oversight,admin,yes
+Can admins monitor all tutors?,tutor_oversight,admin,yes
+Saan makikita ang tutor oversight?,tutor_oversight,admin,yes
+Can I review tutor activity system-wide?,tutor_oversight,admin,yes
+Can you help me with this: can i oversee all tutors?,tutor_oversight,admin,yes
+Quick question: where can i manage tutor oversight?,tutor_oversight,admin,yes
+"Just checking, mao-oversee ba ng admin ang lahat ng tutors?",tutor_oversight,admin,yes
+Please tell me can admins monitor all tutors??,tutor_oversight,admin,yes
+Can you tell me saan makikita ang tutor oversight??,tutor_oversight,admin,yes
+"Paki-explain, can i review tutor activity system-wide??",tutor_oversight,admin,yes
+Gusto kong malaman: can i oversee all tutors?,tutor_oversight,admin,yes
+"Pwede bang sabihin, where can i manage tutor oversight??",tutor_oversight,admin,yes
+"Hi, mao-oversee ba ng admin ang lahat ng tutors??",tutor_oversight,admin,yes
+"Hello, saan makikita ang tutor oversight??",tutor_oversight,admin,yes
+"Pwede po bang malaman, can i oversee all tutors?",tutor_oversight,admin,yes
+"Pa-help naman, where can i manage tutor oversight?",tutor_oversight,admin,yes
+Can I see complaints about tutors?,tutor_complaints,admin,yes
+Where can I view tutor complaints?,tutor_complaints,admin,yes
+Makikita ba ang complaints tungkol sa tutors?,tutor_complaints,admin,yes
+Can admins review complaints against tutors?,tutor_complaints,admin,yes
+Saan ang tutor complaint records?,tutor_complaints,admin,yes
+Can I monitor tutor-related complaints?,tutor_complaints,admin,yes
+Can you help me with this: can i see complaints about tutors?,tutor_complaints,admin,yes
+Quick question: where can i view tutor complaints?,tutor_complaints,admin,yes
+"Just checking, makikita ba ang complaints tungkol sa tutors?",tutor_complaints,admin,yes
+Please tell me can admins review complaints against tutors??,tutor_complaints,admin,yes
+Can you tell me saan ang tutor complaint records??,tutor_complaints,admin,yes
+"Paki-explain, can i monitor tutor-related complaints??",tutor_complaints,admin,yes
+Gusto kong malaman: can i see complaints about tutors?,tutor_complaints,admin,yes
+"Pwede bang sabihin, where can i view tutor complaints??",tutor_complaints,admin,yes
+"Hi, makikita ba ang complaints tungkol sa tutors??",tutor_complaints,admin,yes
+"Hello, saan ang tutor complaint records??",tutor_complaints,admin,yes
+"Pwede po bang malaman, can i see complaints about tutors?",tutor_complaints,admin,yes
+"Pa-help naman, where can i view tutor complaints?",tutor_complaints,admin,yes
+How do I review a tutor complaint?,complaint_management,admin,yes
+Where do I manage tutor complaints?,complaint_management,admin,yes
+Paano i-review ang tutor complaint?,complaint_management,admin,yes
+Can I handle tutor complaints from the admin panel?,complaint_management,admin,yes
+Saan ko makikita at rereview ang complaints?,complaint_management,admin,yes
+How are tutor complaints managed?,complaint_management,admin,yes
+Can you help me with this: how do i review a tutor complaint?,complaint_management,admin,yes
+Quick question: where do i manage tutor complaints?,complaint_management,admin,yes
+"Just checking, paano i-review ang tutor complaint?",complaint_management,admin,yes
+Please tell me can i handle tutor complaints from the admin panel??,complaint_management,admin,yes
+Can you tell me saan ko makikita at rereview ang complaints??,complaint_management,admin,yes
+"Paki-explain, how are tutor complaints managed??",complaint_management,admin,yes
+Gusto kong malaman: how do i review a tutor complaint?,complaint_management,admin,yes
+"Pwede bang sabihin, where do i manage tutor complaints??",complaint_management,admin,yes
+"Hi, paano i-review ang tutor complaint??",complaint_management,admin,yes
+"Hello, saan ko makikita at rereview ang complaints??",complaint_management,admin,yes
+"Pwede po bang malaman, how do i review a tutor complaint?",complaint_management,admin,yes
+"Pa-help naman, where do i manage tutor complaints?",complaint_management,admin,yes
+Can I review tutor ratings?,tutor_ratings,admin,yes
+Where can I see tutor ratings?,tutor_ratings,admin,yes
+Makikita ba ang tutor ratings?,tutor_ratings,admin,yes
+Can admins review feedback about tutors?,tutor_ratings,admin,yes
+Saan ang ratings ng tutors?,tutor_ratings,admin,yes
+Can I monitor tutor feedback scores?,tutor_ratings,admin,yes
+Can you help me with this: can i review tutor ratings?,tutor_ratings,admin,yes
+Quick question: where can i see tutor ratings?,tutor_ratings,admin,yes
+"Just checking, makikita ba ang tutor ratings?",tutor_ratings,admin,yes
+Please tell me can admins review feedback about tutors??,tutor_ratings,admin,yes
+Can you tell me saan ang ratings ng tutors??,tutor_ratings,admin,yes
+"Paki-explain, can i monitor tutor feedback scores??",tutor_ratings,admin,yes
+Gusto kong malaman: can i review tutor ratings?,tutor_ratings,admin,yes
+"Pwede bang sabihin, where can i see tutor ratings??",tutor_ratings,admin,yes
+"Hi, makikita ba ang tutor ratings??",tutor_ratings,admin,yes
+"Hello, saan ang ratings ng tutors??",tutor_ratings,admin,yes
+"Pwede po bang malaman, can i review tutor ratings?",tutor_ratings,admin,yes
+"Pa-help naman, where can i see tutor ratings?",tutor_ratings,admin,yes
+Can a regular tutor access the admin dashboard?,admin_access,admin,yes
+Can tutors open the admin panel?,admin_access,admin,yes
+Makaka-access ba ang regular tutor sa admin dashboard?,admin_access,admin,yes
+Is the admin dashboard restricted to admins?,admin_access,admin,yes
+Can a student use the admin dashboard?,admin_access,admin,yes
+Sino lang ang puwedeng mag-access ng admin dashboard?,admin_access,admin,yes
+Can you help me with this: can a regular tutor access the admin dashboard?,admin_access,admin,yes
+Quick question: can tutors open the admin panel?,admin_access,admin,yes
+"Just checking, makaka-access ba ang regular tutor sa admin dashboard?",admin_access,admin,yes
+Please tell me is the admin dashboard restricted to admins??,admin_access,admin,yes
+Can you tell me can a student use the admin dashboard??,admin_access,admin,yes
+"Paki-explain, sino lang ang puwedeng mag-access ng admin dashboard??",admin_access,admin,yes
+Gusto kong malaman: can a regular tutor access the admin dashboard?,admin_access,admin,yes
+"Pwede bang sabihin, can tutors open the admin panel??",admin_access,admin,yes
+"Hi, makaka-access ba ang regular tutor sa admin dashboard??",admin_access,admin,yes
+"Hello, can a student use the admin dashboard??",admin_access,admin,yes
+"Pwede po bang malaman, can a regular tutor access the admin dashboard?",admin_access,admin,yes
+"Pa-help naman, can tutors open the admin panel?",admin_access,admin,yes
+Can students see the admin analytics?,student_access,admin,yes
+Can students access system-wide analytics?,student_access,admin,yes
+Makikita ba ng students ang admin analytics?,student_access,admin,yes
+Can a student open the analytics dashboard?,student_access,admin,yes
+May access ba ang student sa aggregate analytics?,student_access,admin,yes
+Can student accounts view admin statistics?,student_access,admin,yes
+Can you help me with this: can students see the admin analytics?,student_access,admin,yes
+Quick question: can students access system-wide analytics?,student_access,admin,yes
+"Just checking, makikita ba ng students ang admin analytics?",student_access,admin,yes
+Please tell me can a student open the analytics dashboard??,student_access,admin,yes
+Can you tell me may access ba ang student sa aggregate analytics??,student_access,admin,yes
+"Paki-explain, can student accounts view admin statistics??",student_access,admin,yes
+Gusto kong malaman: can students see the admin analytics?,student_access,admin,yes
+"Pwede bang sabihin, can students access system-wide analytics??",student_access,admin,yes
+"Hi, makikita ba ng students ang admin analytics??",student_access,admin,yes
+"Hello, may access ba ang student sa aggregate analytics??",student_access,admin,yes
+"Pwede po bang malaman, can students see the admin analytics?",student_access,admin,yes
+"Pa-help naman, can students access system-wide analytics?",student_access,admin,yes
+Can every admin perform every action?,admin_permissions,admin,yes
+Do all admin accounts have the same permissions?,admin_permissions,admin,yes
+Pare-pareho ba ang permissions ng admins?,admin_permissions,admin,yes
+Can any admin create another admin?,admin_permissions,admin,yes
+Lahat ba ng admin puwedeng gawin lahat?,admin_permissions,admin,yes
+How do admin permissions differ?,admin_permissions,admin,yes
+Can you help me with this: can every admin perform every action?,admin_permissions,admin,yes
+Quick question: do all admin accounts have the same permissions?,admin_permissions,admin,yes
+"Just checking, pare-pareho ba ang permissions ng admins?",admin_permissions,admin,yes
+Please tell me can any admin create another admin??,admin_permissions,admin,yes
+Can you tell me lahat ba ng admin puwedeng gawin lahat??,admin_permissions,admin,yes
+"Paki-explain, how do admin permissions differ??",admin_permissions,admin,yes
+Gusto kong malaman: can every admin perform every action?,admin_permissions,admin,yes
+"Pwede bang sabihin, do all admin accounts have the same permissions??",admin_permissions,admin,yes
+"Hi, pare-pareho ba ang permissions ng admins??",admin_permissions,admin,yes
+"Hello, lahat ba ng admin puwedeng gawin lahat??",admin_permissions,admin,yes
+"Pwede po bang malaman, can every admin perform every action?",admin_permissions,admin,yes
+"Pa-help naman, do all admin accounts have the same permissions?",admin_permissions,admin,yes
+How can I raise a concern?,raise_concern,admin,yes
+Where can I submit a concern?,raise_concern,admin,yes
+Paano ako mag-raise ng concern?,raise_concern,admin,yes
+Saan ako puwedeng magsubmit ng concern?,raise_concern,admin,yes
+How do I report an issue?,raise_concern,admin,yes
+May Raise a Concern feature ba?,raise_concern,admin,yes
+Can you help me with this: how can i raise a concern?,raise_concern,admin,yes
+Quick question: where can i submit a concern?,raise_concern,admin,yes
+"Just checking, paano ako mag-raise ng concern?",raise_concern,admin,yes
+Please tell me saan ako puwedeng magsubmit ng concern??,raise_concern,admin,yes
+Can you tell me how do i report an issue??,raise_concern,admin,yes
+"Paki-explain, may raise a concern feature ba??",raise_concern,admin,yes
+Gusto kong malaman: how can i raise a concern?,raise_concern,admin,yes
+"Pwede bang sabihin, where can i submit a concern??",raise_concern,admin,yes
+"Hi, paano ako mag-raise ng concern??",raise_concern,admin,yes
+"Hello, how do i report an issue??",raise_concern,admin,yes
+"Pwede po bang malaman, how can i raise a concern?",raise_concern,admin,yes
+"Pa-help naman, where can i submit a concern?",raise_concern,admin,yes
+What is the status of my ticket?,ticket_status,admin,yes
+Can I check my ticket status?,ticket_status,admin,yes
+Ano ang status ng ticket ko?,ticket_status,admin,yes
+How can I see my support ticket status?,ticket_status,admin,yes
+Nasaan ang ticket status ko?,ticket_status,admin,yes
+Can I track the current status of my ticket?,ticket_status,admin,yes
+Can you help me with this: what is the status of my ticket?,ticket_status,admin,yes
+Quick question: can i check my ticket status?,ticket_status,admin,yes
+"Just checking, ano ang status ng ticket ko?",ticket_status,admin,yes
+Please tell me how can i see my support ticket status??,ticket_status,admin,yes
+Can you tell me nasaan ang ticket status ko??,ticket_status,admin,yes
+"Paki-explain, can i track the current status of my ticket??",ticket_status,admin,yes
+Gusto kong malaman: what is the status of my ticket?,ticket_status,admin,yes
+"Pwede bang sabihin, can i check my ticket status??",ticket_status,admin,yes
+"Hi, ano ang status ng ticket ko??",ticket_status,admin,yes
+"Hello, nasaan ang ticket status ko??",ticket_status,admin,yes
+"Pwede po bang malaman, what is the status of my ticket?",ticket_status,admin,yes
+"Pa-help naman, can i check my ticket status?",ticket_status,admin,yes
+Will I be notified when a concern is escalated?,new_escalation,admin,yes
+Do admins get notified about new escalations?,new_escalation,admin,yes
+May notification ba kapag may bagong escalation?,new_escalation,admin,yes
+Will the notification bell alert me to an escalation?,new_escalation,admin,yes
+Paano malalaman ng admin kapag may bagong escalation?,new_escalation,admin,yes
+Does a new escalation trigger a notification?,new_escalation,admin,yes
+Can you help me with this: will i be notified when a concern is escalated?,new_escalation,admin,yes
+Quick question: do admins get notified about new escalations?,new_escalation,admin,yes
+"Just checking, may notification ba kapag may bagong escalation?",new_escalation,admin,yes
+Please tell me will the notification bell alert me to an escalation??,new_escalation,admin,yes
+Can you tell me paano malalaman ng admin kapag may bagong escalation??,new_escalation,admin,yes
+"Paki-explain, does a new escalation trigger a notification??",new_escalation,admin,yes
+Gusto kong malaman: will i be notified when a concern is escalated?,new_escalation,admin,yes
+"Pwede bang sabihin, do admins get notified about new escalations??",new_escalation,admin,yes
+"Hi, may notification ba kapag may bagong escalation??",new_escalation,admin,yes
+"Hello, paano malalaman ng admin kapag may bagong escalation??",new_escalation,admin,yes
+"Pwede po bang malaman, will i be notified when a concern is escalated?",new_escalation,admin,yes
+"Pa-help naman, do admins get notified about new escalations?",new_escalation,admin,yes
+Can I review administrative activity?,audit_trail,admin,yes
+Where can I see the audit trail?,audit_trail,admin,yes
+Makikita ko ba ang administrative activity log?,audit_trail,admin,yes
+Can admins review recorded system actions?,audit_trail,admin,yes
+Saan ang audit trail?,audit_trail,admin,yes
+How do I check the history of admin actions?,audit_trail,admin,yes
+Can you help me with this: can i review administrative activity?,audit_trail,admin,yes
+Quick question: where can i see the audit trail?,audit_trail,admin,yes
+"Just checking, makikita ko ba ang administrative activity log?",audit_trail,admin,yes
+Please tell me can admins review recorded system actions??,audit_trail,admin,yes
+Can you tell me saan ang audit trail??,audit_trail,admin,yes
+"Paki-explain, how do i check the history of admin actions??",audit_trail,admin,yes
+Gusto kong malaman: can i review administrative activity?,audit_trail,admin,yes
+"Pwede bang sabihin, where can i see the audit trail??",audit_trail,admin,yes
+"Hi, makikita ko ba ang administrative activity log??",audit_trail,admin,yes
+"Hello, saan ang audit trail??",audit_trail,admin,yes
+"Pwede po bang malaman, can i review administrative activity?",audit_trail,admin,yes
+"Pa-help naman, where can i see the audit trail?",audit_trail,admin,yes
+Can I manage user accounts?,account_management,admin,yes
+Where can I manage accounts?,account_management,admin,yes
+Paano mag-manage ng user accounts?,account_management,admin,yes
+Can admins manage user profiles?,account_management,admin,yes
+Saan ang account management?,account_management,admin,yes
+What account management actions can admins perform?,account_management,admin,yes
+Can you help me with this: can i manage user accounts?,account_management,admin,yes
+Quick question: where can i manage accounts?,account_management,admin,yes
+"Just checking, paano mag-manage ng user accounts?",account_management,admin,yes
+Please tell me can admins manage user profiles??,account_management,admin,yes
+Can you tell me saan ang account management??,account_management,admin,yes
+"Paki-explain, what account management actions can admins perform??",account_management,admin,yes
+Gusto kong malaman: can i manage user accounts?,account_management,admin,yes
+"Pwede bang sabihin, where can i manage accounts??",account_management,admin,yes
+"Hi, paano mag-manage ng user accounts??",account_management,admin,yes
+"Hello, saan ang account management??",account_management,admin,yes
+"Pwede po bang malaman, can i manage user accounts?",account_management,admin,yes
+"Pa-help naman, where can i manage accounts?",account_management,admin,yes
+Can I manage announcements?,announcement_management,admin,yes
+Where can I edit or manage announcements?,announcement_management,admin,yes
+Paano i-manage ang announcements?,announcement_management,admin,yes
+Can admins manage published announcements?,announcement_management,admin,yes
+Saan ko makikita ang announcement management?,announcement_management,admin,yes
+How do I manage announcements?,announcement_management,admin,yes
+Can you help me with this: can i manage announcements?,announcement_management,admin,yes
+Quick question: where can i edit or manage announcements?,announcement_management,admin,yes
+"Just checking, paano i-manage ang announcements?",announcement_management,admin,yes
+Please tell me can admins manage published announcements??,announcement_management,admin,yes
+Can you tell me saan ko makikita ang announcement management??,announcement_management,admin,yes
+"Paki-explain, how do i manage announcements??",announcement_management,admin,yes
+Gusto kong malaman: can i manage announcements?,announcement_management,admin,yes
+"Pwede bang sabihin, where can i edit or manage announcements??",announcement_management,admin,yes
+"Hi, paano i-manage ang announcements??",announcement_management,admin,yes
+"Hello, saan ko makikita ang announcement management??",announcement_management,admin,yes
+"Pwede po bang malaman, can i manage announcements?",announcement_management,admin,yes
+"Pa-help naman, where can i edit or manage announcements?",announcement_management,admin,yes

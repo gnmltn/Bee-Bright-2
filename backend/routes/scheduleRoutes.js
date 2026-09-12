@@ -44,7 +44,7 @@ router.post('/cleanup-duplicates', protect, authorize('admin'), cleanupDuplicate
 router.patch('/:id/substitute', protect, authorize('admin'), assignSubstituteTutor);
 router.delete('/:id', protect, authorize('admin'), deleteSchedule);
 router.get('/my-sessions', protect, getMySessions);
-router.get('/student/my-classes', protect, authorize('student'), getStudentClasses);
+router.get('/student/my-classes', protect, authorize('student', 'parent'), getStudentClasses);
 router.patch('/:id/attendance', protect, markAttendance);
 router.get('/', protect, authorize('admin'), listSchedules);
 

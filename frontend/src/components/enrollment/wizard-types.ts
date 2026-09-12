@@ -161,85 +161,28 @@ export const INITIAL_WIZARD_DATA: WizardData = {
   submittedEnrollmentId: null, submittedPaymentId: null, submittedAmountDue: null,
 };
 
-// ── Age eligibility (mirrors backend/utils/ageEligibility.js) ─────────────
-// Only 3 active programs. Toddlers Playgroup is ages 2–4 (owner-confirmed):
-// eligible from the 2nd birthday through the whole 4th year, out at 5.
-// General enrollment age range is 2–18 (see lib/enrollmentValidation.ts).
-export const PROGRAM_ELIGIBILITY: Record<string, { min: number; max: number | null; label: string }> = {
-  TPG101: { min: 2, max: 4,  label: 'Toddlers Playgroup' },
-  ACT102: { min: 2, max: 18, label: 'Academic Tutorial' },
-  EXP106: { min: 3, max: 18, label: 'Examination Preparation' },
-};
+// ── Age eligibility + program labels ───────────────────────────────────────
+// Single source of truth lives in constants/programs.ts (mirrors
+// backend/utils/ageEligibility.js) — re-exported here so existing wizard-step
+// imports (`from './wizard-types'` / `from '../wizard-types'`) keep working.
+// Do not re-declare a second copy of these constants/functions.
+export {
+  PROGRAM_ELIGIBILITY,
+  PROGRAM_LABELS,
+  ACTIVE_PROGRAM_CODES,
+  checkProgramEligibility,
+  isEligibleForToddlers,
+} from '@/constants/programs';
 
 // Age maths lives in ONE place. Re-exported here so the wizard steps can keep
 // importing it from wizard-types — do not add a second copy.
 export { computeAgeYears, formatAge, parseBirthdate } from '@/lib/enrollmentValidation';
-
-/**
- * A program whose `max` is a small explicit upper bound is written as an age
- * BAND ("ages 2 to 4"). Purely a copy/message distinction — the comparison is
- * the same for every program. Programs whose `max` is just an upper cap
- * (Academic Tutorial / Exam Prep at 18) read as "up to N years old".
- */
-function isAgeBand(rule: { max: number | null }): boolean {
-  return rule.max !== null && rule.max <= 5;
-}
-
-export function checkProgramEligibility(
-  programCode: string,
-  ageYears: number
-): { eligible: boolean; reason: string | null } {
-  const rule = PROGRAM_ELIGIBILITY[programCode];
-  if (!rule) return { eligible: true, reason: null };
-  if (!Number.isFinite(ageYears) || ageYears <= 0) {
-    return { eligible: false, reason: 'Enter a valid birthdate first.' };
-  }
-
-  const band = isAgeBand(rule);
-  // A banded program shows ONE consistent message whether the child is too
-  // young OR too old — e.g. "Toddlers Playgroup is for children ages 2 to 4 years old."
-  const bandMessage = `${rule.label} is for children ages ${rule.min} to ${rule.max} years old.`;
-
-  // Too young — the child has not reached their `min`th birthday yet.
-  if (ageYears < rule.min) {
-    return {
-      eligible: false,
-      reason: band ? bandMessage : `${rule.label} is for children ages ${rule.min} years old and up.`,
-    };
-  }
-
-  // Too old — "ages 2 to 4" covers the whole 4th year, so a child is only out
-  // once they turn 5. Same rule for an upper cap ("up to 18" runs through 18).
-  if (rule.max !== null && Math.floor(ageYears) > rule.max) {
-    return {
-      eligible: false,
-      reason: band ? bandMessage : `${rule.label} is for students up to ${rule.max} years old.`,
-    };
-  }
-
-  return { eligible: true, reason: null };
-}
-
-/**
- * Toddlers Playgroup: children ages 2, 3 and 4 years old — i.e. from the 2nd
- * birthday until the day before the 5th. Single shared check — mirrors
- * backend/utils/ageEligibility.js `isEligibleForToddlers`.
- */
-export function isEligibleForToddlers(ageYears: number): boolean {
-  return checkProgramEligibility('TPG101', ageYears).eligible;
-}
 
 // Payment is always 50% down — always use priceDown.
 // The 'option' param is kept for backward compat but ignored.
 export function computeTotalFee(packages: SelectedPackage[], _option?: 'full' | 'down'): number {
   return packages.reduce((s, p) => s + p.priceDown, 0);
 }
-
-export const PROGRAM_LABELS: Record<string, string> = {
-  TPG101: 'Toddlers Playgroup',
-  ACT102: 'Academic Tutorial',
-  EXP106: 'Examination Preparation',
-};
 
 /** Max file size for document uploads (5 MB). See lib/enrollmentValidation.ts. */
 export const MAX_DOC_BYTES = 5 * 1024 * 1024;

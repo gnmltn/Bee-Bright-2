@@ -17,7 +17,7 @@ const MAX_TRIGGER_LEN = 300;
  * @param {string}  [opts.snippet]  the triggering message (capped; never a full transcript)
  * @returns {Promise<Object|null>}  the created doc, or null on failure
  */
-async function createEscalation({ req, user = null, source, category, trigger = '', severity = 'normal', snippet = '' }) {
+async function createEscalation({ req, user = null, source, category, trigger = '', severity = 'normal', snippet = '', concernReason = '', concernExplanation = '' }) {
   try {
     const actor = user || (req && req.user) || null;
     const actorId = actor && (actor._id || actor.id) ? (actor._id || actor.id) : null;
@@ -31,6 +31,8 @@ async function createEscalation({ req, user = null, source, category, trigger = 
       trigger: String(trigger || '').slice(0, MAX_TRIGGER_LEN),
       severity,
       conversationSnippet: String(snippet || '').slice(0, MAX_SNIPPET_LEN),
+      concernReason: String(concernReason || '').slice(0, MAX_TRIGGER_LEN),
+      concernExplanation: String(concernExplanation || '').slice(0, MAX_SNIPPET_LEN),
       status: 'open',
       ipAddress: getClientIp(req),
       userAgent: getUserAgent(req),

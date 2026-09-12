@@ -77,23 +77,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { sanitizeName, sanitizePhoneInput } from "@/utils/validation";
+import { PROGRAM_LABELS } from "@/constants/programs";
 
-/** Program names by grade level (matches Enrollment page). Used to filter programs in Add Student. */
 /** Program names by grade level — only the 3 active programs. Used to filter programs in Add Student. */
 const PROGRAMS_BY_GRADE: Record<string, string[]> = {
-  Toddler:          ["Toddlers Playgroup"],
-  "Pre-Kindergarten": ["Toddlers Playgroup", "Academic Tutorial"],
-  Kindergarten:     ["Toddlers Playgroup", "Academic Tutorial"],
-  "Grade 1":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 2":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 3":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 4":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 5":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 6":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 7":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 8":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 9":        ["Academic Tutorial", "Examination Preparation"],
-  "Grade 10":       ["Academic Tutorial", "Examination Preparation"],
+  Toddler:            [PROGRAM_LABELS.TPG101],
+  "Pre-Kindergarten": [PROGRAM_LABELS.TPG101, PROGRAM_LABELS.ACT102],
+  Kindergarten:       [PROGRAM_LABELS.TPG101, PROGRAM_LABELS.ACT102],
+  "Grade 1":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 2":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 3":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 4":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 5":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 6":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 7":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 8":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 9":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
+  "Grade 10":         [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
 };
 
 /** Returns true if subject name matches any program name for the grade (case-insensitive, allows partial match). */
@@ -457,6 +457,8 @@ const childNameFromEnrollment = (enrollment: AdminEnrollment) => {
   return snapshotName || enrollment.studentId || "Child";
 };
 
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 const parentPreferenceSummary = (enrollment: AdminEnrollment) => {
   const dateLabel = enrollment.preferredStartDate
     ? new Date(enrollment.preferredStartDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -466,7 +468,10 @@ const parentPreferenceSummary = (enrollment: AdminEnrollment) => {
     : enrollment.preferredTime === "afternoon"
       ? "afternoon"
       : "no time preference";
-  return `${dateLabel}, ${timeLabel}`;
+  const daysLabel = enrollment.preferredDays && enrollment.preferredDays.length > 0
+    ? enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/")
+    : "any day";
+  return `${dateLabel}, ${timeLabel}, ${daysLabel}`;
 };
 
 const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: string, startTime?: string) => {
@@ -484,6 +489,16 @@ const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: 
     const afternoon = startMinutes >= 13 * 60 && startMinutes < 17 * 60;
     if ((enrollment.preferredTime === "morning" && !morning) || (enrollment.preferredTime === "afternoon" && !afternoon)) {
       return { ok: false, reason: `Does not match the parent ${enrollment.preferredTime} preference.` };
+    }
+  }
+  if (enrollment.preferredDays && enrollment.preferredDays.length > 0 && dateValue) {
+    const scheduled = new Date(dateValue);
+    if (!Number.isNaN(scheduled.getTime())) {
+      const dayName = WEEKDAY_NAMES[scheduled.getUTCDay()];
+      if (!enrollment.preferredDays.includes(dayName)) {
+        const shortDays = enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/");
+        return { ok: false, reason: `Outside the parent's preferred days (${shortDays}).` };
+      }
     }
   }
   return { ok: true, reason: "" };
@@ -2178,13 +2193,12 @@ export default function AdminDashboard() {
     if (!subjectId) nextErrors.push("Choose a program first.");
     if (!startTime || !endTime) nextErrors.push("Choose a start time. End time is filled automatically.");
     if (sessionType === "playgroup") {
-      // For playgroup slot creation (before children are enrolled):
-      // require at least 1 tutor; max 4 (the absolute max for 10 children at ratio ceil(10/3)=4).
-      // The exact required count is validated again at enrollment time based on actual child count.
+      // For playgroup slot creation (before children are enrolled): require at
+      // least 1 tutor. There is no upper bound — staff may assign more tutors
+      // than the eventual minimum at any time. The exact minimum (1 tutor per
+      // 2 children) is validated again at enrollment time based on actual child count.
       if (tutorIds.length < 1) {
         nextErrors.push("Select at least 1 tutor for this Toddlers Playgroup slot. Required tutors will be validated when children are enrolled.");
-      } else if (tutorIds.length > 4) {
-        nextErrors.push(`Maximum 4 tutors for a Toddlers Playgroup session (${tutorIds.length} selected).`);
       }
     } else if (!tutorIds.length) {
       nextErrors.push("Choose 1 tutor for this 1-on-1 session.");
@@ -3227,7 +3241,7 @@ export default function AdminDashboard() {
                     </p>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    1-on-1: 1 tutor + 1 child, 2 hours. Playgroup: 1–4 tutors (scales with child count) + 2–10 children, 8–10 AM or 1–3 PM only.
+                    1-on-1: 1 tutor + 1 child, 2 hours. Playgroup: 1 tutor per 2 children minimum (more always allowed) + 2–12 children, 8–10 AM or 1–3 PM only.
                   </div>
                 </div>
 
@@ -3339,13 +3353,13 @@ export default function AdminDashboard() {
                         </Select>
                         <p className="text-[11px] text-muted-foreground">
                           {weeklyPlannerForm.sessionType === "playgroup"
-                            ? "Playgroup is one shared session. Tutors required: 1 per 3 children (max 4). Assign children from the calendar."
+                            ? "Playgroup is one shared session. Minimum tutors required: 1 per 2 children (you may always assign more). Assign children from the calendar."
                             : "1-on-1 uses one tutor. Assign the child later from the calendar."}
                         </p>
                       </div>
 
                       <div className="space-y-1 lg:col-span-1">
-                        <Label>{weeklyPlannerForm.sessionType === "playgroup" ? `Step 3: Tutors (${weeklyPlannerForm.tutorIds.length}/1-4)` : "Step 3: Tutor"}</Label>
+                        <Label>{weeklyPlannerForm.sessionType === "playgroup" ? `Step 3: Tutors (${weeklyPlannerForm.tutorIds.length} selected)` : "Step 3: Tutor"}</Label>
                         {weeklyPlannerForm.sessionType === "playgroup" ? (
                           <div className="rounded-md border border-border bg-background p-2">
                             {weeklyPlannerTutors.length < 1 ? (
@@ -3354,7 +3368,7 @@ export default function AdminDashboard() {
                               </p>
                             ) : (
                               <p className="mb-2 text-xs text-muted-foreground">
-                                Select 1–4 tutors. The required count is determined by the number of children enrolled (1 tutor per 3 children, max 4).
+                                Select at least 1 tutor. The minimum required is 1 tutor per 2 children enrolled (you may always assign more than the minimum).
                               </p>
                             )}
                             <div className="flex flex-wrap gap-1.5 mt-2">
@@ -3496,7 +3510,7 @@ export default function AdminDashboard() {
                     <div className="rounded-lg border border-border overflow-hidden">
                       <div className="p-3 border-b border-border bg-muted/30">
                         <h4 className="font-semibold text-foreground">Toddler Room</h4>
-                        <p className="text-xs text-muted-foreground">1–4 tutors (scales with children), 2–10 children, 8–10 AM or 1–3 PM</p>
+                        <p className="text-xs text-muted-foreground">1 tutor per 2 children minimum (more always allowed), 2–12 children, 8–10 AM or 1–3 PM</p>
                       </div>
                       <div className="p-3 space-y-2 min-h-[180px]">
                         {(weeklyPlannerDraft[weeklyPlannerDay] || []).filter((item) => item.roomType === "toddler_room").length === 0 ? (
@@ -3906,7 +3920,7 @@ export default function AdminDashboard() {
                         const timeLabel = s.startTime && s.endTime ? `${formatSlotTime(s.startTime)} – ${formatSlotTime(s.endTime)}` : "—";
                         const isDeleting = scheduleDeletingId === s._id;
                         const isOneOnOneSession = s.sessionType === "one-on-one" || !s.sessionType;
-                        const fallbackCapacity = s.sessionType === "playgroup" ? 10 : s.sessionType === "small-group" ? 3 : 1;
+                        const fallbackCapacity = s.sessionType === "playgroup" ? 12 : s.sessionType === "small-group" ? 3 : 1;
                         const maxCapacity = s.maxCapacity || fallbackCapacity;
                         const enrolledStudents = [
                           ...(s.student ? [s.student] : []),
@@ -3934,7 +3948,7 @@ export default function AdminDashboard() {
                               <p className="text-sm text-muted-foreground">{dateLabel} | {timeLabel}</p>
                             </div>
                             <div>
-                              <p className="text-xs font-medium text-muted-foreground">{s.sessionType === "playgroup" ? `Tutors (${(s.tutors && s.tutors.length > 0 ? s.tutors : s.tutor ? [s.tutor] : []).length}/1-4)` : "Tutor"}</p>
+                              <p className="text-xs font-medium text-muted-foreground">{s.sessionType === "playgroup" ? `Tutors (${(s.tutors && s.tutors.length > 0 ? s.tutors : s.tutor ? [s.tutor] : []).length} assigned)` : "Tutor"}</p>
                               {s.sessionType === "playgroup" ? (
                                 (() => {
                                   const allTutors = (Array.isArray(s.tutors) && s.tutors.length > 0)
@@ -4036,7 +4050,7 @@ export default function AdminDashboard() {
                                     {isOneOnOneSession ? "Assign 1 child to this tutor" : `Add children to this playgroup (${Math.max(0, maxCapacity - currentEnrollment)} open)`}
                                   </p>
                                   <p className="text-[11px] text-muted-foreground">
-                                    Only approved children in {s.subject?.name || "this program"} are listed. Parent preferred date and time are checked automatically.
+                                    Only approved children in {s.subject?.name || "this program"} are listed. Parent preferred date, time, and days are checked automatically.
                                   </p>
                                   {availableEnrollmentCandidates.length === 0 ? (
                                     <p className="text-xs text-muted-foreground">
@@ -4118,7 +4132,7 @@ export default function AdminDashboard() {
                                       )}
                                       {(scheduleEnrollmentOverride || needsOverride.some((candidate) => scheduleEnrollmentSelectedStudentIds.includes(candidate._id))) && (
                                         <div className="space-y-1">
-                                          <p className="text-[11px] text-muted-foreground">This assignment does not match the parent preferred date/time. Enter a reason to continue.</p>
+                                          <p className="text-[11px] text-muted-foreground">This assignment does not match the parent's preferred date, time, or days. Enter a reason to continue.</p>
                                           <Textarea
                                             value={scheduleEnrollmentOverrideReason}
                                             onChange={(event) => {

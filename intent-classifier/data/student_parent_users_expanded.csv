@@ -1,0 +1,731 @@
+user_query,intent,role,requires_login
+What programs do you offer?,programs_overview,student_parent,no
+What programs are available?,programs_overview,student_parent,no
+Ano ang mga program na ino-offer ninyo?,programs_overview,student_parent,no
+Anong programs ang meron kayo?,programs_overview,student_parent,no
+What learning programs can I choose from?,programs_overview,student_parent,no
+May programs ba kayo for different learners?,programs_overview,student_parent,no
+Can you help me with this: what programs do you offer?,programs_overview,student_parent,no
+Quick question: what programs are available?,programs_overview,student_parent,no
+"Just checking, ano ang mga program na ino-offer ninyo?",programs_overview,student_parent,no
+Please tell me anong programs ang meron kayo??,programs_overview,student_parent,no
+Can you tell me what learning programs can i choose from??,programs_overview,student_parent,no
+"Paki-explain, may programs ba kayo for different learners??",programs_overview,student_parent,no
+Gusto kong malaman: what programs do you offer?,programs_overview,student_parent,no
+"Pwede bang sabihin, what programs are available??",programs_overview,student_parent,no
+"Hi, ano ang mga program na ino-offer ninyo??",programs_overview,student_parent,no
+"Hello, what learning programs can i choose from??",programs_overview,student_parent,no
+"Pwede po bang malaman, what programs do you offer?",programs_overview,student_parent,no
+"Pa-help naman, what programs are available?",programs_overview,student_parent,no
+What is the difference between the programs?,program_comparison,student_parent,no
+How are the three programs different?,program_comparison,student_parent,no
+Ano ang pagkakaiba ng mga programs?,program_comparison,student_parent,no
+Which program is different from the others?,program_comparison,student_parent,no
+Can you compare the programs?,program_comparison,student_parent,no
+"Paano nagkakaiba ang Toddlers, Academic Tutorial, at Exam Preparation?",program_comparison,student_parent,no
+Can you help me with this: what is the difference between the programs?,program_comparison,student_parent,no
+Quick question: how are the three programs different?,program_comparison,student_parent,no
+"Just checking, ano ang pagkakaiba ng mga programs?",program_comparison,student_parent,no
+Please tell me which program is different from the others??,program_comparison,student_parent,no
+Can you tell me can you compare the programs??,program_comparison,student_parent,no
+"Paki-explain, paano nagkakaiba ang toddlers, academic tutorial, at exam preparation??",program_comparison,student_parent,no
+Gusto kong malaman: what is the difference between the programs?,program_comparison,student_parent,no
+"Pwede bang sabihin, how are the three programs different??",program_comparison,student_parent,no
+"Hi, ano ang pagkakaiba ng mga programs??",program_comparison,student_parent,no
+"Hello, can you compare the programs??",program_comparison,student_parent,no
+"Pwede po bang malaman, what is the difference between the programs?",program_comparison,student_parent,no
+"Pa-help naman, how are the three programs different?",program_comparison,student_parent,no
+What are my grades?,grades,student_parent,yes
+Can I check my grades?,grades,student_parent,yes
+Show me my grades.,grades,student_parent,yes
+Nasaan ang grades ko?,grades,student_parent,yes
+Pwede ko bang makita grades ko?,grades,student_parent,yes
+Kumusta ang grades ko?,grades,student_parent,yes
+Can you help me with this: what are my grades?,grades,student_parent,yes
+Quick question: can i check my grades?,grades,student_parent,yes
+"Just checking, show me my grades.",grades,student_parent,yes
+Please tell me nasaan ang grades ko??,grades,student_parent,yes
+Can you tell me pwede ko bang makita grades ko??,grades,student_parent,yes
+"Paki-explain, kumusta ang grades ko??",grades,student_parent,yes
+Gusto kong malaman: what are my grades?,grades,student_parent,yes
+"Pwede bang sabihin, can i check my grades??",grades,student_parent,yes
+"Hi, show me my grades.?",grades,student_parent,yes
+"Hello, pwede ko bang makita grades ko??",grades,student_parent,yes
+"Pwede po bang malaman, what are my grades?",grades,student_parent,yes
+How is my academic performance progressing?,grades,student_parent,yes
+How am I progressing?,progress,student_parent,yes
+Can I see my learning progress?,progress,student_parent,yes
+Nasaan ang progress ko?,progress,student_parent,yes
+How is my academic progress?,progress,student_parent,yes
+Pwede ko bang makita ang progress ko?,progress,student_parent,yes
+Kumusta ang progress ko sa tutorial?,progress,student_parent,yes
+Can you help me with this: how am i progressing?,progress,student_parent,yes
+Quick question: can i see my learning progress?,progress,student_parent,yes
+"Just checking, nasaan ang progress ko?",progress,student_parent,yes
+Please tell me how is my academic progress??,progress,student_parent,yes
+Can you tell me pwede ko bang makita ang progress ko??,progress,student_parent,yes
+"Paki-explain, kumusta ang progress ko sa tutorial??",progress,student_parent,yes
+Gusto kong malaman: how am i progressing?,progress,student_parent,yes
+"Pwede bang sabihin, can i see my learning progress??",progress,student_parent,yes
+"Hi, nasaan ang progress ko??",progress,student_parent,yes
+"Hello, pwede ko bang makita ang progress ko??",progress,student_parent,yes
+"Pwede po bang malaman, how am i progressing?",progress,student_parent,yes
+Can I see the actual marks I received?,progress,student_parent,yes
+Can I check my child's progress?,parent_progress,student_parent,yes
+How is my child progressing?,parent_progress,student_parent,yes
+Pwede ko bang makita ang progress ng anak ko?,parent_progress,student_parent,yes
+Kumusta ang progress ng anak ko?,parent_progress,student_parent,yes
+Can I view my child's learning progress?,parent_progress,student_parent,yes
+May update ba sa progress ng anak ko?,parent_progress,student_parent,yes
+Can you help me with this: can i check my child's progress?,parent_progress,student_parent,yes
+Quick question: how is my child progressing?,parent_progress,student_parent,yes
+"Just checking, pwede ko bang makita ang progress ng anak ko?",parent_progress,student_parent,yes
+Please tell me kumusta ang progress ng anak ko??,parent_progress,student_parent,yes
+Can you tell me can i view my child's learning progress??,parent_progress,student_parent,yes
+"Paki-explain, may update ba sa progress ng anak ko??",parent_progress,student_parent,yes
+Gusto kong malaman: can i check my child's progress?,parent_progress,student_parent,yes
+"Pwede bang sabihin, how is my child progressing??",parent_progress,student_parent,yes
+"Hi, pwede ko bang makita ang progress ng anak ko??",parent_progress,student_parent,yes
+"Hello, can i view my child's learning progress??",parent_progress,student_parent,yes
+"Pwede po bang malaman, can i check my child's progress?",parent_progress,student_parent,yes
+"Pa-help naman, how is my child progressing?",parent_progress,student_parent,yes
+What is my schedule?,schedule,student_parent,yes
+Can I see my class schedule?,schedule,student_parent,yes
+Nasaan ang schedule ko?,schedule,student_parent,yes
+What time is my next class?,schedule,student_parent,yes
+Pwede ko bang makita ang class schedule ko?,schedule,student_parent,yes
+Kailan ang session ko?,schedule,student_parent,yes
+Can you help me with this: what is my schedule?,schedule,student_parent,yes
+Quick question: can i see my class schedule?,schedule,student_parent,yes
+"Just checking, nasaan ang schedule ko?",schedule,student_parent,yes
+Please tell me what time is my next class??,schedule,student_parent,yes
+Can you tell me pwede ko bang makita ang class schedule ko??,schedule,student_parent,yes
+"Paki-explain, kailan ang session ko??",schedule,student_parent,yes
+Gusto kong malaman: what is my schedule?,schedule,student_parent,yes
+"Pwede bang sabihin, can i see my class schedule??",schedule,student_parent,yes
+"Hi, nasaan ang schedule ko??",schedule,student_parent,yes
+"Hello, pwede ko bang makita ang class schedule ko??",schedule,student_parent,yes
+"Pwede po bang malaman, what is my schedule?",schedule,student_parent,yes
+"Pa-help naman, can i see my class schedule?",schedule,student_parent,yes
+Where can I see my child's schedule?,parent_schedule,student_parent,yes
+What is my child's schedule?,parent_schedule,student_parent,yes
+Nasaan ang schedule ng anak ko?,parent_schedule,student_parent,yes
+When is my child's next session?,parent_schedule,student_parent,yes
+Can I check my child's class schedule?,parent_schedule,student_parent,yes
+Kailan ang tutorial ng anak ko?,parent_schedule,student_parent,yes
+Can you help me with this: where can i see my child's schedule?,parent_schedule,student_parent,yes
+Quick question: what is my child's schedule?,parent_schedule,student_parent,yes
+"Just checking, nasaan ang schedule ng anak ko?",parent_schedule,student_parent,yes
+Please tell me when is my child's next session??,parent_schedule,student_parent,yes
+Can you tell me can i check my child's class schedule??,parent_schedule,student_parent,yes
+"Paki-explain, kailan ang tutorial ng anak ko??",parent_schedule,student_parent,yes
+Gusto kong malaman: where can i see my child's schedule?,parent_schedule,student_parent,yes
+"Pwede bang sabihin, what is my child's schedule??",parent_schedule,student_parent,yes
+"Hi, nasaan ang schedule ng anak ko??",parent_schedule,student_parent,yes
+"Hello, can i check my child's class schedule??",parent_schedule,student_parent,yes
+"Pwede po bang malaman, where can i see my child's schedule?",parent_schedule,student_parent,yes
+"Pa-help naman, what is my child's schedule?",parent_schedule,student_parent,yes
+What is my enrollment status?,enrollment_status,student_parent,yes
+Am I currently enrolled?,enrollment_status,student_parent,yes
+Ano ang enrollment status ko?,enrollment_status,student_parent,yes
+Can I check if my enrollment is active?,enrollment_status,student_parent,yes
+Active ba ang enrollment ko?,enrollment_status,student_parent,yes
+Pwede ko bang makita ang status ng enrollment ko?,enrollment_status,student_parent,yes
+Can you help me with this: what is my enrollment status?,enrollment_status,student_parent,yes
+Quick question: am i currently enrolled?,enrollment_status,student_parent,yes
+"Just checking, ano ang enrollment status ko?",enrollment_status,student_parent,yes
+Please tell me can i check if my enrollment is active??,enrollment_status,student_parent,yes
+Can you tell me active ba ang enrollment ko??,enrollment_status,student_parent,yes
+"Paki-explain, pwede ko bang makita ang status ng enrollment ko??",enrollment_status,student_parent,yes
+Gusto kong malaman: what is my enrollment status?,enrollment_status,student_parent,yes
+"Pwede bang sabihin, am i currently enrolled??",enrollment_status,student_parent,yes
+"Hi, ano ang enrollment status ko??",enrollment_status,student_parent,yes
+"Hello, active ba ang enrollment ko??",enrollment_status,student_parent,yes
+"Pwede po bang malaman, what is my enrollment status?",enrollment_status,student_parent,yes
+"Pa-help naman, am i currently enrolled?",enrollment_status,student_parent,yes
+Is my child enrolled?,parent_enrollment,student_parent,yes
+Can I check my child's enrollment?,parent_enrollment,student_parent,yes
+Enrolled ba ang anak ko?,parent_enrollment,student_parent,yes
+What is my child's enrollment status?,parent_enrollment,student_parent,yes
+Active ba ang enrollment ng anak ko?,parent_enrollment,student_parent,yes
+Pwede ko bang i-check ang enrollment ng anak ko?,parent_enrollment,student_parent,yes
+Can you help me with this: is my child enrolled?,parent_enrollment,student_parent,yes
+Quick question: can i check my child's enrollment?,parent_enrollment,student_parent,yes
+"Just checking, enrolled ba ang anak ko?",parent_enrollment,student_parent,yes
+Please tell me what is my child's enrollment status??,parent_enrollment,student_parent,yes
+Can you tell me active ba ang enrollment ng anak ko??,parent_enrollment,student_parent,yes
+"Paki-explain, pwede ko bang i-check ang enrollment ng anak ko??",parent_enrollment,student_parent,yes
+Gusto kong malaman: is my child enrolled?,parent_enrollment,student_parent,yes
+"Pwede bang sabihin, can i check my child's enrollment??",parent_enrollment,student_parent,yes
+"Hi, enrolled ba ang anak ko??",parent_enrollment,student_parent,yes
+"Hello, active ba ang enrollment ng anak ko??",parent_enrollment,student_parent,yes
+"Pwede po bang malaman, is my child enrolled?",parent_enrollment,student_parent,yes
+"Pa-help naman, can i check my child's enrollment?",parent_enrollment,student_parent,yes
+What is my payment status?,payment_status,student_parent,yes
+Can I check my payment status?,payment_status,student_parent,yes
+Ano ang payment status ko?,payment_status,student_parent,yes
+Has my payment been confirmed?,payment_status,student_parent,yes
+Pwede ko bang makita kung paid na ako?,payment_status,student_parent,yes
+Kumusta ang payment ko?,payment_status,student_parent,yes
+Can you help me with this: what is my payment status?,payment_status,student_parent,yes
+Quick question: can i check my payment status?,payment_status,student_parent,yes
+"Just checking, ano ang payment status ko?",payment_status,student_parent,yes
+Please tell me has my payment been confirmed??,payment_status,student_parent,yes
+Can you tell me pwede ko bang makita kung paid na ako??,payment_status,student_parent,yes
+"Paki-explain, kumusta ang payment ko??",payment_status,student_parent,yes
+Gusto kong malaman: what is my payment status?,payment_status,student_parent,yes
+"Pwede bang sabihin, can i check my payment status??",payment_status,student_parent,yes
+"Hi, ano ang payment status ko??",payment_status,student_parent,yes
+"Hello, pwede ko bang makita kung paid na ako??",payment_status,student_parent,yes
+"Pwede po bang malaman, what is my payment status?",payment_status,student_parent,yes
+"Pa-help naman, can i check my payment status?",payment_status,student_parent,yes
+Can I check my child's payment status?,parent_payment,student_parent,yes
+What is my child's payment status?,parent_payment,student_parent,yes
+Ano ang payment status ng anak ko?,parent_payment,student_parent,yes
+Has my child's payment been confirmed?,parent_payment,student_parent,yes
+Paid na ba ang enrollment ng anak ko?,parent_payment,student_parent,yes
+Pwede ko bang i-check ang payment ng anak ko?,parent_payment,student_parent,yes
+Can you help me with this: can i check my child's payment status?,parent_payment,student_parent,yes
+Quick question: what is my child's payment status?,parent_payment,student_parent,yes
+"Just checking, ano ang payment status ng anak ko?",parent_payment,student_parent,yes
+Please tell me has my child's payment been confirmed??,parent_payment,student_parent,yes
+Can you tell me paid na ba ang enrollment ng anak ko??,parent_payment,student_parent,yes
+"Paki-explain, pwede ko bang i-check ang payment ng anak ko??",parent_payment,student_parent,yes
+Gusto kong malaman: can i check my child's payment status?,parent_payment,student_parent,yes
+"Pwede bang sabihin, what is my child's payment status??",parent_payment,student_parent,yes
+"Hi, ano ang payment status ng anak ko??",parent_payment,student_parent,yes
+"Hello, paid na ba ang enrollment ng anak ko??",parent_payment,student_parent,yes
+"Pwede po bang malaman, can i check my child's payment status?",parent_payment,student_parent,yes
+"Pa-help naman, what is my child's payment status?",parent_payment,student_parent,yes
+Where can I find my learning materials?,materials,student_parent,yes
+Where are my tutorial materials?,materials,student_parent,yes
+Nasaan ang learning materials ko?,materials,student_parent,yes
+Can I access my study materials?,materials,student_parent,yes
+Saan ko makikita ang materials ko?,materials,student_parent,yes
+Where can I view the materials for my lessons?,materials,student_parent,yes
+Can you help me with this: where can i find my learning materials?,materials,student_parent,yes
+Quick question: where are my tutorial materials?,materials,student_parent,yes
+"Just checking, nasaan ang learning materials ko?",materials,student_parent,yes
+Please tell me can i access my study materials??,materials,student_parent,yes
+Can you tell me saan ko makikita ang materials ko??,materials,student_parent,yes
+"Paki-explain, where can i view the materials for my lessons??",materials,student_parent,yes
+Gusto kong malaman: where can i find my learning materials?,materials,student_parent,yes
+"Pwede bang sabihin, where are my tutorial materials??",materials,student_parent,yes
+"Hi, nasaan ang learning materials ko??",materials,student_parent,yes
+"Hello, saan ko makikita ang materials ko??",materials,student_parent,yes
+"Pwede po bang malaman, where can i find my learning materials?",materials,student_parent,yes
+Where are the files my tutor uploaded?,materials,student_parent,yes
+Can I download the learning materials?,soft_copy,student_parent,yes
+Are the learning materials available as soft copies?,soft_copy,student_parent,yes
+Pwede bang i-download ang materials?,soft_copy,student_parent,yes
+May soft copy ba ng learning materials?,soft_copy,student_parent,yes
+Can I get digital copies of the materials?,soft_copy,student_parent,yes
+Puwede ko bang ma-access ang files?,soft_copy,student_parent,yes
+Can you help me with this: can i download the learning materials?,soft_copy,student_parent,yes
+Quick question: are the learning materials available as soft copies?,soft_copy,student_parent,yes
+"Just checking, pwede bang i-download ang materials?",soft_copy,student_parent,yes
+Please tell me may soft copy ba ng learning materials??,soft_copy,student_parent,yes
+Can you tell me can i get digital copies of the materials??,soft_copy,student_parent,yes
+"Paki-explain, puwede ko bang ma-access ang files??",soft_copy,student_parent,yes
+Gusto kong malaman: can i download the learning materials?,soft_copy,student_parent,yes
+"Pwede bang sabihin, are the learning materials available as soft copies??",soft_copy,student_parent,yes
+"Hi, pwede bang i-download ang materials??",soft_copy,student_parent,yes
+"Hello, can i get digital copies of the materials??",soft_copy,student_parent,yes
+"Pwede po bang malaman, can i download the learning materials?",soft_copy,student_parent,yes
+"Pa-help naman, are the learning materials available as soft copies?",soft_copy,student_parent,yes
+Where are the files uploaded by my tutor?,tutor_materials,student_parent,yes
+Where can I find files from my tutor?,tutor_materials,student_parent,yes
+Nasaan ang files na in-upload ng tutor?,tutor_materials,student_parent,yes
+Can I see the materials my tutor uploaded?,tutor_materials,student_parent,yes
+Saan ko makikita ang tutor-uploaded files?,tutor_materials,student_parent,yes
+May files ba na binigay ng tutor?,tutor_materials,student_parent,yes
+Can you help me with this: where are the files uploaded by my tutor?,tutor_materials,student_parent,yes
+Quick question: where can i find files from my tutor?,tutor_materials,student_parent,yes
+"Just checking, nasaan ang files na in-upload ng tutor?",tutor_materials,student_parent,yes
+Please tell me can i see the materials my tutor uploaded??,tutor_materials,student_parent,yes
+Can you tell me saan ko makikita ang tutor-uploaded files??,tutor_materials,student_parent,yes
+"Paki-explain, may files ba na binigay ng tutor??",tutor_materials,student_parent,yes
+Gusto kong malaman: where are the files uploaded by my tutor?,tutor_materials,student_parent,yes
+"Pwede bang sabihin, where can i find files from my tutor??",tutor_materials,student_parent,yes
+"Hi, nasaan ang files na in-upload ng tutor??",tutor_materials,student_parent,yes
+"Hello, saan ko makikita ang tutor-uploaded files??",tutor_materials,student_parent,yes
+"Pwede po bang malaman, where are the files uploaded by my tutor?",tutor_materials,student_parent,yes
+Where can I find my study materials?,tutor_materials,student_parent,yes
+How can I contact my tutor?,contact_tutor,student_parent,yes
+Can I message my tutor?,contact_tutor,student_parent,yes
+Paano ko mako-contact ang tutor ko?,contact_tutor,student_parent,yes
+Is there a way to contact my tutor?,contact_tutor,student_parent,yes
+Pwede ko bang kausapin ang tutor ko?,contact_tutor,student_parent,yes
+Where can I contact my tutor?,contact_tutor,student_parent,yes
+Can you help me with this: how can i contact my tutor?,contact_tutor,student_parent,yes
+Quick question: can i message my tutor?,contact_tutor,student_parent,yes
+"Just checking, paano ko mako-contact ang tutor ko?",contact_tutor,student_parent,yes
+Please tell me is there a way to contact my tutor??,contact_tutor,student_parent,yes
+Can you tell me pwede ko bang kausapin ang tutor ko??,contact_tutor,student_parent,yes
+"Paki-explain, where can i contact my tutor??",contact_tutor,student_parent,yes
+Gusto kong malaman: how can i contact my tutor?,contact_tutor,student_parent,yes
+"Pwede bang sabihin, can i message my tutor??",contact_tutor,student_parent,yes
+"Hi, paano ko mako-contact ang tutor ko??",contact_tutor,student_parent,yes
+"Hello, pwede ko bang kausapin ang tutor ko??",contact_tutor,student_parent,yes
+"Pwede po bang malaman, how can i contact my tutor?",contact_tutor,student_parent,yes
+"Pa-help naman, can i message my tutor?",contact_tutor,student_parent,yes
+Can I contact my child's tutor?,parent_contact,student_parent,yes
+How can I reach my child's tutor?,parent_contact,student_parent,yes
+Paano ko mako-contact ang tutor ng anak ko?,parent_contact,student_parent,yes
+Can I message my child's tutor?,parent_contact,student_parent,yes
+Pwede ko bang kausapin ang tutor ng anak ko?,parent_contact,student_parent,yes
+Where can I contact my child's tutor?,parent_contact,student_parent,yes
+Can you help me with this: can i contact my child's tutor?,parent_contact,student_parent,yes
+Quick question: how can i reach my child's tutor?,parent_contact,student_parent,yes
+"Just checking, paano ko mako-contact ang tutor ng anak ko?",parent_contact,student_parent,yes
+Please tell me can i message my child's tutor??,parent_contact,student_parent,yes
+Can you tell me pwede ko bang kausapin ang tutor ng anak ko??,parent_contact,student_parent,yes
+"Paki-explain, where can i contact my child's tutor??",parent_contact,student_parent,yes
+Gusto kong malaman: can i contact my child's tutor?,parent_contact,student_parent,yes
+"Pwede bang sabihin, how can i reach my child's tutor??",parent_contact,student_parent,yes
+"Hi, paano ko mako-contact ang tutor ng anak ko??",parent_contact,student_parent,yes
+"Hello, pwede ko bang kausapin ang tutor ng anak ko??",parent_contact,student_parent,yes
+"Pwede po bang malaman, can i contact my child's tutor?",parent_contact,student_parent,yes
+"Pa-help naman, how can i reach my child's tutor?",parent_contact,student_parent,yes
+Can I contact Carlo's tutor?,parent_contact,student_parent,yes
+How do I reach Mia's tutor?,parent_contact,student_parent,yes
+What is Diana's tutor's contact number?,parent_contact,student_parent,yes
+Can I message my son Josh's tutor?,parent_contact,student_parent,yes
+How can I contact my daughter Ella's tutor?,parent_contact,student_parent,yes
+Paano ko makokontak ang tutor ni Carlo?,parent_contact,student_parent,yes
+Pwede ko bang kausapin ang tutor ni Mia?,parent_contact,student_parent,yes
+What is the email of Josh's tutor?,parent_contact,student_parent,yes
+Where can I find Ella's tutor's phone number?,parent_contact,student_parent,yes
+Can you give me Diana's tutor's contact details?,parent_contact,student_parent,yes
+Why do I need an OTP when logging in?,login_otp,student_parent,yes
+What is the login OTP for?,login_otp,student_parent,yes
+Bakit kailangan ng OTP sa login?,login_otp,student_parent,yes
+Para saan ang OTP kapag nagla-login?,login_otp,student_parent,yes
+Why does the system ask for an OTP?,login_otp,student_parent,yes
+Ano ang purpose ng login OTP?,login_otp,student_parent,yes
+Can you help me with this: why do i need an otp when logging in?,login_otp,student_parent,yes
+Quick question: what is the login otp for?,login_otp,student_parent,yes
+"Just checking, bakit kailangan ng otp sa login?",login_otp,student_parent,yes
+Please tell me para saan ang otp kapag nagla-login??,login_otp,student_parent,yes
+Can you tell me why does the system ask for an otp??,login_otp,student_parent,yes
+"Paki-explain, ano ang purpose ng login otp??",login_otp,student_parent,yes
+Gusto kong malaman: why do i need an otp when logging in?,login_otp,student_parent,yes
+"Pwede bang sabihin, what is the login otp for??",login_otp,student_parent,yes
+"Hi, bakit kailangan ng otp sa login??",login_otp,student_parent,yes
+"Hello, why does the system ask for an otp??",login_otp,student_parent,yes
+"Pwede po bang malaman, why do i need an otp when logging in?",login_otp,student_parent,yes
+"Pa-help naman, what is the login otp for?",login_otp,student_parent,yes
+I did not receive my login OTP.,otp_not_received,student_parent,yes
+What if my OTP did not arrive?,otp_not_received,student_parent,yes
+Hindi ko natanggap ang OTP ko.,otp_not_received,student_parent,yes
+"Walang dumating na login OTP, ano gagawin ko?",otp_not_received,student_parent,yes
+My login code hasn't arrived.,otp_not_received,student_parent,yes
+Bakit wala akong natatanggap na OTP?,otp_not_received,student_parent,yes
+Can you help me with this: i did not receive my login otp.,otp_not_received,student_parent,yes
+Quick question: what if my otp did not arrive?,otp_not_received,student_parent,yes
+"Just checking, hindi ko natanggap ang otp ko.",otp_not_received,student_parent,yes
+"Please tell me walang dumating na login otp, ano gagawin ko??",otp_not_received,student_parent,yes
+Can you tell me my login code hasn't arrived.?,otp_not_received,student_parent,yes
+"Paki-explain, bakit wala akong natatanggap na otp??",otp_not_received,student_parent,yes
+Gusto kong malaman: i did not receive my login otp.,otp_not_received,student_parent,yes
+"Pwede bang sabihin, what if my otp did not arrive??",otp_not_received,student_parent,yes
+"Hi, hindi ko natanggap ang otp ko.?",otp_not_received,student_parent,yes
+"Hello, my login code hasn't arrived.?",otp_not_received,student_parent,yes
+"Pwede po bang malaman, i did not receive my login otp.",otp_not_received,student_parent,yes
+"Pa-help naman, what if my otp did not arrive?",otp_not_received,student_parent,yes
+How do I change my password?,change_password,student_parent,yes
+Can I change my password while logged in?,change_password,student_parent,yes
+Paano magpalit ng password?,change_password,student_parent,yes
+Pwede ko bang palitan ang password ko habang logged in?,change_password,student_parent,yes
+Where can I change my account password?,change_password,student_parent,yes
+How can I update my password?,change_password,student_parent,yes
+Can you help me with this: how do i change my password?,change_password,student_parent,yes
+Quick question: can i change my password while logged in?,change_password,student_parent,yes
+"Just checking, paano magpalit ng password?",change_password,student_parent,yes
+Please tell me pwede ko bang palitan ang password ko habang logged in??,change_password,student_parent,yes
+Can you tell me where can i change my account password??,change_password,student_parent,yes
+"Paki-explain, how can i update my password??",change_password,student_parent,yes
+Gusto kong malaman: how do i change my password?,change_password,student_parent,yes
+"Pwede bang sabihin, can i change my password while logged in??",change_password,student_parent,yes
+"Hi, paano magpalit ng password??",change_password,student_parent,yes
+"Hello, where can i change my account password??",change_password,student_parent,yes
+"Pwede po bang malaman, how do i change my password?",change_password,student_parent,yes
+"Pa-help naman, can i change my password while logged in?",change_password,student_parent,yes
+My payment was rejected. Can I resubmit it?,rejected_payment,student_parent,yes
+What should I do if my payment was rejected?,rejected_payment,student_parent,yes
+"Rejected ang payment ko, ano ang gagawin ko?",rejected_payment,student_parent,yes
+Can I try submitting a rejected payment again?,rejected_payment,student_parent,yes
+"Na-reject ang payment ko, pwede bang i-resubmit?",rejected_payment,student_parent,yes
+How do I handle a rejected payment?,rejected_payment,student_parent,yes
+Can you help me with this: my payment was rejected. can i resubmit it?,rejected_payment,student_parent,yes
+Quick question: what should i do if my payment was rejected?,rejected_payment,student_parent,yes
+"Just checking, rejected ang payment ko, ano ang gagawin ko?",rejected_payment,student_parent,yes
+Please tell me can i try submitting a rejected payment again??,rejected_payment,student_parent,yes
+"Can you tell me na-reject ang payment ko, pwede bang i-resubmit??",rejected_payment,student_parent,yes
+"Paki-explain, how do i handle a rejected payment??",rejected_payment,student_parent,yes
+Gusto kong malaman: my payment was rejected. can i resubmit it?,rejected_payment,student_parent,yes
+"Pwede bang sabihin, what should i do if my payment was rejected??",rejected_payment,student_parent,yes
+"Hi, rejected ang payment ko, ano ang gagawin ko??",rejected_payment,student_parent,yes
+"Hello, na-reject ang payment ko, pwede bang i-resubmit??",rejected_payment,student_parent,yes
+"Pwede po bang malaman, my payment was rejected. can i resubmit it?",rejected_payment,student_parent,yes
+"Pa-help naman, what should i do if my payment was rejected?",rejected_payment,student_parent,yes
+How do I resubmit my payment?,resubmit_payment,student_parent,yes
+Where can I resubmit a rejected payment?,resubmit_payment,student_parent,yes
+Paano i-resubmit ang payment?,resubmit_payment,student_parent,yes
+Saan ko puwedeng i-submit ulit ang rejected payment?,resubmit_payment,student_parent,yes
+Can I submit my payment again?,resubmit_payment,student_parent,yes
+How do I send a rejected payment again?,resubmit_payment,student_parent,yes
+Can you help me with this: how do i resubmit my payment?,resubmit_payment,student_parent,yes
+Quick question: where can i resubmit a rejected payment?,resubmit_payment,student_parent,yes
+"Just checking, paano i-resubmit ang payment?",resubmit_payment,student_parent,yes
+Please tell me saan ko puwedeng i-submit ulit ang rejected payment??,resubmit_payment,student_parent,yes
+Can you tell me can i submit my payment again??,resubmit_payment,student_parent,yes
+"Paki-explain, how do i send a rejected payment again??",resubmit_payment,student_parent,yes
+Gusto kong malaman: how do i resubmit my payment?,resubmit_payment,student_parent,yes
+"Pwede bang sabihin, where can i resubmit a rejected payment??",resubmit_payment,student_parent,yes
+"Hi, paano i-resubmit ang payment??",resubmit_payment,student_parent,yes
+"Hello, can i submit my payment again??",resubmit_payment,student_parent,yes
+"Pwede po bang malaman, how do i resubmit my payment?",resubmit_payment,student_parent,yes
+"Pa-help naman, where can i resubmit a rejected payment?",resubmit_payment,student_parent,yes
+Where can I find my invoices?,invoices,student_parent,yes
+Where are my invoices stored?,invoices,student_parent,yes
+Nasaan ang invoices ko?,invoices,student_parent,yes
+Saan ko makikita ang payment invoices?,invoices,student_parent,yes
+Can I view my invoices?,invoices,student_parent,yes
+Where can I access my billing invoices?,invoices,student_parent,yes
+Can you help me with this: where can i find my invoices?,invoices,student_parent,yes
+Quick question: where are my invoices stored?,invoices,student_parent,yes
+"Just checking, nasaan ang invoices ko?",invoices,student_parent,yes
+Please tell me saan ko makikita ang payment invoices??,invoices,student_parent,yes
+Can you tell me can i view my invoices??,invoices,student_parent,yes
+"Paki-explain, where can i access my billing invoices??",invoices,student_parent,yes
+Gusto kong malaman: where can i find my invoices?,invoices,student_parent,yes
+"Pwede bang sabihin, where are my invoices stored??",invoices,student_parent,yes
+"Hi, nasaan ang invoices ko??",invoices,student_parent,yes
+"Hello, can i view my invoices??",invoices,student_parent,yes
+"Pwede po bang malaman, where can i find my invoices?",invoices,student_parent,yes
+"Pa-help naman, where are my invoices stored?",invoices,student_parent,yes
+Why was I automatically logged out?,auto_logout,student_parent,yes
+Why does the system log me out?,auto_logout,student_parent,yes
+Bakit ako automatic na na-log out?,auto_logout,student_parent,yes
+Why did my session end automatically?,auto_logout,student_parent,yes
+Bakit nag-auto logout ang account ko?,auto_logout,student_parent,yes
+What causes automatic logout?,auto_logout,student_parent,yes
+Can you help me with this: why was i automatically logged out?,auto_logout,student_parent,yes
+Quick question: why does the system log me out?,auto_logout,student_parent,yes
+"Just checking, bakit ako automatic na na-log out?",auto_logout,student_parent,yes
+Please tell me why did my session end automatically??,auto_logout,student_parent,yes
+Can you tell me bakit nag-auto logout ang account ko??,auto_logout,student_parent,yes
+"Paki-explain, what causes automatic logout??",auto_logout,student_parent,yes
+Gusto kong malaman: why was i automatically logged out?,auto_logout,student_parent,yes
+"Pwede bang sabihin, why does the system log me out??",auto_logout,student_parent,yes
+"Hi, bakit ako automatic na na-log out??",auto_logout,student_parent,yes
+"Hello, bakit nag-auto logout ang account ko??",auto_logout,student_parent,yes
+"Pwede po bang malaman, why was i automatically logged out?",auto_logout,student_parent,yes
+"Pa-help naman, why does the system log me out?",auto_logout,student_parent,yes
+How can I raise a concern?,raise_concern,student_parent,yes
+Where can I submit a concern?,raise_concern,student_parent,yes
+Paano ako mag-raise ng concern?,raise_concern,student_parent,yes
+Saan ako puwedeng magsubmit ng concern?,raise_concern,student_parent,yes
+How do I report an issue?,raise_concern,student_parent,yes
+May Raise a Concern feature ba?,raise_concern,student_parent,yes
+Can you help me with this: how can i raise a concern?,raise_concern,student_parent,yes
+Quick question: where can i submit a concern?,raise_concern,student_parent,yes
+"Just checking, paano ako mag-raise ng concern?",raise_concern,student_parent,yes
+Please tell me saan ako puwedeng magsubmit ng concern??,raise_concern,student_parent,yes
+Can you tell me how do i report an issue??,raise_concern,student_parent,yes
+"Paki-explain, may raise a concern feature ba??",raise_concern,student_parent,yes
+Gusto kong malaman: how can i raise a concern?,raise_concern,student_parent,yes
+"Pwede bang sabihin, where can i submit a concern??",raise_concern,student_parent,yes
+"Hi, paano ako mag-raise ng concern??",raise_concern,student_parent,yes
+"Hello, how do i report an issue??",raise_concern,student_parent,yes
+"Pwede po bang malaman, how can i raise a concern?",raise_concern,student_parent,yes
+"Pa-help naman, where can i submit a concern?",raise_concern,student_parent,yes
+Do I need to confirm before submitting a concern?,concern_confirmation,student_parent,yes
+Is confirmation required before I submit?,concern_confirmation,student_parent,yes
+Kailangan ba ng confirmation bago i-submit ang concern?,concern_confirmation,student_parent,yes
+May confirmation step ba?,concern_confirmation,student_parent,yes
+Do I have to confirm my concern first?,concern_confirmation,student_parent,yes
+Kailangan ko bang i-confirm muna bago mag-submit?,concern_confirmation,student_parent,yes
+Can you help me with this: do i need to confirm before submitting a concern?,concern_confirmation,student_parent,yes
+Quick question: is confirmation required before i submit?,concern_confirmation,student_parent,yes
+"Just checking, kailangan ba ng confirmation bago i-submit ang concern?",concern_confirmation,student_parent,yes
+Please tell me may confirmation step ba??,concern_confirmation,student_parent,yes
+Can you tell me do i have to confirm my concern first??,concern_confirmation,student_parent,yes
+"Paki-explain, kailangan ko bang i-confirm muna bago mag-submit??",concern_confirmation,student_parent,yes
+Gusto kong malaman: do i need to confirm before submitting a concern?,concern_confirmation,student_parent,yes
+"Pwede bang sabihin, is confirmation required before i submit??",concern_confirmation,student_parent,yes
+"Hi, kailangan ba ng confirmation bago i-submit ang concern??",concern_confirmation,student_parent,yes
+"Hello, do i have to confirm my concern first??",concern_confirmation,student_parent,yes
+"Pwede po bang malaman, do i need to confirm before submitting a concern?",concern_confirmation,student_parent,yes
+"Pa-help naman, is confirmation required before i submit?",concern_confirmation,student_parent,yes
+What happens after I confirm my concern?,concern_submitted,student_parent,yes
+What happens after submitting a concern?,concern_submitted,student_parent,yes
+Ano ang mangyayari pagkatapos kong i-confirm ang concern?,concern_submitted,student_parent,yes
+"After I submit, what happens next?",concern_submitted,student_parent,yes
+Saan mapupunta ang concern after confirmation?,concern_submitted,student_parent,yes
+Ano ang next step pagkatapos mag-submit?,concern_submitted,student_parent,yes
+Can you help me with this: what happens after i confirm my concern?,concern_submitted,student_parent,yes
+Quick question: what happens after submitting a concern?,concern_submitted,student_parent,yes
+"Just checking, ano ang mangyayari pagkatapos kong i-confirm ang concern?",concern_submitted,student_parent,yes
+"Please tell me after i submit, what happens next??",concern_submitted,student_parent,yes
+Can you tell me saan mapupunta ang concern after confirmation??,concern_submitted,student_parent,yes
+"Paki-explain, ano ang next step pagkatapos mag-submit??",concern_submitted,student_parent,yes
+Gusto kong malaman: what happens after i confirm my concern?,concern_submitted,student_parent,yes
+"Pwede bang sabihin, what happens after submitting a concern??",concern_submitted,student_parent,yes
+"Hi, ano ang mangyayari pagkatapos kong i-confirm ang concern??",concern_submitted,student_parent,yes
+"Hello, saan mapupunta ang concern after confirmation??",concern_submitted,student_parent,yes
+"Pwede po bang malaman, what happens after i confirm my concern?",concern_submitted,student_parent,yes
+"Pa-help naman, what happens after submitting a concern?",concern_submitted,student_parent,yes
+What is the status of my ticket?,ticket_status,student_parent,yes
+Can I check my ticket status?,ticket_status,student_parent,yes
+Ano ang status ng ticket ko?,ticket_status,student_parent,yes
+How can I see my support ticket status?,ticket_status,student_parent,yes
+Nasaan ang ticket status ko?,ticket_status,student_parent,yes
+Can I track the current status of my ticket?,ticket_status,student_parent,yes
+Can you help me with this: what is the status of my ticket?,ticket_status,student_parent,yes
+Quick question: can i check my ticket status?,ticket_status,student_parent,yes
+"Just checking, ano ang status ng ticket ko?",ticket_status,student_parent,yes
+Please tell me how can i see my support ticket status??,ticket_status,student_parent,yes
+Can you tell me nasaan ang ticket status ko??,ticket_status,student_parent,yes
+"Paki-explain, can i track the current status of my ticket??",ticket_status,student_parent,yes
+Gusto kong malaman: what is the status of my ticket?,ticket_status,student_parent,yes
+"Pwede bang sabihin, can i check my ticket status??",ticket_status,student_parent,yes
+"Hi, ano ang status ng ticket ko??",ticket_status,student_parent,yes
+"Hello, nasaan ang ticket status ko??",ticket_status,student_parent,yes
+"Pwede po bang malaman, what is the status of my ticket?",ticket_status,student_parent,yes
+Is my ticket still waiting?,ticket_status,student_parent,yes
+Is my concern still pending?,pending_ticket,student_parent,yes
+Is my ticket still pending?,pending_ticket,student_parent,yes
+Pending pa ba ang concern ko?,pending_ticket,student_parent,yes
+Has my concern not been resolved yet?,pending_ticket,student_parent,yes
+Naka-pending pa ba ang ticket ko?,pending_ticket,student_parent,yes
+Is my submitted issue still waiting?,pending_ticket,student_parent,yes
+Can you help me with this: is my concern still pending?,pending_ticket,student_parent,yes
+Quick question: is my ticket still pending?,pending_ticket,student_parent,yes
+"Just checking, pending pa ba ang concern ko?",pending_ticket,student_parent,yes
+Please tell me has my concern not been resolved yet??,pending_ticket,student_parent,yes
+Can you tell me naka-pending pa ba ang ticket ko??,pending_ticket,student_parent,yes
+"Paki-explain, is my submitted issue still waiting??",pending_ticket,student_parent,yes
+Gusto kong malaman: is my concern still pending?,pending_ticket,student_parent,yes
+"Pwede bang sabihin, is my ticket still pending??",pending_ticket,student_parent,yes
+"Hi, pending pa ba ang concern ko??",pending_ticket,student_parent,yes
+"Hello, naka-pending pa ba ang ticket ko??",pending_ticket,student_parent,yes
+"Pwede po bang malaman, is my concern still pending?",pending_ticket,student_parent,yes
+What is the current status of my ticket?,pending_ticket,student_parent,yes
+Has my concern been resolved?,resolved_ticket,student_parent,yes
+Is my ticket already resolved?,resolved_ticket,student_parent,yes
+Resolved na ba ang concern ko?,resolved_ticket,student_parent,yes
+Can I check if my ticket is resolved?,resolved_ticket,student_parent,yes
+Naayos na ba ang concern na sinubmit ko?,resolved_ticket,student_parent,yes
+Is my support ticket closed as resolved?,resolved_ticket,student_parent,yes
+Can you help me with this: has my concern been resolved?,resolved_ticket,student_parent,yes
+Quick question: is my ticket already resolved?,resolved_ticket,student_parent,yes
+"Just checking, resolved na ba ang concern ko?",resolved_ticket,student_parent,yes
+Please tell me can i check if my ticket is resolved??,resolved_ticket,student_parent,yes
+Can you tell me naayos na ba ang concern na sinubmit ko??,resolved_ticket,student_parent,yes
+"Paki-explain, is my support ticket closed as resolved??",resolved_ticket,student_parent,yes
+Gusto kong malaman: has my concern been resolved?,resolved_ticket,student_parent,yes
+"Pwede bang sabihin, is my ticket already resolved??",resolved_ticket,student_parent,yes
+"Hi, resolved na ba ang concern ko??",resolved_ticket,student_parent,yes
+"Hello, naayos na ba ang concern na sinubmit ko??",resolved_ticket,student_parent,yes
+"Pwede po bang malaman, has my concern been resolved?",resolved_ticket,student_parent,yes
+"Pa-help naman, is my ticket already resolved?",resolved_ticket,student_parent,yes
+Can I track my concern?,track_concern,student_parent,yes
+Where can I track my submitted concern?,track_concern,student_parent,yes
+Pwede ko bang i-track ang concern ko?,track_concern,student_parent,yes
+How do I follow up on my concern?,track_concern,student_parent,yes
+Saan ko makikita ang status ng concern ko?,track_concern,student_parent,yes
+Can I monitor my submitted issue?,track_concern,student_parent,yes
+Can you help me with this: can i track my concern?,track_concern,student_parent,yes
+Quick question: where can i track my submitted concern?,track_concern,student_parent,yes
+"Just checking, pwede ko bang i-track ang concern ko?",track_concern,student_parent,yes
+Please tell me how do i follow up on my concern??,track_concern,student_parent,yes
+Can you tell me saan ko makikita ang status ng concern ko??,track_concern,student_parent,yes
+"Paki-explain, can i monitor my submitted issue??",track_concern,student_parent,yes
+Gusto kong malaman: can i track my concern?,track_concern,student_parent,yes
+"Pwede bang sabihin, where can i track my submitted concern??",track_concern,student_parent,yes
+"Hi, pwede ko bang i-track ang concern ko??",track_concern,student_parent,yes
+"Hello, saan ko makikita ang status ng concern ko??",track_concern,student_parent,yes
+"Pwede po bang malaman, can i track my concern?",track_concern,student_parent,yes
+"Pa-help naman, where can i track my submitted concern?",track_concern,student_parent,yes
+Is child-safety detection active without logging in?,child_safety,student_parent,yes
+Does safety protection work for visitors?,child_safety,student_parent,yes
+Active ba ang child-safety detection kahit walang login?,child_safety,student_parent,yes
+Can the safety system work before sign-in?,child_safety,student_parent,yes
+Does child safety still operate for public users?,child_safety,student_parent,yes
+Gumagana ba ang child safety kahit visitor lang?,child_safety,student_parent,yes
+Can you help me with this: is child-safety detection active without logging in?,child_safety,student_parent,yes
+Quick question: does safety protection work for visitors?,child_safety,student_parent,yes
+"Just checking, active ba ang child-safety detection kahit walang login?",child_safety,student_parent,yes
+Please tell me can the safety system work before sign-in??,child_safety,student_parent,yes
+Can you tell me does child safety still operate for public users??,child_safety,student_parent,yes
+"Paki-explain, gumagana ba ang child safety kahit visitor lang??",child_safety,student_parent,yes
+Gusto kong malaman: is child-safety detection active without logging in?,child_safety,student_parent,yes
+"Pwede bang sabihin, does safety protection work for visitors??",child_safety,student_parent,yes
+"Hi, active ba ang child-safety detection kahit walang login??",child_safety,student_parent,yes
+"Hello, does child safety still operate for public users??",child_safety,student_parent,yes
+"Pwede po bang malaman, is child-safety detection active without logging in?",child_safety,student_parent,yes
+"Pa-help naman, does safety protection work for visitors?",child_safety,student_parent,yes
+What happens if unsafe content is detected?,safety_detection,student_parent,yes
+How does safety detection work?,safety_detection,student_parent,yes
+Ano ang mangyayari kapag may unsafe content?,safety_detection,student_parent,yes
+What does the safety system do when it detects danger?,safety_detection,student_parent,yes
+May alert ba kapag may unsafe content?,safety_detection,student_parent,yes
+Paano gumagana ang safety detection?,safety_detection,student_parent,yes
+Can you help me with this: what happens if unsafe content is detected?,safety_detection,student_parent,yes
+Quick question: how does safety detection work?,safety_detection,student_parent,yes
+"Just checking, ano ang mangyayari kapag may unsafe content?",safety_detection,student_parent,yes
+Please tell me what does the safety system do when it detects danger??,safety_detection,student_parent,yes
+Can you tell me may alert ba kapag may unsafe content??,safety_detection,student_parent,yes
+"Paki-explain, paano gumagana ang safety detection??",safety_detection,student_parent,yes
+Gusto kong malaman: what happens if unsafe content is detected?,safety_detection,student_parent,yes
+"Pwede bang sabihin, how does safety detection work??",safety_detection,student_parent,yes
+"Hi, ano ang mangyayari kapag may unsafe content??",safety_detection,student_parent,yes
+"Hello, may alert ba kapag may unsafe content??",safety_detection,student_parent,yes
+"Pwede po bang malaman, what happens if unsafe content is detected?",safety_detection,student_parent,yes
+"Pa-help naman, how does safety detection work?",safety_detection,student_parent,yes
+What should I do during a crisis?,crisis_support,student_parent,yes
+What should I do if there is an immediate safety crisis?,crisis_support,student_parent,yes
+Ano ang gagawin kapag may crisis?,crisis_support,student_parent,yes
+Where can I get crisis support?,crisis_support,student_parent,yes
+Ano ang dapat gawin sa emergency safety situation?,crisis_support,student_parent,yes
+How can I get help during a crisis?,crisis_support,student_parent,yes
+Can you help me with this: what should i do during a crisis?,crisis_support,student_parent,yes
+Quick question: what should i do if there is an immediate safety crisis?,crisis_support,student_parent,yes
+"Just checking, ano ang gagawin kapag may crisis?",crisis_support,student_parent,yes
+Please tell me where can i get crisis support??,crisis_support,student_parent,yes
+Can you tell me ano ang dapat gawin sa emergency safety situation??,crisis_support,student_parent,yes
+"Paki-explain, how can i get help during a crisis??",crisis_support,student_parent,yes
+Gusto kong malaman: what should i do during a crisis?,crisis_support,student_parent,yes
+"Pwede bang sabihin, what should i do if there is an immediate safety crisis??",crisis_support,student_parent,yes
+"Hi, ano ang gagawin kapag may crisis??",crisis_support,student_parent,yes
+"Hello, ano ang dapat gawin sa emergency safety situation??",crisis_support,student_parent,yes
+"Pwede po bang malaman, what should i do during a crisis?",crisis_support,student_parent,yes
+"Pa-help naman, what should i do if there is an immediate safety crisis?",crisis_support,student_parent,yes
+Is there a crisis hotline available?,crisis_hotline,student_parent,yes
+Where can I find the crisis hotline?,crisis_hotline,student_parent,yes
+May crisis hotline ba?,crisis_hotline,student_parent,yes
+Saan makikita ang crisis hotline information?,crisis_hotline,student_parent,yes
+Can I access a crisis hotline through the safety feature?,crisis_hotline,student_parent,yes
+May hotline ba para sa crisis support?,crisis_hotline,student_parent,yes
+Can you help me with this: is there a crisis hotline available?,crisis_hotline,student_parent,yes
+Quick question: where can i find the crisis hotline?,crisis_hotline,student_parent,yes
+"Just checking, may crisis hotline ba?",crisis_hotline,student_parent,yes
+Please tell me saan makikita ang crisis hotline information??,crisis_hotline,student_parent,yes
+Can you tell me can i access a crisis hotline through the safety feature??,crisis_hotline,student_parent,yes
+"Paki-explain, may hotline ba para sa crisis support??",crisis_hotline,student_parent,yes
+Gusto kong malaman: is there a crisis hotline available?,crisis_hotline,student_parent,yes
+"Pwede bang sabihin, where can i find the crisis hotline??",crisis_hotline,student_parent,yes
+"Hi, may crisis hotline ba??",crisis_hotline,student_parent,yes
+"Hello, can i access a crisis hotline through the safety feature??",crisis_hotline,student_parent,yes
+"Pwede po bang malaman, is there a crisis hotline available?",crisis_hotline,student_parent,yes
+"Pa-help naman, where can i find the crisis hotline?",crisis_hotline,student_parent,yes
+Can I see my account information?,account_information,student_parent,yes
+Where can I view my account details?,account_information,student_parent,yes
+Pwede ko bang makita ang account information ko?,account_information,student_parent,yes
+Where are my profile details?,account_information,student_parent,yes
+Can I access my account details?,account_information,student_parent,yes
+Saan ko makikita ang account details ko?,account_information,student_parent,yes
+Can you help me with this: can i see my account information?,account_information,student_parent,yes
+Quick question: where can i view my account details?,account_information,student_parent,yes
+"Just checking, pwede ko bang makita ang account information ko?",account_information,student_parent,yes
+Please tell me where are my profile details??,account_information,student_parent,yes
+Can you tell me can i access my account details??,account_information,student_parent,yes
+"Paki-explain, saan ko makikita ang account details ko??",account_information,student_parent,yes
+Gusto kong malaman: can i see my account information?,account_information,student_parent,yes
+"Pwede bang sabihin, where can i view my account details??",account_information,student_parent,yes
+"Hi, pwede ko bang makita ang account information ko??",account_information,student_parent,yes
+"Hello, can i access my account details??",account_information,student_parent,yes
+"Pwede po bang malaman, can i see my account information?",account_information,student_parent,yes
+"Pa-help naman, where can i view my account details?",account_information,student_parent,yes
+Can I see my payment history?,payment_history,student_parent,yes
+Where can I view previous payments?,payment_history,student_parent,yes
+Pwede ko bang makita ang payment history ko?,payment_history,student_parent,yes
+Nasaan ang records ng mga bayad ko?,payment_history,student_parent,yes
+Can I check my past payments?,payment_history,student_parent,yes
+Saan ko makikita ang payment records ko?,payment_history,student_parent,yes
+Can you help me with this: can i see my payment history?,payment_history,student_parent,yes
+Quick question: where can i view previous payments?,payment_history,student_parent,yes
+"Just checking, pwede ko bang makita ang payment history ko?",payment_history,student_parent,yes
+Please tell me nasaan ang records ng mga bayad ko??,payment_history,student_parent,yes
+Can you tell me can i check my past payments??,payment_history,student_parent,yes
+"Paki-explain, saan ko makikita ang payment records ko??",payment_history,student_parent,yes
+Gusto kong malaman: can i see my payment history?,payment_history,student_parent,yes
+"Pwede bang sabihin, where can i view previous payments??",payment_history,student_parent,yes
+"Hi, pwede ko bang makita ang payment history ko??",payment_history,student_parent,yes
+"Hello, can i check my past payments??",payment_history,student_parent,yes
+"Pwede po bang malaman, can i see my payment history?",payment_history,student_parent,yes
+"Pa-help naman, where can i view previous payments?",payment_history,student_parent,yes
+Can I see my attendance?,attendance,student_parent,yes
+Where can I view my attendance record?,attendance,student_parent,yes
+Pwede ko bang makita ang attendance ko?,attendance,student_parent,yes
+Nasaan ang attendance record ko?,attendance,student_parent,yes
+Can I check my class attendance?,attendance,student_parent,yes
+Kumusta ang attendance record ko?,attendance,student_parent,yes
+Can you help me with this: can i see my attendance?,attendance,student_parent,yes
+Quick question: where can i view my attendance record?,attendance,student_parent,yes
+"Just checking, pwede ko bang makita ang attendance ko?",attendance,student_parent,yes
+Please tell me nasaan ang attendance record ko??,attendance,student_parent,yes
+Can you tell me can i check my class attendance??,attendance,student_parent,yes
+"Paki-explain, kumusta ang attendance record ko??",attendance,student_parent,yes
+Gusto kong malaman: can i see my attendance?,attendance,student_parent,yes
+"Pwede bang sabihin, where can i view my attendance record??",attendance,student_parent,yes
+"Hi, pwede ko bang makita ang attendance ko??",attendance,student_parent,yes
+"Hello, can i check my class attendance??",attendance,student_parent,yes
+"Pwede po bang malaman, can i see my attendance?",attendance,student_parent,yes
+"Pa-help naman, where can i view my attendance record?",attendance,student_parent,yes
+Can I check my child's attendance?,parent_attendance,student_parent,yes
+Where can I see my child's attendance?,parent_attendance,student_parent,yes
+Pwede ko bang makita ang attendance ng anak ko?,parent_attendance,student_parent,yes
+Can I check if my child attended the sessions?,parent_attendance,student_parent,yes
+Nasaan ang attendance record ng anak ko?,parent_attendance,student_parent,yes
+Kumusta ang attendance ng anak ko?,parent_attendance,student_parent,yes
+Can you help me with this: can i check my child's attendance?,parent_attendance,student_parent,yes
+Quick question: where can i see my child's attendance?,parent_attendance,student_parent,yes
+"Just checking, pwede ko bang makita ang attendance ng anak ko?",parent_attendance,student_parent,yes
+Please tell me can i check if my child attended the sessions??,parent_attendance,student_parent,yes
+Can you tell me nasaan ang attendance record ng anak ko??,parent_attendance,student_parent,yes
+"Paki-explain, kumusta ang attendance ng anak ko??",parent_attendance,student_parent,yes
+Gusto kong malaman: can i check my child's attendance?,parent_attendance,student_parent,yes
+"Pwede bang sabihin, where can i see my child's attendance??",parent_attendance,student_parent,yes
+"Hi, pwede ko bang makita ang attendance ng anak ko??",parent_attendance,student_parent,yes
+"Hello, nasaan ang attendance record ng anak ko??",parent_attendance,student_parent,yes
+"Pwede po bang malaman, can i check my child's attendance?",parent_attendance,student_parent,yes
+"Pa-help naman, where can i see my child's attendance?",parent_attendance,student_parent,yes
+Do you offer online classes?,online_classes,student_parent,no
+Are online classes available?,online_classes,student_parent,no
+May online classes ba?,online_classes,student_parent,no
+Can I attend remotely?,online_classes,student_parent,no
+Online ba ang classes ninyo?,online_classes,student_parent,no
+Pwede bang remote ang tutorial?,online_classes,student_parent,no
+Can you help me with this: do you offer online classes?,online_classes,student_parent,no
+Quick question: are online classes available?,online_classes,student_parent,no
+"Just checking, may online classes ba?",online_classes,student_parent,no
+Please tell me can i attend remotely??,online_classes,student_parent,no
+Can you tell me online ba ang classes ninyo??,online_classes,student_parent,no
+"Paki-explain, pwede bang remote ang tutorial??",online_classes,student_parent,no
+Gusto kong malaman: do you offer online classes?,online_classes,student_parent,no
+"Pwede bang sabihin, are online classes available??",online_classes,student_parent,no
+"Hi, may online classes ba??",online_classes,student_parent,no
+"Hello, online ba ang classes ninyo??",online_classes,student_parent,no
+"Pwede po bang malaman, do you offer online classes?",online_classes,student_parent,no
+"Pa-help naman, are online classes available?",online_classes,student_parent,no
+Can I get a refund?,refund_policy,student_parent,no
+Are payments refundable?,refund_policy,student_parent,no
+Pwede bang ma-refund ang payment?,refund_policy,student_parent,no
+May refund ba kapag nagbayad na?,refund_policy,student_parent,no
+Can I request my money back?,refund_policy,student_parent,no
+Refundable ba ang bayad?,refund_policy,student_parent,no
+Can you help me with this: can i get a refund?,refund_policy,student_parent,no
+Quick question: are payments refundable?,refund_policy,student_parent,no
+"Just checking, pwede bang ma-refund ang payment?",refund_policy,student_parent,no
+Please tell me may refund ba kapag nagbayad na??,refund_policy,student_parent,no
+Can you tell me can i request my money back??,refund_policy,student_parent,no
+"Paki-explain, refundable ba ang bayad??",refund_policy,student_parent,no
+Gusto kong malaman: can i get a refund?,refund_policy,student_parent,no
+"Pwede bang sabihin, are payments refundable??",refund_policy,student_parent,no
+"Hi, pwede bang ma-refund ang payment??",refund_policy,student_parent,no
+"Hello, can i request my money back??",refund_policy,student_parent,no
+"Pwede po bang malaman, can i get a refund?",refund_policy,student_parent,no
+"Pa-help naman, are payments refundable?",refund_policy,student_parent,no

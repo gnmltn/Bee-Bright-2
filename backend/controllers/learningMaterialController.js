@@ -2,6 +2,7 @@ const LearningMaterial = require('../models/LearningMaterial');
 const path = require('path');
 const { logAudit } = require('../utils/auditService');
 const fs = require('fs');
+const { parentOwnsStudent } = require('../utils/parentChildAccess');
 
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'material');
 
@@ -170,10 +171,16 @@ const getMyMaterials = async (req, res) => {
 // @access  Private (Student)
 const getAssignedMaterials = async (req, res) => {
   try {
-    if (req.user.role !== 'student') {
-      return res.status(403).json({ success: false, message: 'Only students can view assigned materials' });
+    let studentId = req.user._id;
+    if (req.user.role === 'parent') {
+      studentId = String(req.query.studentId || '');
+      if (!studentId || !(await parentOwnsStudent(req.user._id, studentId))) {
+        return res.status(403).json({ success: false, message: 'Select one of your own children to view their materials.' });
+      }
+    } else if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Only students and parents can view assigned materials' });
     }
-    const materials = await LearningMaterial.find({ assignedStudents: req.user._id })
+    const materials = await LearningMaterial.find({ assignedStudents: studentId })
       .populate('uploadedBy', 'firstName lastName')
       .populate('subject', 'name code')
       .sort({ category: 1, createdAt: -1 })

@@ -568,14 +568,15 @@ export const scheduleService = {
   getOptions: () => api.get('/schedules/options'),
   getTutorsBySubject: (subjectId: string) => api.get('/schedules/tutors', { params: { subjectId } }),
   /**
-   * Returns the required tutor count for a Toddlers Playgroup session based on child count.
-   * Uses the variable ratio: ceil(childCount / 3), capped at 4.
+   * Returns the minimum required tutor count for a Toddlers Playgroup session
+   * based on child count. Uses the ratio: ceil(childCount / 2). There is no
+   * maximum — assigning more tutors than this minimum is always allowed.
    */
   getPlaygroupTutorRequirement: (childCount: number) =>
     api.get<{
       success: boolean;
       childCount: number;
-      tutorRequirement: { min: number; max: number; recommended: number };
+      tutorRequirement: { min: number; recommended: number };
       availableTutorCount: number;
       hasSufficient: boolean;
       message: string;
@@ -616,7 +617,8 @@ export const scheduleService = {
     api.post(`/schedules/${scheduleId}/enroll-student`, data),
   removeStudent: (scheduleId: string, studentId: string) => api.post(`/schedules/${scheduleId}/remove-student`, { studentId }),
   getMySessions: () => api.get('/schedules/my-sessions'),
-  getMyClasses: () => api.get('/schedules/student/my-classes'),
+  /** studentId is required only for a parent viewing a specific child's classes. */
+  getMyClasses: (studentId?: string) => api.get('/schedules/student/my-classes', { params: studentId ? { studentId } : {} }),
   markAttendance: (scheduleId: string, status: 'present' | 'absent') =>
     api.patch(`/schedules/${scheduleId}/attendance`, { status }),
 };
@@ -689,6 +691,8 @@ export interface MyEscalation {
 export interface AdminEscalation extends MyEscalation {
   source: 'child_safety' | 'handoff';
   conversationSnippet?: string;
+  concernReason?: string;
+  concernExplanation?: string;
   resolutionNote?: string;
   role?: string | null;
   userIdentifier?: string | null;
@@ -696,12 +700,15 @@ export interface AdminEscalation extends MyEscalation {
   handledBy?: { _id: string; firstName?: string; lastName?: string; email?: string } | null;
 }
 
+/** Admin Requests list filter: exact status, or 'unresolved' (open + being handled). */
+export type EscalationListStatus = EscalationStatus | 'unresolved';
+
 export const escalationService = {
   /** The caller's own handoff tickets (any authenticated role). Read-only. */
   listMine: () =>
     api.get<{ success: boolean; count: number; escalations: MyEscalation[] }>('/escalations/mine'),
   /** Admin / super_admin only. */
-  list: (params?: { status?: EscalationStatus; source?: string; severity?: string; category?: string; limit?: number }) =>
+  list: (params?: { status?: EscalationListStatus; source?: string; severity?: string; category?: string; limit?: number }) =>
     api.get<{ success: boolean; count: number; escalations: AdminEscalation[] }>('/escalations', { params }),
   getStats: () =>
     api.get<{ success: boolean; stats: { openUrgent: number; openOrAcknowledged: number; unresolvedChildSafety: number } }>('/escalations/stats'),
@@ -733,7 +740,8 @@ export interface LearningMaterialItem {
 
 export const materialService = {
   getMyMaterials: () => api.get<{ success: boolean; materials: LearningMaterialItem[] }>('/materials'),
-  getAssignedMaterials: () => api.get<{ success: boolean; materials: LearningMaterialItem[] }>('/materials/student/assigned'),
+  /** studentId is required only for a parent viewing a specific child's materials. */
+  getAssignedMaterials: (studentId?: string) => api.get<{ success: boolean; materials: LearningMaterialItem[] }>('/materials/student/assigned', { params: studentId ? { studentId } : {} }),
   createMaterial: (formData: FormData) => api.post<{ success: boolean; material: LearningMaterialItem }>('/materials', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
@@ -762,7 +770,8 @@ export const gradeService = {
     api.get<{ success: boolean; grades: GradeItem[] }>('/grades', studentId ? { params: { studentId } } : undefined),
   getGradesForStudent: (studentId: string) =>
     api.get<{ success: boolean; grades: GradeItem[] }>(`/grades/student/${studentId}`),
-  getMyProgress: () => api.get<{ success: boolean; grades: GradeItem[] }>('/grades/my-progress'),
+  /** studentId is required only for a parent viewing a specific child's progress. */
+  getMyProgress: (studentId?: string) => api.get<{ success: boolean; grades: GradeItem[] }>('/grades/my-progress', { params: studentId ? { studentId } : {} }),
   updateGrade: (id: string, data: { score?: number; maxScore?: number; period?: string; remarks?: string }) =>
     api.put<{ success: boolean; grade: GradeItem }>(`/grades/${id}`, data),
   deleteGrade: (id: string) => api.delete(`/grades/${id}`),

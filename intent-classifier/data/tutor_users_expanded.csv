@@ -1,0 +1,559 @@
+user_query,intent,role,requires_login
+What is my tutor schedule?,own_schedule,tutor,yes
+Can I see my own teaching schedule?,own_schedule,tutor,yes
+Nasaan ang schedule ko bilang tutor?,own_schedule,tutor,yes
+What classes am I assigned to?,own_schedule,tutor,yes
+Pwede ko bang makita ang teaching schedule ko?,own_schedule,tutor,yes
+Kailan ang mga sessions ko?,own_schedule,tutor,yes
+Can you help me with this: what is my tutor schedule?,own_schedule,tutor,yes
+Quick question: can i see my own teaching schedule?,own_schedule,tutor,yes
+"Just checking, nasaan ang schedule ko bilang tutor?",own_schedule,tutor,yes
+Please tell me what classes am i assigned to??,own_schedule,tutor,yes
+Can you tell me pwede ko bang makita ang teaching schedule ko??,own_schedule,tutor,yes
+"Paki-explain, kailan ang mga sessions ko??",own_schedule,tutor,yes
+Gusto kong malaman: what is my tutor schedule?,own_schedule,tutor,yes
+"Pwede bang sabihin, can i see my own teaching schedule??",own_schedule,tutor,yes
+"Hi, nasaan ang schedule ko bilang tutor??",own_schedule,tutor,yes
+"Hello, pwede ko bang makita ang teaching schedule ko??",own_schedule,tutor,yes
+"Pwede po bang malaman, what is my tutor schedule?",own_schedule,tutor,yes
+Where can I find my class schedule?,own_schedule,tutor,yes
+Can I view my teaching schedule?,view_schedule,tutor,yes
+Where can I see my tutor schedule?,view_schedule,tutor,yes
+Paano makita ang teaching schedule ko?,view_schedule,tutor,yes
+Can I check my assigned schedule?,view_schedule,tutor,yes
+Nasaan ang schedule ng teaching sessions ko?,view_schedule,tutor,yes
+Pwede ko bang tingnan ang schedule ko?,view_schedule,tutor,yes
+Can you help me with this: can i view my teaching schedule?,view_schedule,tutor,yes
+Quick question: where can i see my tutor schedule?,view_schedule,tutor,yes
+"Just checking, paano makita ang teaching schedule ko?",view_schedule,tutor,yes
+Please tell me can i check my assigned schedule??,view_schedule,tutor,yes
+Can you tell me nasaan ang schedule ng teaching sessions ko??,view_schedule,tutor,yes
+"Paki-explain, pwede ko bang tingnan ang schedule ko??",view_schedule,tutor,yes
+Gusto kong malaman: can i view my teaching schedule?,view_schedule,tutor,yes
+"Pwede bang sabihin, where can i see my tutor schedule??",view_schedule,tutor,yes
+"Hi, paano makita ang teaching schedule ko??",view_schedule,tutor,yes
+"Hello, nasaan ang schedule ng teaching sessions ko??",view_schedule,tutor,yes
+"Pwede po bang malaman, can i view my teaching schedule?",view_schedule,tutor,yes
+"Pa-help naman, where can i see my tutor schedule?",view_schedule,tutor,yes
+How do I mark attendance?,mark_attendance,tutor,yes
+How can I record attendance for a session?,mark_attendance,tutor,yes
+Paano mag-mark ng attendance?,mark_attendance,tutor,yes
+Saan ko ilalagay ang attendance?,mark_attendance,tutor,yes
+How do I record who attended?,mark_attendance,tutor,yes
+Paano ko ire-record ang attendance?,mark_attendance,tutor,yes
+Can you help me with this: how do i mark attendance?,mark_attendance,tutor,yes
+Quick question: how can i record attendance for a session?,mark_attendance,tutor,yes
+"Just checking, paano mag-mark ng attendance?",mark_attendance,tutor,yes
+Please tell me saan ko ilalagay ang attendance??,mark_attendance,tutor,yes
+Can you tell me how do i record who attended??,mark_attendance,tutor,yes
+"Paki-explain, paano ko ire-record ang attendance??",mark_attendance,tutor,yes
+Gusto kong malaman: how do i mark attendance?,mark_attendance,tutor,yes
+"Pwede bang sabihin, how can i record attendance for a session??",mark_attendance,tutor,yes
+"Hi, paano mag-mark ng attendance??",mark_attendance,tutor,yes
+"Hello, how do i record who attended??",mark_attendance,tutor,yes
+"Pwede po bang malaman, how do i mark attendance?",mark_attendance,tutor,yes
+"Pa-help naman, how can i record attendance for a session?",mark_attendance,tutor,yes
+Can I mark attendance for my students?,student_attendance,tutor,yes
+Can I record attendance for my assigned students?,student_attendance,tutor,yes
+Pwede ko bang i-mark ang attendance ng students ko?,student_attendance,tutor,yes
+How do I record my students' attendance?,student_attendance,tutor,yes
+Can I update attendance for my learners?,student_attendance,tutor,yes
+Saan ko makikita at mamamarkahan ang attendance ng students ko?,student_attendance,tutor,yes
+Can you help me with this: can i mark attendance for my students?,student_attendance,tutor,yes
+Quick question: can i record attendance for my assigned students?,student_attendance,tutor,yes
+"Just checking, pwede ko bang i-mark ang attendance ng students ko?",student_attendance,tutor,yes
+Please tell me how do i record my students' attendance??,student_attendance,tutor,yes
+Can you tell me can i update attendance for my learners??,student_attendance,tutor,yes
+"Paki-explain, saan ko makikita at mamamarkahan ang attendance ng students ko??",student_attendance,tutor,yes
+Gusto kong malaman: can i mark attendance for my students?,student_attendance,tutor,yes
+"Pwede bang sabihin, can i record attendance for my assigned students??",student_attendance,tutor,yes
+"Hi, pwede ko bang i-mark ang attendance ng students ko??",student_attendance,tutor,yes
+"Hello, can i update attendance for my learners??",student_attendance,tutor,yes
+"Pwede po bang malaman, can i mark attendance for my students?",student_attendance,tutor,yes
+"Pa-help naman, can i record attendance for my assigned students?",student_attendance,tutor,yes
+How do I set my availability?,set_availability,tutor,yes
+Where can I set the times I am available?,set_availability,tutor,yes
+Paano i-set ang availability ko?,set_availability,tutor,yes
+Can I enter my available teaching hours?,set_availability,tutor,yes
+Saan ko ilalagay ang available hours ko?,set_availability,tutor,yes
+How do I tell the system when I am available?,set_availability,tutor,yes
+Can you help me with this: how do i set my availability?,set_availability,tutor,yes
+Quick question: where can i set the times i am available?,set_availability,tutor,yes
+"Just checking, paano i-set ang availability ko?",set_availability,tutor,yes
+Please tell me can i enter my available teaching hours??,set_availability,tutor,yes
+Can you tell me saan ko ilalagay ang available hours ko??,set_availability,tutor,yes
+"Paki-explain, how do i tell the system when i am available??",set_availability,tutor,yes
+Gusto kong malaman: how do i set my availability?,set_availability,tutor,yes
+"Pwede bang sabihin, where can i set the times i am available??",set_availability,tutor,yes
+"Hi, paano i-set ang availability ko??",set_availability,tutor,yes
+"Hello, saan ko ilalagay ang available hours ko??",set_availability,tutor,yes
+"Pwede po bang malaman, how do i set my availability?",set_availability,tutor,yes
+"Pa-help naman, where can i set the times i am available?",set_availability,tutor,yes
+Can I change my availability?,update_availability,tutor,yes
+How do I update my available hours?,update_availability,tutor,yes
+Pwede ko bang baguhin ang availability ko?,update_availability,tutor,yes
+Where can I edit my available schedule?,update_availability,tutor,yes
+Paano i-update ang available times ko?,update_availability,tutor,yes
+Can I modify my availability?,update_availability,tutor,yes
+Can you help me with this: can i change my availability?,update_availability,tutor,yes
+Quick question: how do i update my available hours?,update_availability,tutor,yes
+"Just checking, pwede ko bang baguhin ang availability ko?",update_availability,tutor,yes
+Please tell me where can i edit my available schedule??,update_availability,tutor,yes
+Can you tell me paano i-update ang available times ko??,update_availability,tutor,yes
+"Paki-explain, can i modify my availability??",update_availability,tutor,yes
+Gusto kong malaman: can i change my availability?,update_availability,tutor,yes
+"Pwede bang sabihin, how do i update my available hours??",update_availability,tutor,yes
+"Hi, pwede ko bang baguhin ang availability ko??",update_availability,tutor,yes
+"Hello, paano i-update ang available times ko??",update_availability,tutor,yes
+"Pwede po bang malaman, can i change my availability?",update_availability,tutor,yes
+"Pa-help naman, how do i update my available hours?",update_availability,tutor,yes
+How do I report that I am unavailable?,unavailability,tutor,yes
+Where can I report unavailability?,unavailability,tutor,yes
+Paano mag-report na unavailable ako?,unavailability,tutor,yes
+How do I tell the system I cannot teach?,unavailability,tutor,yes
+Saan ko ire-report ang unavailability ko?,unavailability,tutor,yes
+Can I mark myself unavailable?,unavailability,tutor,yes
+Can you help me with this: how do i report that i am unavailable?,unavailability,tutor,yes
+Quick question: where can i report unavailability?,unavailability,tutor,yes
+"Just checking, paano mag-report na unavailable ako?",unavailability,tutor,yes
+Please tell me how do i tell the system i cannot teach??,unavailability,tutor,yes
+Can you tell me saan ko ire-report ang unavailability ko??,unavailability,tutor,yes
+"Paki-explain, can i mark myself unavailable??",unavailability,tutor,yes
+Gusto kong malaman: how do i report that i am unavailable?,unavailability,tutor,yes
+"Pwede bang sabihin, where can i report unavailability??",unavailability,tutor,yes
+"Hi, paano mag-report na unavailable ako??",unavailability,tutor,yes
+"Hello, saan ko ire-report ang unavailability ko??",unavailability,tutor,yes
+"Pwede po bang malaman, how do i report that i am unavailable?",unavailability,tutor,yes
+"Pa-help naman, where can i report unavailability?",unavailability,tutor,yes
+How do I request a day off?,day_off,tutor,yes
+Where can I report my day off?,day_off,tutor,yes
+Paano mag-report ng day off?,day_off,tutor,yes
+Can I set a day when I am unavailable?,day_off,tutor,yes
+Saan ko ilalagay ang leave/day off ko?,day_off,tutor,yes
+How do I notify the system about my day off?,day_off,tutor,yes
+Can you help me with this: how do i request a day off?,day_off,tutor,yes
+Quick question: where can i report my day off?,day_off,tutor,yes
+"Just checking, paano mag-report ng day off?",day_off,tutor,yes
+Please tell me can i set a day when i am unavailable??,day_off,tutor,yes
+Can you tell me saan ko ilalagay ang leave/day off ko??,day_off,tutor,yes
+"Paki-explain, how do i notify the system about my day off??",day_off,tutor,yes
+Gusto kong malaman: how do i request a day off?,day_off,tutor,yes
+"Pwede bang sabihin, where can i report my day off??",day_off,tutor,yes
+"Hi, paano mag-report ng day off??",day_off,tutor,yes
+"Hello, saan ko ilalagay ang leave/day off ko??",day_off,tutor,yes
+"Pwede po bang malaman, how do i request a day off?",day_off,tutor,yes
+"Pa-help naman, where can i report my day off?",day_off,tutor,yes
+Can I view my students' notes?,student_notes,tutor,yes
+Where can I see notes about my assigned students?,student_notes,tutor,yes
+Pwede ko bang makita ang notes ng students ko?,student_notes,tutor,yes
+Can I access notes for my learners?,student_notes,tutor,yes
+Nasaan ang student notes ko?,student_notes,tutor,yes
+How do I view notes for my assigned students?,student_notes,tutor,yes
+Can you help me with this: can i view my students' notes?,student_notes,tutor,yes
+Quick question: where can i see notes about my assigned students?,student_notes,tutor,yes
+"Just checking, pwede ko bang makita ang notes ng students ko?",student_notes,tutor,yes
+Please tell me can i access notes for my learners??,student_notes,tutor,yes
+Can you tell me nasaan ang student notes ko??,student_notes,tutor,yes
+"Paki-explain, how do i view notes for my assigned students??",student_notes,tutor,yes
+Gusto kong malaman: can i view my students' notes?,student_notes,tutor,yes
+"Pwede bang sabihin, where can i see notes about my assigned students??",student_notes,tutor,yes
+"Hi, pwede ko bang makita ang notes ng students ko??",student_notes,tutor,yes
+"Hello, nasaan ang student notes ko??",student_notes,tutor,yes
+"Pwede po bang malaman, can i view my students' notes?",student_notes,tutor,yes
+Can I see the remarks written about my students?,student_notes,tutor,yes
+Can I add remarks about my students?,student_remarks,tutor,yes
+Where can I record a remark for a student?,student_remarks,tutor,yes
+Pwede ba akong maglagay ng remarks sa student?,student_remarks,tutor,yes
+How do I write a student remark?,student_remarks,tutor,yes
+Saan ako maglalagay ng remarks tungkol sa student?,student_remarks,tutor,yes
+Can I update a student's remarks?,student_remarks,tutor,yes
+Can you help me with this: can i add remarks about my students?,student_remarks,tutor,yes
+Quick question: where can i record a remark for a student?,student_remarks,tutor,yes
+"Just checking, pwede ba akong maglagay ng remarks sa student?",student_remarks,tutor,yes
+Please tell me how do i write a student remark??,student_remarks,tutor,yes
+Can you tell me saan ako maglalagay ng remarks tungkol sa student??,student_remarks,tutor,yes
+"Paki-explain, can i update a student's remarks??",student_remarks,tutor,yes
+Gusto kong malaman: can i add remarks about my students?,student_remarks,tutor,yes
+"Pwede bang sabihin, where can i record a remark for a student??",student_remarks,tutor,yes
+"Hi, pwede ba akong maglagay ng remarks sa student??",student_remarks,tutor,yes
+"Hello, saan ako maglalagay ng remarks tungkol sa student??",student_remarks,tutor,yes
+"Pwede po bang malaman, can i add remarks about my students?",student_remarks,tutor,yes
+Where can I read my students' notes?,student_remarks,tutor,yes
+Can I see a digest of my students' notes?,notes_digest,tutor,yes
+Where is the student notes summary?,notes_digest,tutor,yes
+Pwede ko bang makita ang digest ng notes ng students ko?,notes_digest,tutor,yes
+Is there a summary of my students' notes?,notes_digest,tutor,yes
+Nasaan ang notes digest?,notes_digest,tutor,yes
+Can I review a summarized view of student notes?,notes_digest,tutor,yes
+Can you help me with this: can i see a digest of my students' notes?,notes_digest,tutor,yes
+Quick question: where is the student notes summary?,notes_digest,tutor,yes
+"Just checking, pwede ko bang makita ang digest ng notes ng students ko?",notes_digest,tutor,yes
+Please tell me is there a summary of my students' notes??,notes_digest,tutor,yes
+Can you tell me nasaan ang notes digest??,notes_digest,tutor,yes
+"Paki-explain, can i review a summarized view of student notes??",notes_digest,tutor,yes
+Gusto kong malaman: can i see a digest of my students' notes?,notes_digest,tutor,yes
+"Pwede bang sabihin, where is the student notes summary??",notes_digest,tutor,yes
+"Hi, pwede ko bang makita ang digest ng notes ng students ko??",notes_digest,tutor,yes
+"Hello, nasaan ang notes digest??",notes_digest,tutor,yes
+"Pwede po bang malaman, can i see a digest of my students' notes?",notes_digest,tutor,yes
+"Pa-help naman, where is the student notes summary?",notes_digest,tutor,yes
+Can I see notes for another tutor's students?,student_privacy,tutor,yes
+Can I access another tutor's student notes?,student_privacy,tutor,yes
+Pwede ko bang makita ang notes ng students ng ibang tutor?,student_privacy,tutor,yes
+Can I view notes for students not assigned to me?,student_privacy,tutor,yes
+May access ba ako sa notes ng ibang tutor?,student_privacy,tutor,yes
+Can I open another tutor's student records?,student_privacy,tutor,yes
+Can you help me with this: can i see notes for another tutor's students?,student_privacy,tutor,yes
+Quick question: can i access another tutor's student notes?,student_privacy,tutor,yes
+"Just checking, pwede ko bang makita ang notes ng students ng ibang tutor?",student_privacy,tutor,yes
+Please tell me can i view notes for students not assigned to me??,student_privacy,tutor,yes
+Can you tell me may access ba ako sa notes ng ibang tutor??,student_privacy,tutor,yes
+"Paki-explain, can i open another tutor's student records??",student_privacy,tutor,yes
+Gusto kong malaman: can i see notes for another tutor's students?,student_privacy,tutor,yes
+"Pwede bang sabihin, can i access another tutor's student notes??",student_privacy,tutor,yes
+"Hi, pwede ko bang makita ang notes ng students ng ibang tutor??",student_privacy,tutor,yes
+"Hello, may access ba ako sa notes ng ibang tutor??",student_privacy,tutor,yes
+"Pwede po bang malaman, can i see notes for another tutor's students?",student_privacy,tutor,yes
+"Pa-help naman, can i access another tutor's student notes?",student_privacy,tutor,yes
+Which of my students are at risk?,at_risk,tutor,yes
+Can I see my at-risk students?,at_risk,tutor,yes
+Alin sa students ko ang at risk?,at_risk,tutor,yes
+Which assigned learners need attention?,at_risk,tutor,yes
+May list ba ng at-risk students ko?,at_risk,tutor,yes
+Who among my students is flagged at risk?,at_risk,tutor,yes
+Can you help me with this: which of my students are at risk?,at_risk,tutor,yes
+Quick question: can i see my at-risk students?,at_risk,tutor,yes
+"Just checking, alin sa students ko ang at risk?",at_risk,tutor,yes
+Please tell me which assigned learners need attention??,at_risk,tutor,yes
+Can you tell me may list ba ng at-risk students ko??,at_risk,tutor,yes
+"Paki-explain, who among my students is flagged at risk??",at_risk,tutor,yes
+Gusto kong malaman: which of my students are at risk?,at_risk,tutor,yes
+"Pwede bang sabihin, can i see my at-risk students??",at_risk,tutor,yes
+"Hi, alin sa students ko ang at risk??",at_risk,tutor,yes
+"Hello, may list ba ng at-risk students ko??",at_risk,tutor,yes
+"Pwede po bang malaman, which of my students are at risk?",at_risk,tutor,yes
+Why was this student flagged at risk?,at_risk,tutor,yes
+Why is my student marked as at risk?,at_risk_details,tutor,yes
+Why was this student flagged as at risk?,at_risk_details,tutor,yes
+Bakit marked as at risk ang student ko?,at_risk_details,tutor,yes
+What caused the student's at-risk flag?,at_risk_details,tutor,yes
+Ano ang reason kung bakit at risk ang student?,at_risk_details,tutor,yes
+Can I see the details behind an at-risk flag?,at_risk_details,tutor,yes
+Can you help me with this: why is my student marked as at risk?,at_risk_details,tutor,yes
+Quick question: why was this student flagged as at risk?,at_risk_details,tutor,yes
+"Just checking, bakit marked as at risk ang student ko?",at_risk_details,tutor,yes
+Please tell me what caused the student's at-risk flag??,at_risk_details,tutor,yes
+Can you tell me ano ang reason kung bakit at risk ang student??,at_risk_details,tutor,yes
+"Paki-explain, can i see the details behind an at-risk flag??",at_risk_details,tutor,yes
+Gusto kong malaman: why is my student marked as at risk?,at_risk_details,tutor,yes
+"Pwede bang sabihin, why was this student flagged as at risk??",at_risk_details,tutor,yes
+"Hi, bakit marked as at risk ang student ko??",at_risk_details,tutor,yes
+"Hello, ano ang reason kung bakit at risk ang student??",at_risk_details,tutor,yes
+"Pwede po bang malaman, why is my student marked as at risk?",at_risk_details,tutor,yes
+"Pa-help naman, why was this student flagged as at risk?",at_risk_details,tutor,yes
+Can I see at-risk students assigned to another tutor?,at_risk_other,tutor,yes
+Can I view another tutor's at-risk students?,at_risk_other,tutor,yes
+Pwede ko bang makita ang at-risk students ng ibang tutor?,at_risk_other,tutor,yes
+Can I access at-risk learners outside my assignment?,at_risk_other,tutor,yes
+May access ba ako sa at-risk students ng ibang tutor?,at_risk_other,tutor,yes
+Can I see system-wide at-risk students as a tutor?,at_risk_other,tutor,yes
+Can you help me with this: can i see at-risk students assigned to another tutor?,at_risk_other,tutor,yes
+Quick question: can i view another tutor's at-risk students?,at_risk_other,tutor,yes
+"Just checking, pwede ko bang makita ang at-risk students ng ibang tutor?",at_risk_other,tutor,yes
+Please tell me can i access at-risk learners outside my assignment??,at_risk_other,tutor,yes
+Can you tell me may access ba ako sa at-risk students ng ibang tutor??,at_risk_other,tutor,yes
+"Paki-explain, can i see system-wide at-risk students as a tutor??",at_risk_other,tutor,yes
+Gusto kong malaman: can i see at-risk students assigned to another tutor?,at_risk_other,tutor,yes
+"Pwede bang sabihin, can i view another tutor's at-risk students??",at_risk_other,tutor,yes
+"Hi, pwede ko bang makita ang at-risk students ng ibang tutor??",at_risk_other,tutor,yes
+"Hello, may access ba ako sa at-risk students ng ibang tutor??",at_risk_other,tutor,yes
+"Pwede po bang malaman, can i see at-risk students assigned to another tutor?",at_risk_other,tutor,yes
+"Pa-help naman, can i view another tutor's at-risk students?",at_risk_other,tutor,yes
+How can I raise a concern?,raise_concern,tutor,yes
+Where can I submit a concern?,raise_concern,tutor,yes
+Paano ako mag-raise ng concern?,raise_concern,tutor,yes
+Saan ako puwedeng magsubmit ng concern?,raise_concern,tutor,yes
+How do I report an issue?,raise_concern,tutor,yes
+May Raise a Concern feature ba?,raise_concern,tutor,yes
+Can you help me with this: how can i raise a concern?,raise_concern,tutor,yes
+Quick question: where can i submit a concern?,raise_concern,tutor,yes
+"Just checking, paano ako mag-raise ng concern?",raise_concern,tutor,yes
+Please tell me saan ako puwedeng magsubmit ng concern??,raise_concern,tutor,yes
+Can you tell me how do i report an issue??,raise_concern,tutor,yes
+"Paki-explain, may raise a concern feature ba??",raise_concern,tutor,yes
+Gusto kong malaman: how can i raise a concern?,raise_concern,tutor,yes
+"Pwede bang sabihin, where can i submit a concern??",raise_concern,tutor,yes
+"Hi, paano ako mag-raise ng concern??",raise_concern,tutor,yes
+"Hello, how do i report an issue??",raise_concern,tutor,yes
+"Pwede po bang malaman, how can i raise a concern?",raise_concern,tutor,yes
+"Pa-help naman, where can i submit a concern?",raise_concern,tutor,yes
+Do I need to confirm before submitting a concern?,concern_confirmation,tutor,yes
+Is confirmation required before I submit?,concern_confirmation,tutor,yes
+Kailangan ba ng confirmation bago i-submit ang concern?,concern_confirmation,tutor,yes
+May confirmation step ba?,concern_confirmation,tutor,yes
+Do I have to confirm my concern first?,concern_confirmation,tutor,yes
+Kailangan ko bang i-confirm muna bago mag-submit?,concern_confirmation,tutor,yes
+Can you help me with this: do i need to confirm before submitting a concern?,concern_confirmation,tutor,yes
+Quick question: is confirmation required before i submit?,concern_confirmation,tutor,yes
+"Just checking, kailangan ba ng confirmation bago i-submit ang concern?",concern_confirmation,tutor,yes
+Please tell me may confirmation step ba??,concern_confirmation,tutor,yes
+Can you tell me do i have to confirm my concern first??,concern_confirmation,tutor,yes
+"Paki-explain, kailangan ko bang i-confirm muna bago mag-submit??",concern_confirmation,tutor,yes
+Gusto kong malaman: do i need to confirm before submitting a concern?,concern_confirmation,tutor,yes
+"Pwede bang sabihin, is confirmation required before i submit??",concern_confirmation,tutor,yes
+"Hi, kailangan ba ng confirmation bago i-submit ang concern??",concern_confirmation,tutor,yes
+"Hello, do i have to confirm my concern first??",concern_confirmation,tutor,yes
+"Pwede po bang malaman, do i need to confirm before submitting a concern?",concern_confirmation,tutor,yes
+"Pa-help naman, is confirmation required before i submit?",concern_confirmation,tutor,yes
+What is the status of my ticket?,ticket_status,tutor,yes
+Can I check my ticket status?,ticket_status,tutor,yes
+Ano ang status ng ticket ko?,ticket_status,tutor,yes
+How can I see my support ticket status?,ticket_status,tutor,yes
+Nasaan ang ticket status ko?,ticket_status,tutor,yes
+Can I track the current status of my ticket?,ticket_status,tutor,yes
+Can you help me with this: what is the status of my ticket?,ticket_status,tutor,yes
+Quick question: can i check my ticket status?,ticket_status,tutor,yes
+"Just checking, ano ang status ng ticket ko?",ticket_status,tutor,yes
+Please tell me how can i see my support ticket status??,ticket_status,tutor,yes
+Can you tell me nasaan ang ticket status ko??,ticket_status,tutor,yes
+"Paki-explain, can i track the current status of my ticket??",ticket_status,tutor,yes
+Gusto kong malaman: what is the status of my ticket?,ticket_status,tutor,yes
+"Pwede bang sabihin, can i check my ticket status??",ticket_status,tutor,yes
+"Hi, ano ang status ng ticket ko??",ticket_status,tutor,yes
+"Hello, nasaan ang ticket status ko??",ticket_status,tutor,yes
+"Pwede po bang malaman, what is the status of my ticket?",ticket_status,tutor,yes
+Is my support ticket still pending?,ticket_status,tutor,yes
+Is my concern still pending?,pending_ticket,tutor,yes
+Is my ticket still pending?,pending_ticket,tutor,yes
+Pending pa ba ang concern ko?,pending_ticket,tutor,yes
+Has my concern not been resolved yet?,pending_ticket,tutor,yes
+Naka-pending pa ba ang ticket ko?,pending_ticket,tutor,yes
+Is my submitted issue still waiting?,pending_ticket,tutor,yes
+Can you help me with this: is my concern still pending?,pending_ticket,tutor,yes
+Quick question: is my ticket still pending?,pending_ticket,tutor,yes
+"Just checking, pending pa ba ang concern ko?",pending_ticket,tutor,yes
+Please tell me has my concern not been resolved yet??,pending_ticket,tutor,yes
+Can you tell me naka-pending pa ba ang ticket ko??,pending_ticket,tutor,yes
+"Paki-explain, is my submitted issue still waiting??",pending_ticket,tutor,yes
+Gusto kong malaman: is my concern still pending?,pending_ticket,tutor,yes
+"Pwede bang sabihin, is my ticket still pending??",pending_ticket,tutor,yes
+"Hi, pending pa ba ang concern ko??",pending_ticket,tutor,yes
+"Hello, naka-pending pa ba ang ticket ko??",pending_ticket,tutor,yes
+"Pwede po bang malaman, is my concern still pending?",pending_ticket,tutor,yes
+"Pa-help naman, is my ticket still pending?",pending_ticket,tutor,yes
+Has my concern been resolved?,resolved_ticket,tutor,yes
+Is my ticket already resolved?,resolved_ticket,tutor,yes
+Resolved na ba ang concern ko?,resolved_ticket,tutor,yes
+Can I check if my ticket is resolved?,resolved_ticket,tutor,yes
+Naayos na ba ang concern na sinubmit ko?,resolved_ticket,tutor,yes
+Is my support ticket closed as resolved?,resolved_ticket,tutor,yes
+Can you help me with this: has my concern been resolved?,resolved_ticket,tutor,yes
+Quick question: is my ticket already resolved?,resolved_ticket,tutor,yes
+"Just checking, resolved na ba ang concern ko?",resolved_ticket,tutor,yes
+Please tell me can i check if my ticket is resolved??,resolved_ticket,tutor,yes
+Can you tell me naayos na ba ang concern na sinubmit ko??,resolved_ticket,tutor,yes
+"Paki-explain, is my support ticket closed as resolved??",resolved_ticket,tutor,yes
+Gusto kong malaman: has my concern been resolved?,resolved_ticket,tutor,yes
+"Pwede bang sabihin, is my ticket already resolved??",resolved_ticket,tutor,yes
+"Hi, resolved na ba ang concern ko??",resolved_ticket,tutor,yes
+"Hello, naayos na ba ang concern na sinubmit ko??",resolved_ticket,tutor,yes
+"Pwede po bang malaman, has my concern been resolved?",resolved_ticket,tutor,yes
+"Pa-help naman, is my ticket already resolved?",resolved_ticket,tutor,yes
+Is my student showing signs of distress?,student_distress,tutor,yes
+Does my student appear distressed?,student_distress,tutor,yes
+Mukhang distressed ba ang student ko?,student_distress,tutor,yes
+Is there a distress indicator for my student?,student_distress,tutor,yes
+May signs ba ng distress ang student na kausap ko?,student_distress,tutor,yes
+Can the system identify distress in my student?,student_distress,tutor,yes
+Can you help me with this: is my student showing signs of distress?,student_distress,tutor,yes
+Quick question: does my student appear distressed?,student_distress,tutor,yes
+"Just checking, mukhang distressed ba ang student ko?",student_distress,tutor,yes
+Please tell me is there a distress indicator for my student??,student_distress,tutor,yes
+Can you tell me may signs ba ng distress ang student na kausap ko??,student_distress,tutor,yes
+"Paki-explain, can the system identify distress in my student??",student_distress,tutor,yes
+Gusto kong malaman: is my student showing signs of distress?,student_distress,tutor,yes
+"Pwede bang sabihin, does my student appear distressed??",student_distress,tutor,yes
+"Hi, mukhang distressed ba ang student ko??",student_distress,tutor,yes
+"Hello, may signs ba ng distress ang student na kausap ko??",student_distress,tutor,yes
+"Pwede po bang malaman, is my student showing signs of distress?",student_distress,tutor,yes
+How do I report a safety concern about my student?,student_distress,tutor,yes
+What happens if distress is detected?,distress_detection,tutor,yes
+How does distress detection work?,distress_detection,tutor,yes
+Ano ang mangyayari kapag may distress na na-detect?,distress_detection,tutor,yes
+What does the system do after detecting distress?,distress_detection,tutor,yes
+Paano gumagana ang distress detection?,distress_detection,tutor,yes
+May alert ba kapag may distress?,distress_detection,tutor,yes
+Can you help me with this: what happens if distress is detected?,distress_detection,tutor,yes
+Quick question: how does distress detection work?,distress_detection,tutor,yes
+"Just checking, ano ang mangyayari kapag may distress na na-detect?",distress_detection,tutor,yes
+Please tell me what does the system do after detecting distress??,distress_detection,tutor,yes
+Can you tell me paano gumagana ang distress detection??,distress_detection,tutor,yes
+"Paki-explain, may alert ba kapag may distress??",distress_detection,tutor,yes
+Gusto kong malaman: what happens if distress is detected?,distress_detection,tutor,yes
+"Pwede bang sabihin, how does distress detection work??",distress_detection,tutor,yes
+"Hi, ano ang mangyayari kapag may distress na na-detect??",distress_detection,tutor,yes
+"Hello, paano gumagana ang distress detection??",distress_detection,tutor,yes
+"Pwede po bang malaman, what happens if distress is detected?",distress_detection,tutor,yes
+"Pa-help naman, how does distress detection work?",distress_detection,tutor,yes
+Can I report a safety concern about a student?,student_safety,tutor,yes
+How do I report a student safety issue?,student_safety,tutor,yes
+Paano mag-report ng safety concern tungkol sa student?,student_safety,tutor,yes
+Can I raise a concern about a student's safety?,student_safety,tutor,yes
+Saan ko ire-report ang safety issue ng student?,student_safety,tutor,yes
+What should I do about a student safety concern?,student_safety,tutor,yes
+Can you help me with this: can i report a safety concern about a student?,student_safety,tutor,yes
+Quick question: how do i report a student safety issue?,student_safety,tutor,yes
+"Just checking, paano mag-report ng safety concern tungkol sa student?",student_safety,tutor,yes
+Please tell me can i raise a concern about a student's safety??,student_safety,tutor,yes
+Can you tell me saan ko ire-report ang safety issue ng student??,student_safety,tutor,yes
+"Paki-explain, what should i do about a student safety concern??",student_safety,tutor,yes
+Gusto kong malaman: can i report a safety concern about a student?,student_safety,tutor,yes
+"Pwede bang sabihin, how do i report a student safety issue??",student_safety,tutor,yes
+"Hi, paano mag-report ng safety concern tungkol sa student??",student_safety,tutor,yes
+"Hello, saan ko ire-report ang safety issue ng student??",student_safety,tutor,yes
+"Pwede po bang malaman, can i report a safety concern about a student?",student_safety,tutor,yes
+"Pa-help naman, how do i report a student safety issue?",student_safety,tutor,yes
+Does safety detection work when I discuss a student?,student_discussion,tutor,yes
+Will safety detection activate while I am discussing a student?,student_discussion,tutor,yes
+Gumagana ba ang safety detection kapag pinag-uusapan ko ang student?,student_discussion,tutor,yes
+Can the system detect distress during a student discussion?,student_discussion,tutor,yes
+Active ba ang safety protection habang nagdi-discuss ako ng student?,student_discussion,tutor,yes
+Does the safety feature monitor student-related discussions?,student_discussion,tutor,yes
+Can you help me with this: does safety detection work when i discuss a student?,student_discussion,tutor,yes
+Quick question: will safety detection activate while i am discussing a student?,student_discussion,tutor,yes
+"Just checking, gumagana ba ang safety detection kapag pinag-uusapan ko ang student?",student_discussion,tutor,yes
+Please tell me can the system detect distress during a student discussion??,student_discussion,tutor,yes
+Can you tell me active ba ang safety protection habang nagdi-discuss ako ng student??,student_discussion,tutor,yes
+"Paki-explain, does the safety feature monitor student-related discussions??",student_discussion,tutor,yes
+Gusto kong malaman: does safety detection work when i discuss a student?,student_discussion,tutor,yes
+"Pwede bang sabihin, will safety detection activate while i am discussing a student??",student_discussion,tutor,yes
+"Hi, gumagana ba ang safety detection kapag pinag-uusapan ko ang student??",student_discussion,tutor,yes
+"Hello, active ba ang safety protection habang nagdi-discuss ako ng student??",student_discussion,tutor,yes
+"Pwede po bang malaman, does safety detection work when i discuss a student?",student_discussion,tutor,yes
+"Pa-help naman, will safety detection activate while i am discussing a student?",student_discussion,tutor,yes
+Can I access all student records?,tutor_access,tutor,yes
+Do tutors have access to every student's data?,tutor_access,tutor,yes
+Makikita ko ba ang records ng lahat ng students?,tutor_access,tutor,yes
+Can I view students outside my assignment?,tutor_access,tutor,yes
+May access ba ako sa lahat ng student records?,tutor_access,tutor,yes
+Can a tutor open every learner's account?,tutor_access,tutor,yes
+Can you help me with this: can i access all student records?,tutor_access,tutor,yes
+Quick question: do tutors have access to every student's data?,tutor_access,tutor,yes
+"Just checking, makikita ko ba ang records ng lahat ng students?",tutor_access,tutor,yes
+Please tell me can i view students outside my assignment??,tutor_access,tutor,yes
+Can you tell me may access ba ako sa lahat ng student records??,tutor_access,tutor,yes
+"Paki-explain, can a tutor open every learner's account??",tutor_access,tutor,yes
+Gusto kong malaman: can i access all student records?,tutor_access,tutor,yes
+"Pwede bang sabihin, do tutors have access to every student's data??",tutor_access,tutor,yes
+"Hi, makikita ko ba ang records ng lahat ng students??",tutor_access,tutor,yes
+"Hello, may access ba ako sa lahat ng student records??",tutor_access,tutor,yes
+"Pwede po bang malaman, can i access all student records?",tutor_access,tutor,yes
+"Pa-help naman, do tutors have access to every student's data?",tutor_access,tutor,yes
+Can I view another tutor's schedule?,other_tutor_data,tutor,yes
+Can I see another tutor's assigned students?,other_tutor_data,tutor,yes
+Pwede ko bang makita ang schedule ng ibang tutor?,other_tutor_data,tutor,yes
+Can I access another tutor's data?,other_tutor_data,tutor,yes
+May access ba ako sa records ng ibang tutor?,other_tutor_data,tutor,yes
+Can I view another tutor's student list?,other_tutor_data,tutor,yes
+Can you help me with this: can i view another tutor's schedule?,other_tutor_data,tutor,yes
+Quick question: can i see another tutor's assigned students?,other_tutor_data,tutor,yes
+"Just checking, pwede ko bang makita ang schedule ng ibang tutor?",other_tutor_data,tutor,yes
+Please tell me can i access another tutor's data??,other_tutor_data,tutor,yes
+Can you tell me may access ba ako sa records ng ibang tutor??,other_tutor_data,tutor,yes
+"Paki-explain, can i view another tutor's student list??",other_tutor_data,tutor,yes
+Gusto kong malaman: can i view another tutor's schedule?,other_tutor_data,tutor,yes
+"Pwede bang sabihin, can i see another tutor's assigned students??",other_tutor_data,tutor,yes
+"Hi, pwede ko bang makita ang schedule ng ibang tutor??",other_tutor_data,tutor,yes
+"Hello, may access ba ako sa records ng ibang tutor??",other_tutor_data,tutor,yes
+"Pwede po bang malaman, can i view another tutor's schedule?",other_tutor_data,tutor,yes
+"Pa-help naman, can i see another tutor's assigned students?",other_tutor_data,tutor,yes
+Can students see my availability?,availability_status,tutor,yes
+Is my availability visible for scheduling?,availability_status,tutor,yes
+Makikita ba ng students ang availability ko?,availability_status,tutor,yes
+Can learners see when I am available?,availability_status,tutor,yes
+Visible ba sa students ang available hours ko?,availability_status,tutor,yes
+How is my availability shown for scheduling?,availability_status,tutor,yes
+Can you help me with this: can students see my availability?,availability_status,tutor,yes
+Quick question: is my availability visible for scheduling?,availability_status,tutor,yes
+"Just checking, makikita ba ng students ang availability ko?",availability_status,tutor,yes
+Please tell me can learners see when i am available??,availability_status,tutor,yes
+Can you tell me visible ba sa students ang available hours ko??,availability_status,tutor,yes
+"Paki-explain, how is my availability shown for scheduling??",availability_status,tutor,yes
+Gusto kong malaman: can students see my availability?,availability_status,tutor,yes
+"Pwede bang sabihin, is my availability visible for scheduling??",availability_status,tutor,yes
+"Hi, makikita ba ng students ang availability ko??",availability_status,tutor,yes
+"Hello, visible ba sa students ang available hours ko??",availability_status,tutor,yes
+"Pwede po bang malaman, can students see my availability?",availability_status,tutor,yes
+"Pa-help naman, is my availability visible for scheduling?",availability_status,tutor,yes
+Can I see attendance records for my students?,attendance_history,tutor,yes
+Where can I view my students' attendance history?,attendance_history,tutor,yes
+Pwede ko bang makita ang attendance history ng students ko?,attendance_history,tutor,yes
+Can I review previous attendance records?,attendance_history,tutor,yes
+Nasaan ang attendance records ng assigned students ko?,attendance_history,tutor,yes
+How do I check past attendance?,attendance_history,tutor,yes
+Can you help me with this: can i see attendance records for my students?,attendance_history,tutor,yes
+Quick question: where can i view my students' attendance history?,attendance_history,tutor,yes
+"Just checking, pwede ko bang makita ang attendance history ng students ko?",attendance_history,tutor,yes
+Please tell me can i review previous attendance records??,attendance_history,tutor,yes
+Can you tell me nasaan ang attendance records ng assigned students ko??,attendance_history,tutor,yes
+"Paki-explain, how do i check past attendance??",attendance_history,tutor,yes
+Gusto kong malaman: can i see attendance records for my students?,attendance_history,tutor,yes
+"Pwede bang sabihin, where can i view my students' attendance history??",attendance_history,tutor,yes
+"Hi, pwede ko bang makita ang attendance history ng students ko??",attendance_history,tutor,yes
+"Hello, nasaan ang attendance records ng assigned students ko??",attendance_history,tutor,yes
+"Pwede po bang malaman, can i see attendance records for my students?",attendance_history,tutor,yes
+"Pa-help naman, where can i view my students' attendance history?",attendance_history,tutor,yes
+Can I view my students' progress?,student_progress,tutor,yes
+Where can I see the progress of my assigned learners?,student_progress,tutor,yes
+Pwede ko bang makita ang progress ng students ko?,student_progress,tutor,yes
+Can I check my students' learning progress?,student_progress,tutor,yes
+Kumusta ang progress ng mga students ko?,student_progress,tutor,yes
+Where are my students' progress records?,student_progress,tutor,yes
+Can you help me with this: can i view my students' progress?,student_progress,tutor,yes
+Quick question: where can i see the progress of my assigned learners?,student_progress,tutor,yes
+"Just checking, pwede ko bang makita ang progress ng students ko?",student_progress,tutor,yes
+Please tell me can i check my students' learning progress??,student_progress,tutor,yes
+Can you tell me kumusta ang progress ng mga students ko??,student_progress,tutor,yes
+"Paki-explain, where are my students' progress records??",student_progress,tutor,yes
+Gusto kong malaman: can i view my students' progress?,student_progress,tutor,yes
+"Pwede bang sabihin, where can i see the progress of my assigned learners??",student_progress,tutor,yes
+"Hi, pwede ko bang makita ang progress ng students ko??",student_progress,tutor,yes
+"Hello, kumusta ang progress ng mga students ko??",student_progress,tutor,yes
+"Pwede po bang malaman, can i view my students' progress?",student_progress,tutor,yes
+"Pa-help naman, where can i see the progress of my assigned learners?",student_progress,tutor,yes
+Can I see the concerns I submitted?,my_tickets,tutor,yes
+Where can I view my support tickets?,my_tickets,tutor,yes
+Pwede ko bang makita ang mga concern na sinubmit ko?,my_tickets,tutor,yes
+Can I track the tickets I raised?,my_tickets,tutor,yes
+Nasaan ang tickets ko?,my_tickets,tutor,yes
+Can I review my submitted concerns?,my_tickets,tutor,yes
+Can you help me with this: can i see the concerns i submitted?,my_tickets,tutor,yes
+Quick question: where can i view my support tickets?,my_tickets,tutor,yes
+"Just checking, pwede ko bang makita ang mga concern na sinubmit ko?",my_tickets,tutor,yes
+Please tell me can i track the tickets i raised??,my_tickets,tutor,yes
+Can you tell me nasaan ang tickets ko??,my_tickets,tutor,yes
+"Paki-explain, can i review my submitted concerns??",my_tickets,tutor,yes
+Gusto kong malaman: can i see the concerns i submitted?,my_tickets,tutor,yes
+"Pwede bang sabihin, where can i view my support tickets??",my_tickets,tutor,yes
+"Hi, pwede ko bang makita ang mga concern na sinubmit ko??",my_tickets,tutor,yes
+"Hello, nasaan ang tickets ko??",my_tickets,tutor,yes
+"Pwede po bang malaman, can i see the concerns i submitted?",my_tickets,tutor,yes
+"Pa-help naman, where can i view my support tickets?",my_tickets,tutor,yes
+How is my student doing emotionally lately?,tutor_wellbeing_check,tutor,yes
+Has my student seemed withdrawn recently?,tutor_wellbeing_check,tutor,yes
+Kumusta ang emotional state ng student ko these days?,tutor_wellbeing_check,tutor,yes
+"My student has been acting differently lately, is that tracked anywhere?",tutor_wellbeing_check,tutor,yes
+Are there any behavioral concerns noted for my student?,tutor_wellbeing_check,tutor,yes
+"Parang iba ang ugali ng student ko lately, may record ba nito?",tutor_wellbeing_check,tutor,yes
+Is there a wellbeing check for my assigned student?,tutor_wellbeing_check,tutor,yes
+"My student seems quieter than usual, should I be concerned?",tutor_wellbeing_check,tutor,yes
+Can you help me with this: how is my student doing emotionally lately?,tutor_wellbeing_check,tutor,yes
+Quick question: has my student seemed withdrawn recently?,tutor_wellbeing_check,tutor,yes
+"Just checking, kumusta ang emotional state ng student ko these days?",tutor_wellbeing_check,tutor,yes
+Please tell me are there any behavioral concerns noted for my student??,tutor_wellbeing_check,tutor,yes
+Can you tell me is there a wellbeing check for my assigned student??,tutor_wellbeing_check,tutor,yes
+"Paki-explain, my student seems quieter than usual, should i be concerned??",tutor_wellbeing_check,tutor,yes
+Gusto kong malaman: has my student seemed withdrawn recently?,tutor_wellbeing_check,tutor,yes
+"Pwede bang sabihin, my student has been acting differently lately, is that tracked anywhere??",tutor_wellbeing_check,tutor,yes
+"Hi, parang iba ang ugali ng student ko lately, may record ba nito??",tutor_wellbeing_check,tutor,yes
+"Pwede po bang malaman, are there any behavioral concerns noted for my student?",tutor_wellbeing_check,tutor,yes

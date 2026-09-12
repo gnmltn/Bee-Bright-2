@@ -32,6 +32,12 @@ const escalationSchema = new mongoose.Schema({
   },
   conversationSnippet: { type: String, default: '' },   // capped; never the full transcript
 
+  // Task 30 — structured "raise a concern" intake. The user supplies these in a short
+  // guided exchange before the ticket is created; empty for child_safety /
+  // repeated_no_match / legacy handoff records.
+  concernReason: { type: String, default: '' },        // short topic/category
+  concernExplanation: { type: String, default: '' },   // the details of what happened
+
   status: {
     type: String,
     enum: ['open', 'acknowledged', 'resolved'],
