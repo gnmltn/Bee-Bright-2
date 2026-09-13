@@ -15,9 +15,9 @@ const { matchesParentPreference } = require('../utils/schedulePreferences');
 // ─── Program policies ─────────────────────────────────────────────────────────
 test('program policies define one-on-one rules for ACT102 and EXP106', () => {
   assert.equal(getProgramPolicy({ code: 'ACT102' }).sessionType, 'one-on-one');
-  assert.equal(getProgramPolicy({ code: 'ACT102' }).durationMinutes, 120);
+  assert.equal(getProgramPolicy({ code: 'ACT102' }).durationMinutes, 60);
   assert.equal(getProgramPolicy({ code: 'EXP106' }).sessionType, 'one-on-one');
-  assert.equal(getProgramPolicy({ code: 'EXP106' }).durationMinutes, 120);
+  assert.equal(getProgramPolicy({ code: 'EXP106' }).durationMinutes, 60);
 });
 
 test('TPG101 policy defines playgroup with 2-child minimum and 12-child maximum', () => {
@@ -30,12 +30,12 @@ test('TPG101 policy defines playgroup with 2-child minimum and 12-child maximum'
 });
 
 // ─── One-on-one time windows ──────────────────────────────────────────────────
-test('one-on-one sessions use valid two-hour operating slots', () => {
+test('one-on-one sessions use valid one-hour operating slots', () => {
   const policy = getProgramPolicy({ code: 'ACT102' });
   const monday = '2026-09-07T00:00:00.000Z';
-  assert.equal(validateTimeWindow({ date: monday, startTime: '08:00', endTime: '10:00', policy }), null);
-  assert.match(validateTimeWindow({ date: monday, startTime: '11:00', endTime: '13:00', policy }), /lunch/i);
-  assert.match(validateTimeWindow({ date: monday, startTime: '08:00', endTime: '09:00', policy }), /2 hours/i);
+  assert.equal(validateTimeWindow({ date: monday, startTime: '08:00', endTime: '09:00', policy }), null);
+  assert.match(validateTimeWindow({ date: monday, startTime: '11:30', endTime: '12:30', policy }), /lunch/i);
+  assert.match(validateTimeWindow({ date: monday, startTime: '08:00', endTime: '10:00', policy }), /1 hour/i);
 });
 
 // ─── Playgroup fixed time slots ───────────────────────────────────────────────

@@ -43,19 +43,21 @@ function calculatePlaygroupTutorRequirement(childCount) {
 }
 
 const PROGRAM_POLICIES = {
+  // 1-on-1 sessions are 1 hour (BeeBright Scheduling Spec, 2026-09-14 — deliberate
+  // change from the earlier 2-hour rule; owner-confirmed system-wide, not UI-only).
   ACT102: {
     sessionType: 'one-on-one',
     maxStudents: 1,
     minTutors: 1,
     maxTutors: 1,
-    durationMinutes: 120,
+    durationMinutes: 60,
   },
   EXP106: {
     sessionType: 'one-on-one',
     maxStudents: 1,
     minTutors: 1,
     maxTutors: 1,
-    durationMinutes: 120,
+    durationMinutes: 60,
   },
   TPG101: {
     sessionType: 'playgroup',
@@ -111,7 +113,11 @@ function validateTimeWindow({ date, startTime, endTime, policy }) {
   if (!isOperatingDay(date)) return 'Schedules are available Monday through Saturday only.';
   if (start < OPERATING_START_MINUTES || end > OPERATING_END_MINUTES) return 'Schedules must be between 8:00 AM and 5:00 PM.';
   if (start < LUNCH_END_MINUTES && end > LUNCH_START_MINUTES) return 'Schedules cannot overlap the 12:00 PM to 1:00 PM lunch break.';
-  if (policy?.durationMinutes && end - start !== policy.durationMinutes) return 'One-on-one sessions must be exactly 2 hours.';
+  if (policy?.durationMinutes && end - start !== policy.durationMinutes) {
+    const hours = policy.durationMinutes / 60;
+    const label = Number.isInteger(hours) ? `${hours} hour${hours === 1 ? '' : 's'}` : `${policy.durationMinutes} minutes`;
+    return `One-on-one sessions must be exactly ${label}.`;
+  }
   if (policy?.fixedSlots && !policy.fixedSlots.some((slot) => slot.startTime === startTime && slot.endTime === endTime)) {
     return 'Toddlers Playgroup is available only from 8:00 AM to 10:00 AM or 1:00 PM to 3:00 PM.';
   }

@@ -9,6 +9,8 @@ const {
   getAvailableSlotsByDay,
   createSchedule,
   createMonthlySchedules,
+  listPlaygroupGroups,
+  createOrJoinPlaygroupGroup,
   enrollStudentInSession,
   removeStudentFromSession,
   listSchedules,
@@ -20,6 +22,9 @@ const {
   announceTutorAbsence,
   triggerAttendanceTimeoutSubstitution,
   markTutorUnavailability,
+  suspendDates,
+  listSuspensions,
+  emergencyReschedule,
   cleanupDuplicates,
   getPlaygroupTutorRequirement,
 } = require('../controllers/scheduleController');
@@ -35,11 +40,16 @@ router.get('/available-slots-monthly', protect, authorize('admin'), getAvailable
 router.get('/available-slots-by-day', protect, authorize('admin'), getAvailableSlotsByDay);
 router.post('/', protect, authorize('admin'), createSchedule);
 router.post('/monthly', protect, authorize('admin'), createMonthlySchedules);
+router.get('/playgroup-groups', protect, authorize('admin'), listPlaygroupGroups);
+router.post('/playgroup-groups', protect, authorize('admin'), createOrJoinPlaygroupGroup);
 router.post('/:id/enroll-student', protect, authorize('admin'), enrollStudentInSession);
 router.post('/:id/remove-student', protect, authorize('admin'), removeStudentFromSession);
 router.post('/:id/announce-absence', protect, authorize('tutor'), announceTutorAbsence);
 router.post('/:id/auto-substitute-timeout', protect, authorize('admin'), triggerAttendanceTimeoutSubstitution);
 router.post('/tutor-unavailability', protect, authorize('admin'), markTutorUnavailability);
+router.post('/suspend', protect, authorize('admin'), suspendDates);
+router.get('/suspensions', protect, authorize('admin'), listSuspensions);
+router.post('/:id/emergency-reschedule', protect, authorize('admin'), emergencyReschedule);
 router.post('/cleanup-duplicates', protect, authorize('admin'), cleanupDuplicates);
 router.patch('/:id/substitute', protect, authorize('admin'), assignSubstituteTutor);
 router.delete('/:id', protect, authorize('admin'), deleteSchedule);

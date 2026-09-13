@@ -9,8 +9,11 @@ const TutoringArea = require('../models/TutoringArea');
 const TutorUnavailability = require('../models/TutorUnavailability');
 const TutorAbsenceAnnouncement = require('../models/TutorAbsenceAnnouncement');
 const ScheduleSubstitutionLog = require('../models/ScheduleSubstitutionLog');
+const PlaygroupGroup = require('../models/PlaygroupGroup');
+const Suspension = require('../models/Suspension');
+const EmergencyReschedule = require('../models/EmergencyReschedule');
 const { sendEmail, logEmailError } = require('../utils/emailService');
-const { parseAvailability, getSlotsForDay, getSlotsByDayOfWeek, SLOT_MINUTES_2HR } = require('../utils/availability');
+const { parseAvailability, getSlotsForDay, getSlotsByDayOfWeek, SLOT_MINUTES_2HR, SLOT_MINUTES_1HR } = require('../utils/availability');
 const {
   getSessionType,
   getDefaultSessionType,
@@ -983,7 +986,7 @@ const getAvailableSlots = async (req, res) => {
     }
     const dayOfWeek = d.getUTCDay();
     const availabilitySlots = parseAvailability(tutor.employmentType, tutor.availability);
-    const possibleSlots = getSlotsForDay(availabilitySlots, dayOfWeek, SLOT_MINUTES_2HR);
+    const possibleSlots = getSlotsForDay(availabilitySlots, dayOfWeek, SLOT_MINUTES_1HR);
     if (possibleSlots.length === 0) {
       return res.status(200).json({
         success: true,
@@ -1608,7 +1611,7 @@ const getSlotsTemplate = async (req, res) => {
     if (!tutor) {
       return res.status(404).json({ success: false, message: 'Tutor not found' });
     }
-    const slotsByDay = getSlotsByDayOfWeek(tutor.employmentType, tutor.availability, SLOT_MINUTES_2HR);
+    const slotsByDay = getSlotsByDayOfWeek(tutor.employmentType, tutor.availability, SLOT_MINUTES_1HR);
     res.status(200).json({ success: true, slotsByDay });
   } catch (error) {
     res.status(500).json({
@@ -1650,7 +1653,7 @@ const getAvailableSlotsMonthly = async (req, res) => {
       return res.status(200).json({ success: true, slots: [] });
     }
 
-    const slotsByDay = getSlotsByDayOfWeek(tutor.employmentType, tutor.availability, SLOT_MINUTES_2HR);
+    const slotsByDay = getSlotsByDayOfWeek(tutor.employmentType, tutor.availability, SLOT_MINUTES_1HR);
     const allPossibleSlots = new Map();
     for (const day of daysOfWeek) {
       const slots = slotsByDay[day] || [];
@@ -1735,7 +1738,7 @@ const getAvailableSlotsByDay = async (req, res) => {
     endOfMonth.setUTCDate(0);
     endOfMonth.setUTCHours(23, 59, 59, 999);
 
-    const slotsByDayTemplate = getSlotsByDayOfWeek(tutor.employmentType, tutor.availability, SLOT_MINUTES_2HR);
+    const slotsByDayTemplate = getSlotsByDayOfWeek(tutor.employmentType, tutor.availability, SLOT_MINUTES_1HR);
     const slotsByDay = {};
     const todayStart = utcTodayStart();
 
@@ -1778,17 +1781,17 @@ const getAvailableSlotsByDay = async (req, res) => {
   }
 };
 
-// @desc    Create monthly schedules (2hr sessions) – 1 month from enrollment date; per-day times via daySlots
+// @desc    Create monthly schedules (1hr sessions) – 1 month from enrollment date; per-day times via daySlots
 // @route   POST /api/schedules/monthly
 // @access  Private (Admin)
 // Body: studentId, tutorId, subjectId, daySlots: [{ dayOfWeek, startTime, endTime }, ...]
 const createMonthlySchedules = async (req, res) => {
   try {
-    const { studentId, tutorId, subjectId, daySlots: daySlotsRaw } = req.body;
-    if (!studentId || !tutorId || !subjectId) {
+    const { studentId: studentIdRaw, enrollmentId, tutorId, subjectId, daySlots: daySlotsRaw } = req.body;
+    if ((!studentIdRaw && !enrollmentId) || !tutorId || !subjectId) {
       return res.status(400).json({
         success: false,
-        message: 'studentId, tutorId, and subjectId are required'
+        message: 'studentId (or enrollmentId), tutorId, and subjectId are required'
       });
     }
 
@@ -1808,35 +1811,31 @@ const createMonthlySchedules = async (req, res) => {
       });
     }
 
-    for (const { startTime, endTime } of daySlots) {
-      const [sh, sm] = (startTime || '').split(':').map(Number);
-      const [eh, em] = (endTime || '').split(':').map(Number);
-      const startM = (sh || 0) * 60 + (sm || 0);
-      const endM = (eh || 0) * 60 + (em || 0);
-      if (endM - startM !== SLOT_MINUTES_2HR) {
-        return res.status(400).json({
-          success: false,
-          message: 'Each session must be exactly 2 hours'
-        });
-      }
-      if (startM < 8 * 60 || endM > 17 * 60 || (startM < 13 * 60 && endM > 12 * 60)) {
-        return res.status(400).json({ success: false, message: 'Sessions must be within 8:00 AM-5:00 PM and cannot overlap lunch.' });
-      }
-    }
+    // Duration/operating-hours/lunch validation happens once per generated date via
+    // validateTimeWindow() below (policy.durationMinutes-driven) — this used to also be
+    // checked here with a hardcoded, stale "must be exactly 2 hours" message; removed as
+    // a redundant duplicate now that duration is 1 hour for one-on-one sessions.
 
-    const enrollment = await Enrollment.findOne({
-      student: studentId,
-      status: 'active'
-    }).populate('selectedSubjects').lean();
-    if (!enrollment) {
+    const enrollment = await Enrollment.findOne(enrollmentId ? { _id: enrollmentId } : { student: studentIdRaw })
+      .sort({ createdAt: -1 })
+      .populate('selectedSubjects')
+      .lean();
+    if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
       return res.status(400).json({ success: false, message: 'Student has no active enrollment' });
     }
-    const hasSubject = (enrollment.selectedSubjects || []).some(
-      s => (s._id || s).toString() === subjectId.toString()
-    );
-    if (!hasSubject) {
+    // enrollmentCoversSubject checks both the legacy selectedSubjects ref AND the
+    // current packages[].programCode field — selectedSubjects is never populated by the
+    // current enrollment wizard, so the old selectedSubjects-only check here was dead
+    // code for every enrollment created through the live system.
+    if (!enrollmentCoversSubject(enrollment, subject)) {
       return res.status(400).json({ success: false, message: 'Student is not enrolled in this subject' });
     }
+
+    // Resolve (or lazily create) the student User account behind this enrollment — a
+    // freshly approved enrollment has no linked User until first scheduled. Same
+    // lazy-creation ensureStudentUserForEnrollment already used by enrollStudentInSession.
+    const studentUser = await ensureStudentUserForEnrollment(enrollment);
+    const studentId = String(studentUser._id);
 
     const officialEnrollmentDate = enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
     const subscriptionStart = new Date(officialEnrollmentDate);
@@ -1940,9 +1939,12 @@ const createMonthlySchedules = async (req, res) => {
       .sort({ date: 1, startTime: 1 })
       .lean();
 
+    const durationLabel = policy?.durationMinutes
+      ? (policy.durationMinutes % 60 === 0 ? `${policy.durationMinutes / 60}hr` : `${policy.durationMinutes}min`)
+      : '';
     res.status(201).json({
       success: true,
-      message: `Created ${created.length} sessions for the month (2hr each).`,
+      message: `Created ${created.length} sessions for the month${durationLabel ? ` (${durationLabel} each)` : ''}.`,
       count: created.length,
       schedules: populated
     });
@@ -1953,6 +1955,307 @@ const createMonthlySchedules = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to create monthly schedules'
+    });
+  }
+};
+
+// @desc    List active Toddlers Playgroup groups, optionally filtered to an exact
+//          day-set + time-window match (used to find groups a new child can join).
+//          A "group" has no stored roster of its own — its current child/tutor
+//          counts are read from one representative upcoming Schedule doc, since
+//          joining always enrolls a child into every date of the group uniformly.
+// @route   GET /api/schedules/playgroup-groups
+// @access  Private (Admin)
+const listPlaygroupGroups = async (req, res) => {
+  try {
+    const { daysOfWeek: daysOfWeekRaw, startTime, endTime } = req.query;
+    const query = { isActive: true };
+    if (startTime) query.startTime = normalizeTime(startTime);
+    if (endTime) query.endTime = normalizeTime(endTime);
+
+    let groups = await PlaygroupGroup.find(query)
+      .populate('tutors', 'firstName lastName middleName')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (daysOfWeekRaw) {
+      const requestedDays = String(daysOfWeekRaw)
+        .split(',')
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b);
+      groups = groups.filter((group) => {
+        const groupDays = [...(group.daysOfWeek || [])].sort((a, b) => a - b);
+        return groupDays.length === requestedDays.length && groupDays.every((day, index) => day === requestedDays[index]);
+      });
+    }
+
+    const today = utcTodayStart();
+    const results = await Promise.all(groups.map(async (group) => {
+      const representative = await Schedule.findOne({ group: group._id, date: { $gte: today } })
+        .sort({ date: 1 })
+        .select('students')
+        .lean();
+      const childCount = representative ? getCurrentEnrollment(representative.students) : 0;
+      const tutorCount = Array.isArray(group.tutors) ? group.tutors.length : 0;
+      const nextChildRequirement = calculatePlaygroupTutorRequirement(childCount + 1);
+      const hasRoom = childCount < PLAYGROUP_MAX_CHILDREN && tutorCount >= nextChildRequirement.min;
+      return {
+        _id: group._id,
+        name: group.name,
+        tutors: group.tutors,
+        daysOfWeek: group.daysOfWeek,
+        startTime: group.startTime,
+        endTime: group.endTime,
+        childCount,
+        tutorCount,
+        maxChildren: PLAYGROUP_MAX_CHILDREN,
+        hasRoom,
+      };
+    }));
+
+    res.status(200).json({ success: true, groups: results });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to load playgroup groups'
+    });
+  }
+};
+
+// @desc    Create a new Toddlers Playgroup group (or join an existing one) and
+//          generate/extend a month of Schedule docs for it, enrolling the student.
+//          Every target date is pre-validated (ratio, capacity, room conflict) before
+//          anything is committed — no partial commits, matching createMonthlySchedules.
+// @route   POST /api/schedules/playgroup-groups
+// @access  Private (Admin)
+const createOrJoinPlaygroupGroup = async (req, res) => {
+  try {
+    const {
+      groupId,
+      tutorIds: tutorIdsRaw,
+      daysOfWeek: daysOfWeekRaw,
+      startTime: startTimeRaw,
+      endTime: endTimeRaw,
+      name,
+      studentId: studentIdRaw,
+      enrollmentId,
+      subjectId,
+    } = req.body;
+
+    if ((!studentIdRaw && !enrollmentId) || !subjectId) {
+      return res.status(400).json({ success: false, message: 'enrollmentId (or studentId) and subjectId are required' });
+    }
+    if (!groupId && (!Array.isArray(tutorIdsRaw) || tutorIdsRaw.length < 1)) {
+      return res.status(400).json({ success: false, message: 'Select at least 1 tutor to create a new group.' });
+    }
+
+    const subject = await Subject.findById(subjectId).select('name code').lean();
+    if (!subject) return res.status(404).json({ success: false, message: 'Subject or program not found' });
+    const policy = getProgramPolicy(subject);
+    if (policy?.sessionType !== 'playgroup') {
+      return res.status(400).json({ success: false, message: 'This endpoint only supports Toddlers Playgroup.' });
+    }
+
+    const enrollment = await Enrollment.findOne(enrollmentId ? { _id: enrollmentId } : { student: studentIdRaw })
+      .sort({ createdAt: -1 })
+      .populate('selectedSubjects')
+      .lean();
+    if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
+      return res.status(400).json({ success: false, message: 'Student has no active enrollment' });
+    }
+    if (!enrollmentCoversSubject(enrollment, subject)) {
+      return res.status(400).json({ success: false, message: 'Student is not enrolled in this subject' });
+    }
+
+    const studentUser = await ensureStudentUserForEnrollment(enrollment);
+    const studentId = String(studentUser._id);
+
+    // For a new group, defer actually persisting the PlaygroupGroup document until
+    // every target date has passed pre-validation below — an in-memory "pending"
+    // group (with a pre-generated _id so downstream code is identical either way)
+    // avoids leaving an orphaned, empty group behind if validation fails partway
+    // through, matching the same no-partial-commits rule as the Schedule docs.
+    let group;
+    let pendingNewGroup = null;
+    if (groupId) {
+      group = await PlaygroupGroup.findOne({ _id: groupId, isActive: true });
+      if (!group) return res.status(404).json({ success: false, message: 'Playgroup group not found' });
+    } else {
+      const daysOfWeek = Array.from(new Set(
+        (Array.isArray(daysOfWeekRaw) ? daysOfWeekRaw : []).map(Number).filter((day) => day >= 0 && day <= 6)
+      )).sort((a, b) => a - b);
+      const startTime = normalizeTime(startTimeRaw);
+      const endTime = normalizeTime(endTimeRaw);
+      if (daysOfWeek.length === 0) {
+        return res.status(400).json({ success: false, message: 'Select at least one day.' });
+      }
+      if (!policy.fixedSlots?.some((slot) => slot.startTime === startTime && slot.endTime === endTime)) {
+        return res.status(400).json({ success: false, message: 'Toddlers Playgroup is available only from 8:00 AM to 10:00 AM or 1:00 PM to 3:00 PM.' });
+      }
+
+      const tutorIds = Array.from(new Set((tutorIdsRaw || []).map(String)));
+      const tutors = await User.find({ _id: { $in: tutorIds }, role: 'tutor', isActive: true, deletedAt: null }).select('_id');
+      if (tutors.length !== tutorIds.length) {
+        return res.status(400).json({ success: false, message: 'One or more selected tutors could not be found.' });
+      }
+
+      pendingNewGroup = {
+        _id: new mongoose.Types.ObjectId(),
+        name: String(name || '').trim(),
+        subject: subjectId,
+        tutors: tutorIds,
+        daysOfWeek,
+        startTime,
+        endTime,
+        createdBy: req.user.id,
+      };
+      group = pendingNewGroup;
+    }
+
+    const officialEnrollmentDate = enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
+    const subscriptionStart = new Date(officialEnrollmentDate);
+    subscriptionStart.setUTCHours(0, 0, 0, 0);
+    const subscriptionEnd = new Date(subscriptionStart);
+    subscriptionEnd.setUTCMonth(subscriptionEnd.getUTCMonth() + 1);
+    subscriptionEnd.setUTCDate(subscriptionEnd.getUTCDate() - 1);
+    subscriptionEnd.setUTCHours(23, 59, 59, 999);
+
+    const generationStart = new Date(Math.max(subscriptionStart.getTime(), utcTodayStart().getTime()));
+    if (generationStart > subscriptionEnd) {
+      return res.status(400).json({
+        success: false,
+        message: 'No schedulable dates remain in this enrollment window. Please renew or choose a new enrollment period.'
+      });
+    }
+
+    const tutoringAreaId = await getDefaultTutoringAreaId('playgroup');
+    if (!tutoringAreaId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Toddler Room is not configured yet. Please add an active toddler room before scheduling.'
+      });
+    }
+
+    const targetDates = [];
+    const cursor = new Date(generationStart);
+    while (cursor <= subscriptionEnd) {
+      if (group.daysOfWeek.includes(cursor.getUTCDay())) {
+        targetDates.push(new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate())));
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    if (targetDates.length === 0) {
+      return res.status(400).json({ success: false, message: 'No schedulable dates remain in this enrollment window for the selected days.' });
+    }
+
+    // Pre-validate every date up front — no partial commits.
+    const plan = [];
+    for (const date of targetDates) {
+      const timeError = validateTimeWindow({ date, startTime: group.startTime, endTime: group.endTime, policy });
+      if (timeError) return res.status(400).json({ success: false, message: timeError });
+
+      const existing = await Schedule.findOne({ group: group._id, date }).select('students');
+      const alreadyEnrolled = existing ? existing.students.some((id) => String(id) === studentId) : false;
+
+      if (!alreadyEnrolled) {
+        const currentChildCount = existing ? getCurrentEnrollment(existing.students) : 0;
+        const newChildCount = currentChildCount + 1;
+        if (newChildCount > PLAYGROUP_MAX_CHILDREN) {
+          return res.status(400).json({
+            success: false,
+            message: `Toddlers Playgroup cannot exceed ${PLAYGROUP_MAX_CHILDREN} children per session (${date.toISOString().slice(0, 10)}).`
+          });
+        }
+        const tutorRequirement = calculatePlaygroupTutorRequirement(newChildCount);
+        if (group.tutors.length < tutorRequirement.min) {
+          return res.status(400).json({
+            success: false,
+            code: 'INSUFFICIENT_TUTORS',
+            message: `Insufficient tutor coverage. ${newChildCount} children require at least ${tutorRequirement.min} tutor${tutorRequirement.min !== 1 ? 's' : ''}, but this group has only ${group.tutors.length}. Please add more tutors to this group before enrolling additional children.`,
+            required: tutorRequirement,
+            assignedTutorCount: group.tutors.length,
+            newChildCount,
+          });
+        }
+      }
+
+      if (!existing) {
+        const roomConflict = await isRoomDoubleBooked(tutoringAreaId, date, group.startTime);
+        if (roomConflict) {
+          return res.status(400).json({
+            success: false,
+            message: `A time slot is already booked on ${date.toISOString().slice(0, 10)}. Please choose another day pattern or join a different group.`
+          });
+        }
+      }
+
+      plan.push({ date, existing, alreadyEnrolled });
+    }
+
+    const hasAnyChange = plan.some((entry) => !entry.existing || !entry.alreadyEnrolled);
+    if (!hasAnyChange) {
+      return res.status(400).json({ success: false, message: 'This student is already enrolled in this group for the entire period.' });
+    }
+
+    // All dates passed validation — only now persist a brand-new group.
+    if (pendingNewGroup) {
+      await PlaygroupGroup.create(pendingNewGroup);
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+    for (const { date, existing, alreadyEnrolled } of plan) {
+      if (existing) {
+        if (!alreadyEnrolled) {
+          await Schedule.updateOne({ _id: existing._id }, { $addToSet: { students: studentId } });
+          updatedCount += 1;
+        }
+      } else {
+        await Schedule.create({
+          group: group._id,
+          sessionType: 'playgroup',
+          student: null,
+          students: [studentId],
+          tutor: group.tutors[0],
+          tutors: group.tutors,
+          maxCapacity: PLAYGROUP_MAX_CHILDREN,
+          subject: subjectId,
+          date,
+          startTime: group.startTime,
+          endTime: group.endTime,
+          tutoringAreaId,
+          isEnrollableByStudents: false,
+        });
+        createdCount += 1;
+      }
+    }
+
+    logAudit({
+      req,
+      userId: req.user.id,
+      action: 'Create Schedule',
+      module: 'Academic',
+      description: `Admin ${groupId ? 'joined' : 'created'} a Toddlers Playgroup group (${createdCount} new, ${updatedCount} joined sessions)`,
+      status: 'SUCCESS',
+      metadata: { groupId: String(group._id), studentId, createdCount, updatedCount }
+    }).catch(() => {});
+
+    const totalSessions = createdCount + updatedCount;
+    res.status(201).json({
+      success: true,
+      message: `${groupId ? 'Joined' : 'Created'} group with ${totalSessions} session${totalSessions === 1 ? '' : 's'} this month (${createdCount} new, ${updatedCount} joined).`,
+      groupId: String(group._id),
+      createdCount,
+      updatedCount,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: 'One or more time slots are already booked.' });
+    }
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create or join playgroup group'
     });
   }
 };
@@ -2428,6 +2731,373 @@ const markTutorUnavailability = async (req, res) => {
   }
 };
 
+// ─── Section 3: Suspension (system-wide) & Emergency (single-student) auto-adjust ──
+// Two deliberately separate functions — see BeeBright Scheduling Spec Section 3. Both
+// reuse the same conflict-checking primitives as the rest of this file
+// (canTutorHandleSchedule / isRoomDoubleBooked / hasStudentScheduleConflict) rather than
+// inventing new ones.
+
+const MAX_RESCHEDULE_ATTEMPTS = 8; // ~2 months of weekly lookahead before giving up
+
+/**
+ * Find the next conflict-free occurrence of the same weekday/time for a session that
+ * needs to move (Suspension only — Emergency lets the admin pick the date directly).
+ * Steps forward 7 days at a time so the weekday never changes. If the immediate next
+ * occurrence is already taken by that same pair's own regular session (the normal
+ * case for a weekly recurring slot), the search naturally continues past it — this is
+ * what makes sessions "compress toward month-end" rather than colliding with the next
+ * regular class. Returns the new Date, or null if nothing opens up within the cap.
+ */
+async function findNextAvailableDateForSchedule(schedule, policy) {
+  const tutorIds = Array.isArray(schedule.tutors) && schedule.tutors.length > 0
+    ? schedule.tutors.map((t) => String(t?._id || t))
+    : (schedule.tutor ? [String(schedule.tutor?._id || schedule.tutor)] : []);
+  const studentIds = [
+    ...(schedule.student ? [String(schedule.student?._id || schedule.student)] : []),
+    ...(Array.isArray(schedule.students) ? schedule.students.map((s) => String(s?._id || s)) : []),
+  ];
+  const tutoringAreaId = schedule.tutoringAreaId?._id || schedule.tutoringAreaId;
+  const subjectId = schedule.subject?._id || schedule.subject;
+
+  let candidate = new Date(schedule.date);
+  for (let attempt = 0; attempt < MAX_RESCHEDULE_ATTEMPTS; attempt++) {
+    candidate = new Date(Date.UTC(candidate.getUTCFullYear(), candidate.getUTCMonth(), candidate.getUTCDate() + 7));
+
+    const timeError = validateTimeWindow({ date: candidate, startTime: schedule.startTime, endTime: schedule.endTime, policy });
+    if (timeError) continue;
+
+    let tutorsOk = true;
+    for (const tutorId of tutorIds) {
+      const check = await canTutorHandleSchedule({
+        tutorId,
+        subjectId,
+        date: candidate,
+        startTime: schedule.startTime,
+        endTime: schedule.endTime,
+        excludeScheduleId: schedule._id,
+      });
+      if (!check.ok) { tutorsOk = false; break; }
+    }
+    if (!tutorsOk) continue;
+
+    if (tutoringAreaId) {
+      const roomConflict = await isRoomDoubleBooked(tutoringAreaId, candidate, schedule.startTime, schedule._id);
+      if (roomConflict) continue;
+    }
+
+    let studentsOk = true;
+    for (const studentId of studentIds) {
+      const conflict = await hasStudentScheduleConflict({
+        studentId,
+        date: candidate,
+        startTime: schedule.startTime,
+        endTime: schedule.endTime,
+        excludeScheduleId: schedule._id,
+      });
+      if (conflict) { studentsOk = false; break; }
+    }
+    if (!studentsOk) continue;
+
+    return candidate;
+  }
+  return null;
+}
+
+async function notifyScheduleReschedule({ schedule, fromDate, toDate, reason }) {
+  const fromLabel = new Date(fromDate).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+  const toLabel = new Date(toDate).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+  const baseText = `Subject: ${schedule?.subject?.name || 'Class'}\nOriginal date: ${fromLabel}\nNew date: ${toLabel}\nTime: ${schedule.startTime} - ${schedule.endTime}\nReason: ${reason || 'Schedule adjustment'}`;
+
+  const students = [
+    ...(schedule.student ? [schedule.student] : []),
+    ...(Array.isArray(schedule.students) ? schedule.students : []),
+  ].filter((s) => s?.email);
+  const tutors = [
+    ...(schedule.tutor ? [schedule.tutor] : []),
+    ...(Array.isArray(schedule.tutors) ? schedule.tutors : []),
+  ].filter((t, index, arr) => t?.email && arr.findIndex((other) => String(other._id) === String(t._id)) === index);
+
+  const emails = [];
+  students.forEach((person) => {
+    emails.push(sendEmail({
+      to: person.email,
+      subject: 'Bee Bright schedule update: session rescheduled',
+      text: `Hello ${buildFullName(person)},\n\nYour session has been rescheduled.\n\n${baseText}\n\nThank you.`,
+    }, 'schedule reschedule notification (student)').catch((error) => logEmailError('schedule reschedule notification (student)', error, { to: person.email })));
+  });
+  tutors.forEach((tutor) => {
+    emails.push(sendEmail({
+      to: tutor.email,
+      subject: 'Bee Bright schedule update: session rescheduled',
+      text: `Hello ${buildFullName(tutor)},\n\nA session on your calendar has been rescheduled.\n\n${baseText}\n\nThank you.`,
+    }, 'schedule reschedule notification (tutor)').catch((error) => logEmailError('schedule reschedule notification (tutor)', error, { to: tutor.email })));
+  });
+
+  if (emails.length === 0) return;
+  await Promise.allSettled(emails);
+}
+
+async function notifyUnresolvedSuspension({ schedule, reason }) {
+  const admins = await User.find({
+    role: { $in: ['admin', 'super_admin'] },
+    isActive: true,
+    deletedAt: null,
+    email: { $exists: true, $ne: '' }
+  }).select('email firstName middleName lastName').lean();
+  if (admins.length === 0) return;
+
+  const dateLabel = new Date(schedule?.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+  const baseText = `Subject: ${schedule?.subject?.name || 'Class'}\nOriginal date: ${dateLabel}\nTime: ${schedule?.startTime} - ${schedule?.endTime}\nReason: ${reason || 'Suspension'}\nStatus: No available reschedule date found within the search window`;
+
+  try {
+    await Promise.allSettled(admins.map((admin) => sendEmail({
+      to: admin.email,
+      subject: 'Bee Bright alert: session needs manual rescheduling',
+      text: `Hello ${buildFullName(admin)},\n\nA session could not be automatically rescheduled after a suspension.\n\n${baseText}\n\nPlease use Emergency Adjustment to reschedule it manually.`
+    }, 'suspension unresolved alert (admin)')));
+  } catch (error) {
+    logEmailError('suspension unresolved alert failed', error, { scheduleId: schedule?._id });
+  }
+}
+
+// @desc    Mark a date (or date range) as suspended — reschedules every affected
+//          Schedule (1-on-1 and Playgroup alike) to the next conflict-free occurrence
+//          for that same pair. System-wide, no per-student picking required.
+// @route   POST /api/schedules/suspend
+// @access  Private (Admin)
+const suspendDates = async (req, res) => {
+  try {
+    const { startDate: startDateRaw, endDate: endDateRaw, reason } = req.body;
+    if (!startDateRaw) {
+      return res.status(400).json({ success: false, message: 'startDate is required' });
+    }
+    const start = toUtcDayStart(startDateRaw);
+    const end = toUtcDayEnd(endDateRaw || startDateRaw);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+      return res.status(400).json({ success: false, message: 'Invalid date range' });
+    }
+
+    const schedules = await Schedule.find({ date: { $gte: start, $lte: end } })
+      .populate('student', 'firstName middleName lastName email')
+      .populate('students', 'firstName middleName lastName email')
+      .populate('tutor', 'firstName middleName lastName email')
+      .populate('tutors', 'firstName middleName lastName email')
+      .populate('subject', 'name code');
+
+    const details = [];
+    let movedCount = 0;
+    let unresolvedCount = 0;
+
+    // Sequential on purpose: each move must be visible to the next candidate-date
+    // search (e.g. two suspended sessions for the same pair must not both land on the
+    // same reschedule date).
+    for (const schedule of schedules) {
+      const policy = getProgramPolicy(schedule.subject);
+      const fromDate = new Date(schedule.date);
+      const nextDate = await findNextAvailableDateForSchedule(schedule, policy);
+
+      if (!nextDate) {
+        unresolvedCount += 1;
+        details.push({ schedule: schedule._id, fromDate, toDate: null, status: 'unresolved' });
+        await notifyUnresolvedSuspension({ schedule, reason }).catch(() => {});
+        continue;
+      }
+
+      schedule.date = nextDate;
+      await schedule.save();
+      movedCount += 1;
+      details.push({ schedule: schedule._id, fromDate, toDate: nextDate, status: 'moved' });
+
+      await notifyScheduleReschedule({
+        schedule,
+        fromDate,
+        toDate: nextDate,
+        reason: reason || 'Center suspension',
+      }).catch(() => {});
+    }
+
+    const suspension = await Suspension.create({
+      startDate: start,
+      endDate: end,
+      reason: String(reason || '').trim(),
+      triggeredBy: req.user.id,
+      movedCount,
+      unresolvedCount,
+      details,
+    });
+
+    logAudit({
+      req,
+      userId: req.user.id,
+      action: 'Suspend Schedule Dates',
+      module: 'Academic',
+      description: `Admin suspended ${toDateOnly(start)} to ${toDateOnly(end)} — ${movedCount} sessions moved, ${unresolvedCount} unresolved`,
+      status: 'SUCCESS',
+      metadata: { suspensionId: String(suspension._id), movedCount, unresolvedCount }
+    }).catch(() => {});
+
+    const dateRangeLabel = toDateOnly(start) === toDateOnly(end) ? toDateOnly(start) : `${toDateOnly(start)} to ${toDateOnly(end)}`;
+    res.status(201).json({
+      success: true,
+      message: `Suspended ${dateRangeLabel}. ${movedCount} session${movedCount === 1 ? '' : 's'} rescheduled${unresolvedCount ? `, ${unresolvedCount} need${unresolvedCount === 1 ? 's' : ''} manual attention` : ''}.`,
+      suspension,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to suspend dates'
+    });
+  }
+};
+
+// @desc    List past suspensions (newest first)
+// @route   GET /api/schedules/suspensions
+// @access  Private (Admin)
+const listSuspensions = async (req, res) => {
+  try {
+    const suspensions = await Suspension.find({})
+      .populate('triggeredBy', 'firstName middleName lastName')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.status(200).json({ success: true, suspensions });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to load suspensions'
+    });
+  }
+};
+
+// @desc    Reschedule a single one-on-one session to an admin-chosen date/time, with a
+//          required reason on record. Never touches any other student's or tutor's
+//          schedule — Toddlers Playgroup sessions are shared by multiple children, so
+//          this endpoint deliberately rejects them (see BeeBright Scheduling Spec
+//          Section 3b: Emergency Adjustment is single-student scope only).
+// @route   POST /api/schedules/:id/emergency-reschedule
+// @access  Private (Admin)
+const emergencyReschedule = async (req, res) => {
+  try {
+    const { newDate, newStartTime, newEndTime, reason } = req.body;
+    if (!newDate || !newStartTime || !newEndTime) {
+      return res.status(400).json({ success: false, message: 'newDate, newStartTime, and newEndTime are required' });
+    }
+    const trimmedReason = String(reason || '').trim();
+    if (!trimmedReason) {
+      return res.status(400).json({ success: false, message: 'A reason is required for an Emergency Adjustment.' });
+    }
+
+    const schedule = await Schedule.findById(req.params.id)
+      .populate('student', 'firstName middleName lastName email')
+      .populate('tutor', 'firstName middleName lastName email')
+      .populate('tutors', 'firstName middleName lastName email')
+      .populate('subject', 'name code');
+    if (!schedule) {
+      return res.status(404).json({ success: false, message: 'Schedule not found' });
+    }
+    if (schedule.sessionType !== 'one-on-one') {
+      return res.status(400).json({
+        success: false,
+        message: 'Emergency Adjustment is only available for 1-on-1 sessions — a Playgroup session is shared by multiple children.'
+      });
+    }
+
+    const policy = getProgramPolicy(schedule.subject);
+    const normalizedStart = normalizeTime(newStartTime);
+    const normalizedEnd = normalizeTime(newEndTime);
+    const targetDate = new Date(`${newDate}T00:00:00.000Z`);
+    if (Number.isNaN(targetDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid newDate' });
+    }
+
+    const timeError = validateTimeWindow({ date: targetDate, startTime: normalizedStart, endTime: normalizedEnd, policy });
+    if (timeError) {
+      return res.status(400).json({ success: false, message: timeError });
+    }
+
+    const tutorIds = Array.isArray(schedule.tutors) && schedule.tutors.length > 0
+      ? schedule.tutors.map((t) => String(t._id))
+      : (schedule.tutor ? [String(schedule.tutor._id)] : []);
+    for (const tutorId of tutorIds) {
+      const check = await canTutorHandleSchedule({
+        tutorId,
+        subjectId: schedule.subject?._id,
+        date: targetDate,
+        startTime: normalizedStart,
+        endTime: normalizedEnd,
+        excludeScheduleId: schedule._id,
+      });
+      if (!check.ok) {
+        return res.status(400).json({ success: false, message: check.reason });
+      }
+    }
+
+    if (schedule.tutoringAreaId) {
+      const roomConflict = await isRoomDoubleBooked(schedule.tutoringAreaId, targetDate, normalizedStart, schedule._id);
+      if (roomConflict) {
+        return res.status(400).json({ success: false, message: 'A time slot is already booked. Please choose another time.' });
+      }
+    }
+
+    if (schedule.student?._id) {
+      const studentConflict = await hasStudentScheduleConflict({
+        studentId: String(schedule.student._id),
+        date: targetDate,
+        startTime: normalizedStart,
+        endTime: normalizedEnd,
+        excludeScheduleId: schedule._id,
+      });
+      if (studentConflict) {
+        return res.status(400).json({ success: false, message: 'The student already has another session at this time.' });
+      }
+    }
+
+    const fromDate = new Date(schedule.date);
+    const fromStartTime = schedule.startTime;
+    const fromEndTime = schedule.endTime;
+
+    schedule.date = targetDate;
+    schedule.startTime = normalizedStart;
+    schedule.endTime = normalizedEnd;
+    await schedule.save();
+
+    const record = await EmergencyReschedule.create({
+      schedule: schedule._id,
+      student: schedule.student?._id,
+      reason: trimmedReason,
+      requestedBy: req.user.id,
+      fromDate,
+      fromStartTime,
+      fromEndTime,
+      toDate: targetDate,
+      toStartTime: normalizedStart,
+      toEndTime: normalizedEnd,
+    });
+
+    notifyScheduleReschedule({ schedule, fromDate, toDate: targetDate, reason: trimmedReason }).catch(() => {});
+
+    logAudit({
+      req,
+      userId: req.user.id,
+      action: 'Emergency Reschedule',
+      module: 'Academic',
+      description: `Admin emergency-rescheduled a session for ${buildFullName(schedule.student)}`,
+      status: 'SUCCESS',
+      metadata: { scheduleId: String(schedule._id), reason: trimmedReason }
+    }).catch(() => {});
+
+    res.status(200).json({ success: true, message: 'Session rescheduled.', schedule, record });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: 'That time slot is already booked.' });
+    }
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to reschedule session'
+    });
+  }
+};
+
 // @desc    Tutor announces absence for a specific class; triggers automatic substitution immediately.
 // @route   POST /api/schedules/:id/announce-absence
 // @access  Private (Tutor)
@@ -2699,6 +3369,8 @@ module.exports = {
   getAvailableSlotsByDay,
   createSchedule,
   createMonthlySchedules,
+  listPlaygroupGroups,
+  createOrJoinPlaygroupGroup,
   enrollStudentInSession,
   removeStudentFromSession,
   listSchedules,
@@ -2710,6 +3382,9 @@ module.exports = {
   announceTutorAbsence,
   triggerAttendanceTimeoutSubstitution,
   markTutorUnavailability,
+  suspendDates,
+  listSuspensions,
+  emergencyReschedule,
   cleanupDuplicates,
   getPlaygroupTutorRequirement,
   timeRangesOverlap,

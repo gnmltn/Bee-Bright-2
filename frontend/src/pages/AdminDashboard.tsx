@@ -27,8 +27,12 @@ import {
   Trash2,
   Archive,
   RotateCcw,
+  CalendarOff,
+  AlertTriangle,
 } from "lucide-react";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
+import { OneOnOneSchedulingWizard } from "@/components/admin/OneOnOneSchedulingWizard";
+import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulingWizard";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
@@ -37,7 +41,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleAreaOption, type WeeklyScheduleTutorOption } from "@/services/api";
+import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord } from "@/services/api";
 import { adminEmailVerificationService } from "@/services/adminEmailVerification";
 import {
   AlertDialog,
@@ -113,19 +117,6 @@ const AVAILABILITY_TIME_SLOTS = [
   "13:00", "14:00", "15:00", "16:00", "17:00", "18:00",
 ];
 
-function getMinutesFromTime(hhmm: string): number {
-  if (!hhmm) return 0;
-  const [h = 0, m = 0] = hhmm.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function isTimeInRange(time: string, startTime: string, endTime: string): boolean {
-  const timeMin = getMinutesFromTime(time);
-  const startMin = getMinutesFromTime(startTime);
-  const endMin = getMinutesFromTime(endTime);
-  return timeMin >= startMin && timeMin < endMin;
-}
-
 function normalizeTime12h(timeStr: string): string | null {
   if (!timeStr) return null;
   const match = timeStr.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
@@ -178,45 +169,6 @@ function parseAvailabilityString(availabilityStr: string | undefined): Availabil
   }
   
   return blocks;
-}
-
-function getAvailableDaysForTutor(employmentType: string | undefined, availabilityStr: string | undefined): string[] {
-  if (!employmentType) return [];
-  if (employmentType === "full-time") {
-    return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  }
-  
-  const blocks = parseAvailabilityString(availabilityStr);
-  const daysSet = new Set<string>();
-  for (const block of blocks) {
-    block.days.forEach((d) => daysSet.add(d));
-  }
-  return Array.from(daysSet);
-}
-
-function getAvailableSchedulingDayKeys(availableDays: string[]): Set<number> {
-  const dayNameToKey: Record<string, number> = { "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
-  const keySet = new Set<number>();
-  for (const day of availableDays) {
-    const key = dayNameToKey[day];
-    if (key !== undefined) keySet.add(key);
-  }
-  return keySet;
-}
-
-function getAvailabilityForDay(employmentType: string | undefined, availabilityStr: string | undefined, dayName: string): { start: string; end: string } | null {
-  if (!employmentType) return null;
-  if (employmentType === "full-time") {
-    return { start: "08:00", end: "18:00" };
-  }
-  
-  const blocks = parseAvailabilityString(availabilityStr);
-  for (const block of blocks) {
-    if (block.days.includes(dayName)) {
-      return { start: block.start, end: block.end };
-    }
-  }
-  return null;
 }
 
 function formatTime12h(hhmm: string) {
@@ -367,42 +319,6 @@ const SCHEDULING_DAYS = [
   { key: 5, name: "Friday", templateDay: 4 },
   { key: 6, name: "Saturday", templateDay: 5 },
 ] as const;
-
-const SESSION_TYPE_OPTIONS = [
-  { value: "one-on-one", label: "1-on-1", maxStudents: 1 },
-  { value: "small-group", label: "Small Group", maxStudents: 3 },
-  { value: "playgroup", label: "Toddler Playgroup", maxStudents: 10 },
-] as const;
-
-type SessionTypeValue = (typeof SESSION_TYPE_OPTIONS)[number]["value"];
-
-type WeeklyAssignmentDraft = {
-  id: string;
-  dayKey: number;
-  tutorId: string;
-  tutorIds: string[];
-  tutorName: string;
-  subjectId: string;
-  subjectName: string;
-  sessionType: SessionTypeValue;
-  startTime: string;
-  endTime: string;
-  roomId: string;
-  roomName: string;
-  roomType: "tutoring_area" | "toddler_room";
-};
-
-const overlapsTimeRange = (startA: string, endA: string, startB: string, endB: string) =>
-  startA < endB && startB < endA;
-
-const addTwoHours = (start: string) => {
-  const [hourRaw, minuteRaw] = start.split(":");
-  const hour = Number(hourRaw);
-  const minute = Number(minuteRaw);
-  if (Number.isNaN(hour) || Number.isNaN(minute)) return start;
-  const endHour = Math.min(23, hour + 2);
-  return `${String(endHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-};
 
 const personDisplayName = (person?: { firstName?: string; middleName?: string; lastName?: string } | null) =>
   person ? [person.firstName, person.middleName, person.lastName].filter(Boolean).join(" ") : "";
@@ -620,42 +536,33 @@ export default function AdminDashboard() {
     return new Date(monday.getFullYear(), monday.getMonth(), monday.getDate());
   });
   const [weeklyPlannerOptionsLoading, setWeeklyPlannerOptionsLoading] = useState(false);
-  const [weeklyPlannerSubmitting, setWeeklyPlannerSubmitting] = useState(false);
-  const [weeklyPlannerErrors, setWeeklyPlannerErrors] = useState<string[]>([]);
-  const [weeklyPlannerDay, setWeeklyPlannerDay] = useState<number>(1);
-  const [weeklyPlannerSelectedDays, setWeeklyPlannerSelectedDays] = useState<number[]>([1, 2, 3]);
-  const [scheduleGenerationMonthSpan, setScheduleGenerationMonthSpan] = useState<1 | 2 | 3>(1);
-  const [weeklyPlannerAreas, setWeeklyPlannerAreas] = useState<WeeklyScheduleAreaOption[]>([]);
   const [weeklyPlannerTutors, setWeeklyPlannerTutors] = useState<WeeklyScheduleTutorOption[]>([]);
   const [weeklyPlannerSubjects, setWeeklyPlannerSubjects] = useState<{ _id: string; name: string; code?: string }[]>([]);
-  const [weeklyPlannerForm, setWeeklyPlannerForm] = useState<{
-    tutorId: string;
-    tutorIds: string[];
-    subjectId: string;
-    sessionType: SessionTypeValue;
-    startTime: string;
-    endTime: string;
-  }>({
-    tutorId: "",
-    tutorIds: [],
-    subjectId: "",
-    sessionType: "one-on-one",
-    startTime: "08:00",
-    endTime: "10:00",
-  });
-  const [weeklyPlannerDraft, setWeeklyPlannerDraft] = useState<Record<number, WeeklyAssignmentDraft[]>>({
-    1: [],
-    2: [],
-    3: [],
-    4: [],
-    5: [],
-    6: [],
-  });
+  // BeeBright Scheduling Spec: Scheduling Tab layout fix — only one of the two
+  // scheduling flows renders at a time, chosen here as the true first step.
+  const [schedulingProgramType, setSchedulingProgramType] = useState<"one-on-one" | "playgroup" | null>(null);
   const [substituteDialogOpen, setSubstituteDialogOpen] = useState(false);
   const [substituteTutorOptions, setSubstituteTutorOptions] = useState<{ _id: string; name: string; email?: string }[]>([]);
   const [substituteTutorId, setSubstituteTutorId] = useState("");
   const [substituteReason, setSubstituteReason] = useState("Tutor unavailable");
   const [substituteLoading, setSubstituteLoading] = useState(false);
+
+  // BeeBright Scheduling Spec, Section 3a — Suspension (system-wide auto-reschedule).
+  const [suspendDialogOpen, setSuspendDialogOpen] = useState(false);
+  const [suspendStartDate, setSuspendStartDate] = useState("");
+  const [suspendEndDate, setSuspendEndDate] = useState("");
+  const [suspendReason, setSuspendReason] = useState("");
+  const [suspendSubmitting, setSuspendSubmitting] = useState(false);
+  const [suspensionHistory, setSuspensionHistory] = useState<SuspensionRecord[]>([]);
+  const [suspensionHistoryLoading, setSuspensionHistoryLoading] = useState(false);
+
+  // BeeBright Scheduling Spec, Section 3b — Emergency Adjustment (single-student, admin-picked date/time).
+  const [emergencyDialogOpen, setEmergencyDialogOpen] = useState(false);
+  const [emergencyNewDate, setEmergencyNewDate] = useState("");
+  const [emergencyNewStartTime, setEmergencyNewStartTime] = useState("");
+  const [emergencyNewEndTime, setEmergencyNewEndTime] = useState("");
+  const [emergencyReason, setEmergencyReason] = useState("");
+  const [emergencySubmitting, setEmergencySubmitting] = useState(false);
 
   const [usersCategory, setUsersCategory] = useState<"active" | "archived">("active");
   const [archivedUserDetail, setArchivedUserDetail] = useState<AdminUser | null>(null);
@@ -1184,12 +1091,6 @@ export default function AdminDashboard() {
   }, [selectedSchedule?._id]);
 
   useEffect(() => {
-    if (!weeklyPlannerSelectedDays.includes(weeklyPlannerDay)) {
-      setWeeklyPlannerDay(weeklyPlannerSelectedDays[0] ?? 1);
-    }
-  }, [weeklyPlannerSelectedDays, weeklyPlannerDay]);
-
-  useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(SCHEDULE_VIEW_STORAGE_KEY, scheduleViewMode);
   }, [scheduleViewMode]);
@@ -1217,17 +1118,14 @@ export default function AdminDashboard() {
       .getOptions()
       .then((res) => {
         if (res.data?.success) {
-          setWeeklyPlannerAreas(Array.isArray(res.data.tutoringAreas) ? res.data.tutoringAreas : []);
           setWeeklyPlannerTutors(Array.isArray(res.data.tutors) ? res.data.tutors : []);
           setWeeklyPlannerSubjects(Array.isArray(res.data.subjects) ? res.data.subjects : []);
         } else {
-          setWeeklyPlannerAreas([]);
           setWeeklyPlannerTutors([]);
           setWeeklyPlannerSubjects([]);
         }
       })
       .catch(() => {
-        setWeeklyPlannerAreas([]);
         setWeeklyPlannerTutors([]);
         setWeeklyPlannerSubjects([]);
       })
@@ -1306,6 +1204,94 @@ export default function AdminDashboard() {
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to mark tutor unavailable";
       toast.error(msg);
+    }
+  };
+
+  const handleLoadSuspensionHistory = async () => {
+    setSuspensionHistoryLoading(true);
+    try {
+      const res = await scheduleService.listSuspensions();
+      setSuspensionHistory(res.data?.suspensions || []);
+    } catch {
+      setSuspensionHistory([]);
+    } finally {
+      setSuspensionHistoryLoading(false);
+    }
+  };
+
+  const handleSuspendDates = async () => {
+    if (!suspendStartDate) {
+      toast.error("Choose a date to suspend.");
+      return;
+    }
+    if (!suspendReason.trim()) {
+      toast.error("A reason is required.");
+      return;
+    }
+    setSuspendSubmitting(true);
+    try {
+      const res = await scheduleService.suspendDates({
+        startDate: suspendStartDate,
+        endDate: suspendEndDate || undefined,
+        reason: suspendReason.trim(),
+      });
+      if (res.data?.success) {
+        toast.success(res.data.message || "Suspension applied.");
+        setSuspendStartDate("");
+        setSuspendEndDate("");
+        setSuspendReason("");
+        fetchSchedules();
+        handleLoadSuspensionHistory();
+      } else {
+        toast.error(res.data?.message || "Failed to suspend dates.");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to suspend dates.";
+      toast.error(msg);
+    } finally {
+      setSuspendSubmitting(false);
+    }
+  };
+
+  const openEmergencyDialog = () => {
+    if (!selectedSchedule) return;
+    setEmergencyNewDate(toDateKey(new Date(selectedSchedule.date)));
+    setEmergencyNewStartTime(selectedSchedule.startTime || "");
+    setEmergencyNewEndTime(selectedSchedule.endTime || "");
+    setEmergencyReason("");
+    setEmergencyDialogOpen(true);
+  };
+
+  const handleEmergencyReschedule = async () => {
+    if (!selectedSchedule?._id) return;
+    if (!emergencyNewDate || !emergencyNewStartTime || !emergencyNewEndTime) {
+      toast.error("Choose a new date and time.");
+      return;
+    }
+    if (!emergencyReason.trim()) {
+      toast.error("A reason is required for an Emergency Adjustment.");
+      return;
+    }
+    setEmergencySubmitting(true);
+    try {
+      const res = await scheduleService.emergencyReschedule(selectedSchedule._id, {
+        newDate: emergencyNewDate,
+        newStartTime: emergencyNewStartTime,
+        newEndTime: emergencyNewEndTime,
+        reason: emergencyReason.trim(),
+      });
+      if (res.data?.success) {
+        toast.success(res.data.message || "Session rescheduled.");
+        setEmergencyDialogOpen(false);
+        fetchSchedules();
+      } else {
+        toast.error(res.data?.message || "Failed to reschedule session.");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to reschedule session.";
+      toast.error(msg);
+    } finally {
+      setEmergencySubmitting(false);
     }
   };
 
@@ -2077,289 +2063,6 @@ export default function AdminDashboard() {
     });
     return map;
   }, [weeklyDateKeys, schedulesByDate]);
-
-  const weeklyPlannerDateByDay = useMemo(() => {
-    const map: Record<number, string> = {};
-    weeklyDateKeys.forEach((entry) => {
-      map[entry.dayKey] = entry.dateKey;
-    });
-    return map;
-  }, [weeklyDateKeys]);
-
-  const weeklyPlannerTutorNameById = useMemo(() => {
-    const map: Record<string, string> = {};
-    weeklyPlannerTutors.forEach((tutor) => {
-      map[tutor._id] = [tutor.firstName, tutor.middleName, tutor.lastName].filter(Boolean).join(" ") || tutor.email || "Tutor";
-    });
-    return map;
-  }, [weeklyPlannerTutors]);
-
-  const weeklyPlannerSubjectNameById = useMemo(() => {
-    const map: Record<string, string> = {};
-    weeklyPlannerSubjects.forEach((subject) => {
-      map[subject._id] = subject.name;
-    });
-    return map;
-  }, [weeklyPlannerSubjects]);
-
-  const selectedWeeklyPlannerSubject = useMemo(
-    () => weeklyPlannerSubjects.find((subject) => subject._id === weeklyPlannerForm.subjectId),
-    [weeklyPlannerForm.subjectId, weeklyPlannerSubjects]
-  );
-
-  const selectedWeeklyPlannerTutors = useMemo(() => {
-    const ids = weeklyPlannerForm.sessionType === "playgroup"
-      ? weeklyPlannerForm.tutorIds
-      : (weeklyPlannerForm.tutorId ? [weeklyPlannerForm.tutorId] : []);
-    return weeklyPlannerTutors.filter((tutor) => ids.includes(tutor._id));
-  }, [weeklyPlannerForm.sessionType, weeklyPlannerForm.tutorId, weeklyPlannerForm.tutorIds, weeklyPlannerTutors]);
-
-  const availableDaysForSelectedTutor = useMemo(() => {
-    if (selectedWeeklyPlannerTutors.length === 0) {
-      return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    }
-    return selectedWeeklyPlannerTutors.reduce<string[]>((days, tutor, index) => {
-      const tutorDays = getAvailableDaysForTutor(tutor.employmentType, tutor.availability);
-      return index === 0 ? tutorDays : days.filter((day) => tutorDays.includes(day));
-    }, []);
-  }, [selectedWeeklyPlannerTutors]);
-
-  const availableSchedulingDayKeys = useMemo(() => {
-    return getAvailableSchedulingDayKeys(availableDaysForSelectedTutor);
-  }, [availableDaysForSelectedTutor]);
-
-  const availableTimeSlotsForSelectedTutor = useMemo(() => {
-    const validStarts = weeklyPlannerForm.sessionType === "playgroup" ? ["08:00", "13:00"] : ["08:00", "10:00", "13:00", "15:00"];
-    if (selectedWeeklyPlannerTutors.length === 0 || weeklyPlannerSelectedDays.length === 0) {
-      return validStarts;
-    }
-    const [firstDay] = [...weeklyPlannerSelectedDays].sort((a, b) => a - b);
-    const dayInfo = SCHEDULING_DAYS.find((d) => d.key === firstDay);
-    if (!dayInfo) return validStarts;
-
-    const dayName = dayInfo.name.slice(0, 3);
-    return validStarts.filter((time) =>
-      selectedWeeklyPlannerTutors.every((tutor) => {
-        const availability = getAvailabilityForDay(tutor.employmentType, tutor.availability, dayName);
-        return availability ? isTimeInRange(time, availability.start, availability.end) : false;
-      })
-    );
-  }, [selectedWeeklyPlannerTutors, weeklyPlannerSelectedDays, weeklyPlannerForm.sessionType]);
-
-  const isToddlerPlaygroupSubject = useMemo(() => {
-    const subjectName = (selectedWeeklyPlannerSubject?.name || "").toLowerCase();
-    return subjectName.includes("toddler") || subjectName.includes("playgroup");
-  }, [selectedWeeklyPlannerSubject]);
-
-  const availableSessionTypeOptions = useMemo(() => {
-    if (isToddlerPlaygroupSubject) {
-      return SESSION_TYPE_OPTIONS.filter((sessionType) => sessionType.value === "playgroup");
-    }
-    return SESSION_TYPE_OPTIONS.filter((sessionType) => sessionType.value === "one-on-one");
-  }, [isToddlerPlaygroupSubject]);
-
-  const getPlannerRoomForSessionType = (sessionType: SessionTypeValue) => {
-    const targetAreaType = sessionType === "playgroup" ? "toddler_room" : "tutoring_area";
-    return weeklyPlannerAreas.find((area) => area.areaType === targetAreaType);
-  };
-
-  useEffect(() => {
-    if (isToddlerPlaygroupSubject && weeklyPlannerForm.sessionType !== "playgroup") {
-      setWeeklyPlannerForm((prev) => ({ ...prev, sessionType: "playgroup" }));
-      return;
-    }
-    if (!isToddlerPlaygroupSubject && weeklyPlannerForm.sessionType === "playgroup") {
-      setWeeklyPlannerForm((prev) => ({ ...prev, sessionType: "one-on-one" }));
-    }
-  }, [isToddlerPlaygroupSubject, weeklyPlannerForm.sessionType]);
-
-  const toSessionRoomType = (session: AdminSchedule): "tutoring_area" | "toddler_room" => {
-    const areaType =
-      typeof session.tutoringAreaId === "object" && session.tutoringAreaId && "areaType" in session.tutoringAreaId
-        ? session.tutoringAreaId.areaType
-        : undefined;
-    if (areaType === "toddler_room") return "toddler_room";
-    if (areaType === "tutoring_area") return "tutoring_area";
-    return session.sessionType === "playgroup" ? "toddler_room" : "tutoring_area";
-  };
-
-  const addWeeklyPlannerAssignment = () => {
-    const nextErrors: string[] = [];
-    const { tutorId, tutorIds: selectedTutorIds, subjectId, sessionType, startTime, endTime } = weeklyPlannerForm;
-    const tutorIds = (sessionType === "playgroup" ? selectedTutorIds : [tutorId]).filter(Boolean);
-    const primaryTutorId = tutorIds[0] || tutorId;
-    const targetDayKeys = [...weeklyPlannerSelectedDays].sort((a, b) => a - b);
-
-    if (!subjectId) nextErrors.push("Choose a program first.");
-    if (!startTime || !endTime) nextErrors.push("Choose a start time. End time is filled automatically.");
-    if (sessionType === "playgroup") {
-      // For playgroup slot creation (before children are enrolled): require at
-      // least 1 tutor. There is no upper bound — staff may assign more tutors
-      // than the eventual minimum at any time. The exact minimum (1 tutor per
-      // 2 children) is validated again at enrollment time based on actual child count.
-      if (tutorIds.length < 1) {
-        nextErrors.push("Select at least 1 tutor for this Toddlers Playgroup slot. Required tutors will be validated when children are enrolled.");
-      }
-    } else if (!tutorIds.length) {
-      nextErrors.push("Choose 1 tutor for this 1-on-1 session.");
-    }
-
-    if (targetDayKeys.length === 0) {
-      nextErrors.push("Please select at least one day (Mon-Sat).");
-    }
-
-    if (startTime && endTime && startTime >= endTime) {
-      nextErrors.push("End time must be after start time.");
-    }
-
-    const assignedRoom = getPlannerRoomForSessionType(sessionType);
-    if (!assignedRoom) {
-      nextErrors.push(
-        sessionType === "playgroup"
-          ? "Toddler room is not configured yet. Please create an active toddler room."
-          : "Tutoring area is not configured yet. Please create an active tutoring area."
-      );
-    }
-
-    for (const dayKey of targetDayKeys) {
-      const dayLabel = SCHEDULING_DAYS.find((day) => day.key === dayKey)?.name || "selected day";
-      const localDayDraft = weeklyPlannerDraft[dayKey] || [];
-
-      if (localDayDraft.some((entry) => entry.tutorIds.some((assignedTutorId) => tutorIds.includes(assignedTutorId)) && overlapsTimeRange(startTime, endTime, entry.startTime, entry.endTime))) {
-        nextErrors.push(`Tutor already scheduled at this time for ${dayLabel}`);
-      }
-
-      if (assignedRoom?.areaType === "tutoring_area") {
-        const sameSlotTutoringArea = localDayDraft.filter(
-          (entry) => entry.roomType === "tutoring_area" && overlapsTimeRange(startTime, endTime, entry.startTime, entry.endTime)
-        ).length;
-        if (sameSlotTutoringArea >= 15) {
-          nextErrors.push(`Maximum tutor capacity reached (15) for ${dayLabel}`);
-        }
-      }
-
-      const selectedDateKey = weeklyPlannerDateByDay[dayKey];
-      const existingDaySchedules = selectedDateKey ? schedulesByDate[selectedDateKey] || [] : [];
-
-      const hasExistingTutorConflict = existingDaySchedules.some((session) => {
-        const existingTutorId = typeof session.tutor === "object" ? session.tutor?._id : undefined;
-        const existingTutorIds = session.tutors?.map((tutor) => typeof tutor === "object" ? tutor._id : tutor) || (existingTutorId ? [existingTutorId] : []);
-        return existingTutorIds.some((existingId) => tutorIds.includes(existingId || "")) && overlapsTimeRange(startTime, endTime, session.startTime || "", session.endTime || "");
-      });
-
-      if (hasExistingTutorConflict) {
-        nextErrors.push(`Tutor already has an existing session on ${dayLabel}`);
-      }
-
-      const existingSameRoomCount = existingDaySchedules.filter((session) => {
-        return toSessionRoomType(session) === (assignedRoom?.areaType || "tutoring_area") && overlapsTimeRange(startTime, endTime, session.startTime || "", session.endTime || "");
-      }).length;
-
-      if (assignedRoom?.areaType === "tutoring_area" && existingSameRoomCount >= 15) {
-        nextErrors.push(`Maximum tutoring-area capacity reached on ${dayLabel}`);
-      }
-    }
-
-    if (nextErrors.length > 0) {
-      setWeeklyPlannerErrors(Array.from(new Set(nextErrors)));
-      return;
-    }
-
-    setWeeklyPlannerDraft((prev) => {
-      const next = { ...prev };
-      for (const dayKey of targetDayKeys) {
-        const newEntry: WeeklyAssignmentDraft = {
-          id: `${dayKey}-${primaryTutorId}-${subjectId}-${startTime}-${endTime}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          dayKey,
-          tutorId: primaryTutorId,
-          tutorIds,
-          tutorName: tutorIds.map((id) => weeklyPlannerTutorNameById[id] || "Tutor").join(", "),
-          subjectId,
-          subjectName: weeklyPlannerSubjectNameById[subjectId] || "Subject",
-          sessionType,
-          startTime,
-          endTime,
-          roomId: assignedRoom!._id,
-          roomName: assignedRoom!.name,
-          roomType: assignedRoom!.areaType,
-        };
-        next[dayKey] = [...(next[dayKey] || []), newEntry].sort((a, b) => a.startTime.localeCompare(b.startTime));
-      }
-      return next;
-    });
-    setWeeklyPlannerErrors([]);
-  };
-
-  const removeWeeklyPlannerAssignment = (dayKey: number, assignmentId: string) => {
-    setWeeklyPlannerDraft((prev) => ({
-      ...prev,
-      [dayKey]: (prev[dayKey] || []).filter((entry) => entry.id !== assignmentId),
-    }));
-  };
-
-  const submitWeeklyPlanner = async () => {
-    const allAssignments = SCHEDULING_DAYS.flatMap((day) => weeklyPlannerDraft[day.key] || []);
-    if (allAssignments.length === 0) {
-      setWeeklyPlannerErrors(["Please add at least one tutor assignment before generating sessions."]);
-      return;
-    }
-
-    const weekStartDate = toDateKey(scheduleWeekStart);
-    const templateName = `Weekly Plan ${weekStartDate}`;
-    const scheduleEntries = allAssignments.map((entry) => ({
-      dayOfWeek: SCHEDULING_DAYS.find((day) => day.key === entry.dayKey)?.templateDay ?? entry.dayKey - 1,
-      startTime: entry.startTime,
-      endTime: entry.endTime,
-      tutorId: entry.tutorIds[0] || entry.tutorId,
-      tutorIds: entry.tutorIds.length ? entry.tutorIds : [entry.tutorId],
-      sessionType: entry.sessionType,
-      tutoringAreaId: entry.roomId,
-      subjectId: entry.subjectId,
-    }));
-
-    setWeeklyPlannerSubmitting(true);
-    setWeeklyPlannerErrors([]);
-    try {
-      const createRes = await weeklyScheduleService.createTemplate({
-        name: templateName,
-        description: "Created from inline Scheduling Tab planner",
-        effectiveStartDate: weekStartDate,
-        scheduleEntries,
-      });
-
-      if (!createRes.data?.success || !createRes.data?.template?._id) {
-        setWeeklyPlannerErrors([createRes.data?.message || "Failed to create weekly schedule template."]);
-        return;
-      }
-
-      const templateId = createRes.data.template._id;
-      const activateRes = await weeklyScheduleService.activateTemplate(templateId);
-      if (!activateRes.data?.success) {
-        setWeeklyPlannerErrors([activateRes.data?.message || "Failed to activate weekly schedule template."]);
-        return;
-      }
-
-      const generateRes = await weeklyScheduleService.generateSessions(templateId, weekStartDate, scheduleGenerationMonthSpan);
-      if (!generateRes.data?.success) {
-        setWeeklyPlannerErrors([generateRes.data?.message || "Failed to generate sessions."]);
-        return;
-      }
-
-      const generationErrors = Array.isArray(generateRes.data?.errors) ? generateRes.data.errors : [];
-      if (generationErrors.length > 0) {
-        setWeeklyPlannerErrors(generationErrors.slice(0, 4));
-      }
-
-      toast.success(generateRes.data?.message || `Sessions generated successfully for ${scheduleGenerationMonthSpan} month(s).`);
-      setWeeklyPlannerDraft({ 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] });
-      fetchSchedules();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to generate weekly schedule sessions.";
-      setWeeklyPlannerErrors([msg]);
-    } finally {
-      setWeeklyPlannerSubmitting(false);
-    }
-  };
 
   const weeklyTimeSlots = useMemo(() => {
     const seen = new Set<string>();
@@ -3237,310 +2940,55 @@ export default function AdminDashboard() {
                   <div>
                     <h3 className="font-display font-bold text-lg text-foreground">Scheduling Tab</h3>
                     <p className="text-sm text-muted-foreground">
-                      First create tutor time slots here. After you generate them, open the calendar below and assign children to those slots.
+                      Choose a program type below, then follow the wizard to schedule sessions.
                     </p>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    1-on-1: 1 tutor + 1 child, 2 hours. Playgroup: 1 tutor per 2 children minimum (more always allowed) + 2–12 children, 8–10 AM or 1–3 PM only.
+                    1-on-1: 1 tutor + 1 child, 1 hour. Playgroup: 1 tutor per 2 children minimum (more always allowed) + 2–12 children, 8–10 AM or 1–3 PM only.
                   </div>
                 </div>
 
                 <div className="p-4 space-y-4">
-                  <p className="text-xs text-muted-foreground">Step 1: Choose the days this slot should repeat.</p>
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-                    {SCHEDULING_DAYS.filter((day) => availableSchedulingDayKeys.has(day.key)).map((day) => (
-                      <Button
-                        key={day.key}
-                        type="button"
-                        variant={weeklyPlannerSelectedDays.includes(day.key) ? "default" : "outline"}
-                        className="justify-start"
-                        onClick={() => {
-                          setWeeklyPlannerSelectedDays((prev) => {
-                            if (prev.includes(day.key)) {
-                              if (prev.length === 1) return prev;
-                              return prev.filter((value) => value !== day.key);
-                            }
-                            return [...prev, day.key].sort((a, b) => a - b);
-                          });
-                          if (!weeklyPlannerSelectedDays.includes(day.key)) {
-                            setWeeklyPlannerDay(day.key);
-                          }
-                          setWeeklyPlannerErrors([]);
-                        }}
-                      >
-                        {day.name}
-                      </Button>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <Label>Preview day</Label>
-                      <Select
-                        value={String(weeklyPlannerDay)}
-                        onValueChange={(value) => setWeeklyPlannerDay(Number(value))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select day to preview" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SCHEDULING_DAYS.map((day) => (
-                            <SelectItem key={`preview-${day.key}`} value={String(day.key)}>
-                              {day.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label>Month span</Label>
-                      <Select
-                        value={String(scheduleGenerationMonthSpan)}
-                        onValueChange={(value) => setScheduleGenerationMonthSpan(Math.min(3, Math.max(1, Number(value))) as 1 | 2 | 3)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select month span" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">1 month</SelectItem>
-                          <SelectItem value="2">2 months</SelectItem>
-                          <SelectItem value="3">3 months</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
-                      <div className="space-y-1">
-                        <Label>Step 2: Program</Label>
-                        <Select
-                          value={weeklyPlannerForm.subjectId}
-                          onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, subjectId: value }))}
-                          disabled={weeklyPlannerOptionsLoading}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder={weeklyPlannerOptionsLoading ? "Loading programs..." : "Select Academic Tutorial, Exam Prep, or Playgroup"} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {weeklyPlannerSubjects.map((subject) => (
-                              <SelectItem key={subject._id} value={subject._id}>
-                                {subject.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-1">
-                        <Label>Session type</Label>
-                        <Select
-                          value={weeklyPlannerForm.sessionType}
-                          onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, sessionType: value as SessionTypeValue, tutorIds: value === "playgroup" ? prev.tutorIds : (prev.tutorId ? [prev.tutorId] : []) }))}
-                          disabled={!weeklyPlannerForm.subjectId || isToddlerPlaygroupSubject || availableSessionTypeOptions.length === 1}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select type" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableSessionTypeOptions.map((sessionType) => (
-                              <SelectItem key={sessionType.value} value={sessionType.value}>
-                                {sessionType.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-[11px] text-muted-foreground">
-                          {weeklyPlannerForm.sessionType === "playgroup"
-                            ? "Playgroup is one shared session. Minimum tutors required: 1 per 2 children (you may always assign more). Assign children from the calendar."
-                            : "1-on-1 uses one tutor. Assign the child later from the calendar."}
-                        </p>
-                      </div>
-
-                      <div className="space-y-1 lg:col-span-1">
-                        <Label>{weeklyPlannerForm.sessionType === "playgroup" ? `Step 3: Tutors (${weeklyPlannerForm.tutorIds.length} selected)` : "Step 3: Tutor"}</Label>
-                        {weeklyPlannerForm.sessionType === "playgroup" ? (
-                          <div className="rounded-md border border-border bg-background p-2">
-                            {weeklyPlannerTutors.length < 1 ? (
-                              <p className="text-xs text-destructive">
-                                No active tutors found. Add tutors in the Users tab first.
-                              </p>
-                            ) : (
-                              <p className="mb-2 text-xs text-muted-foreground">
-                                Select at least 1 tutor. The minimum required is 1 tutor per 2 children enrolled (you may always assign more than the minimum).
-                              </p>
-                            )}
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                              {weeklyPlannerTutors.map((tutor) => {
-                                const tutorName = [tutor.firstName, tutor.middleName, tutor.lastName].filter(Boolean).join(" ");
-                                const selected = weeklyPlannerForm.tutorIds.includes(tutor._id);
-                                return (
-                                  <Button
-                                    key={tutor._id}
-                                    type="button"
-                                    size="sm"
-                                    variant={selected ? "default" : "outline"}
-                                    onClick={() => setWeeklyPlannerForm((prev) => {
-                                      const nextIds = selected
-                                        ? prev.tutorIds.filter((id) => id !== tutor._id)
-                                        : [...prev.tutorIds, tutor._id];
-                                      return { ...prev, tutorId: nextIds[0] || "", tutorIds: nextIds };
-                                    })}
-                                  >
-                                    {tutorName}
-                                  </Button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ) : (
-                          <Select
-                            value={weeklyPlannerForm.tutorId}
-                            onValueChange={(value) => setWeeklyPlannerForm((prev) => ({ ...prev, tutorId: value, tutorIds: [value] }))}
-                            disabled={weeklyPlannerOptionsLoading}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder={weeklyPlannerOptionsLoading ? "Loading tutors..." : "Select 1 tutor"} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {weeklyPlannerTutors.map((tutor) => {
-                                const tutorName = [tutor.firstName, tutor.middleName, tutor.lastName].filter(Boolean).join(" ");
-                                return (
-                                  <SelectItem key={tutor._id} value={tutor._id}>
-                                    {tutorName}
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      </div>
-
-                      <div className="space-y-1">
-                        <Label>Step 4: Start</Label>
-                        <Select
-                          value={weeklyPlannerForm.startTime}
-                          onValueChange={(value) =>
-                            setWeeklyPlannerForm((prev) => ({
-                              ...prev,
-                              startTime: value,
-                              endTime: addTwoHours(value),
-                            }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Start time" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableTimeSlotsForSelectedTutor.length === 0 ? (
-                              <div className="p-2 text-xs text-muted-foreground">
-                                {weeklyPlannerForm.sessionType === "playgroup" ? "Playgroup times are 8:00 AM or 1:00 PM." : "No overlapping times for the selected tutor on these days."}
-                              </div>
-                            ) : (
-                              availableTimeSlotsForSelectedTutor.map((time) => (
-                                <SelectItem key={time} value={time}>
-                                  {formatSlotTime(time)}
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-1">
-                        <Label>End</Label>
-                        <div className="flex h-10 items-center rounded-md border border-input bg-muted/40 px-3 text-sm text-foreground">
-                          {weeklyPlannerForm.endTime ? formatSlotTime(weeklyPlannerForm.endTime) : "Automatically 2 hours after start"}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-sm text-muted-foreground">
-                        Room is assigned automatically. {weeklyPlannerForm.sessionType === "playgroup" ? "Playgroup always uses the Toddler Room." : "1-on-1 always uses the Tutoring Area."}
-                      </p>
+                  {/* Step 1: Program Type — only one flow renders at a time */}
+                  <div className="space-y-1">
+                    <Label>Step 1: Program Type</Label>
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
-                        size="sm"
-                        onClick={addWeeklyPlannerAssignment}
-                        disabled={weeklyPlannerForm.sessionType === "playgroup" && weeklyPlannerTutors.length < 1}
+                        variant={schedulingProgramType === "one-on-one" ? "default" : "outline"}
+                        onClick={() => setSchedulingProgramType("one-on-one")}
                       >
-                        Add to selected day(s)
+                        1-on-1
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={schedulingProgramType === "playgroup" ? "default" : "outline"}
+                        onClick={() => setSchedulingProgramType("playgroup")}
+                      >
+                        Toddlers Playgroup
                       </Button>
                     </div>
-
-                    {weeklyPlannerErrors.length > 0 && (
-                      <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 space-y-1">
-                        {weeklyPlannerErrors.map((error) => (
-                          <p key={error} className="text-sm text-destructive">{error}</p>
-                        ))}
-                      </div>
-                    )}
                   </div>
 
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                    <div className="rounded-lg border border-border overflow-hidden">
-                      <div className="p-3 border-b border-border bg-muted/30">
-                        <h4 className="font-semibold text-foreground">Tutoring Area</h4>
-                        <p className="text-xs text-muted-foreground">Up to 15 concurrent 1-on-1 sessions</p>
-                      </div>
-                      <div className="p-3 space-y-2 min-h-[180px]">
-                        {(weeklyPlannerDraft[weeklyPlannerDay] || []).filter((item) => item.roomType === "tutoring_area").length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No tutoring-area assignments yet for this day.</p>
-                        ) : (
-                          (weeklyPlannerDraft[weeklyPlannerDay] || [])
-                            .filter((item) => item.roomType === "tutoring_area")
-                            .map((assignment) => (
-                              <div key={assignment.id} className="rounded-md border border-border p-2 flex items-start justify-between gap-2">
-                                <div>
-                                  <p className="text-sm font-medium text-foreground">{assignment.tutorName}</p>
-                                  <p className="text-xs text-muted-foreground">{formatSlotTime(assignment.startTime)} - {formatSlotTime(assignment.endTime)}</p>
-                                  <p className="text-xs text-muted-foreground">{assignment.subjectName} • {SESSION_TYPE_OPTIONS.find((type) => type.value === assignment.sessionType)?.label}</p>
-                                </div>
-                                <Button type="button" variant="ghost" size="sm" onClick={() => removeWeeklyPlannerAssignment(weeklyPlannerDay, assignment.id)}>
-                                  Remove
-                                </Button>
-                              </div>
-                            ))
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-border overflow-hidden">
-                      <div className="p-3 border-b border-border bg-muted/30">
-                        <h4 className="font-semibold text-foreground">Toddler Room</h4>
-                        <p className="text-xs text-muted-foreground">1 tutor per 2 children minimum (more always allowed), 2–12 children, 8–10 AM or 1–3 PM</p>
-                      </div>
-                      <div className="p-3 space-y-2 min-h-[180px]">
-                        {(weeklyPlannerDraft[weeklyPlannerDay] || []).filter((item) => item.roomType === "toddler_room").length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No toddler-room assignments yet for this day.</p>
-                        ) : (
-                          (weeklyPlannerDraft[weeklyPlannerDay] || [])
-                            .filter((item) => item.roomType === "toddler_room")
-                            .map((assignment) => (
-                              <div key={assignment.id} className="rounded-md border border-border p-2 flex items-start justify-between gap-2">
-                                <div>
-                                  <p className="text-sm font-medium text-foreground">{assignment.tutorName}</p>
-                                  <p className="text-xs text-muted-foreground">{formatSlotTime(assignment.startTime)} - {formatSlotTime(assignment.endTime)}</p>
-                                  <p className="text-xs text-muted-foreground">{assignment.subjectName} • Toddler Playgroup</p>
-                                </div>
-                                <Button type="button" variant="ghost" size="sm" onClick={() => removeWeeklyPlannerAssignment(weeklyPlannerDay, assignment.id)}>
-                                  Remove
-                                </Button>
-                              </div>
-                            ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <Button type="button" className="btn-glow" disabled={weeklyPlannerSubmitting} onClick={submitWeeklyPlanner}>
-                      {weeklyPlannerSubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Calendar className="h-4 w-4 mr-2" />}
-                      Step 4: Generate Session Slots ({scheduleGenerationMonthSpan} month{scheduleGenerationMonthSpan > 1 ? "s" : ""})
-                    </Button>
-                  </div>
+                  {schedulingProgramType === "one-on-one" && (
+                    <OneOnOneSchedulingWizard
+                      subjects={weeklyPlannerSubjects}
+                      enrollments={enrollments}
+                      tutors={weeklyPlannerTutors}
+                      onCreated={fetchSchedules}
+                    />
+                  )}
+                  {schedulingProgramType === "playgroup" && (
+                    <PlaygroupSchedulingWizard
+                      subjects={weeklyPlannerSubjects}
+                      enrollments={enrollments}
+                      tutors={weeklyPlannerTutors}
+                      onCreated={fetchSchedules}
+                    />
+                  )}
+                  {!schedulingProgramType && (
+                    <p className="text-sm text-muted-foreground">Choose a program type above to begin scheduling.</p>
+                  )}
                 </div>
               </div>
 
@@ -3701,6 +3149,17 @@ export default function AdminDashboard() {
                   </div>
                   <Button variant="outline" size="sm" onClick={handleCleanupDuplicates}>
                     Cleanup Duplicates
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSuspendDialogOpen(true);
+                      handleLoadSuspensionHistory();
+                    }}
+                  >
+                    <CalendarOff className="h-4 w-4 mr-2" />
+                    Suspend a Date
                   </Button>
                   <Button className="btn-glow" size="sm" onClick={() => setScheduleViewMode("weekly")}>
                     <Plus className="h-4 w-4 mr-2" />
@@ -4201,6 +3660,17 @@ export default function AdminDashboard() {
                             >
                               Mark tutor unavailable (day)
                             </Button>
+                            {isOneOnOneSession && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full"
+                                onClick={openEmergencyDialog}
+                              >
+                                <AlertTriangle className="h-4 w-4 mr-2" />
+                                Emergency reschedule
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="sm"
@@ -5108,6 +4578,149 @@ export default function AdminDashboard() {
             <Button type="button" onClick={handleAssignSubstitute} disabled={substituteLoading || !substituteTutorId}>
               {substituteLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Assign Substitute
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* BeeBright Scheduling Spec, Section 3a: Suspend a Date */}
+      <Dialog open={suspendDialogOpen} onOpenChange={setSuspendDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Suspend a Date</DialogTitle>
+            <DialogDescription>
+              Every 1-on-1 and Toddlers Playgroup session on this date (or range) will be automatically rescheduled to the next open occurrence for that same student-tutor or group pair. System-wide — no per-student picking required.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="suspend-start-date">Start date</Label>
+                <Input
+                  id="suspend-start-date"
+                  type="date"
+                  value={suspendStartDate}
+                  onChange={(e) => setSuspendStartDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="suspend-end-date">End date (optional)</Label>
+                <Input
+                  id="suspend-end-date"
+                  type="date"
+                  value={suspendEndDate}
+                  onChange={(e) => setSuspendEndDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="suspend-reason">Reason</Label>
+              <Textarea
+                id="suspend-reason"
+                value={suspendReason}
+                onChange={(e) => setSuspendReason(e.target.value)}
+                placeholder="e.g. Typhoon suspension"
+                className="min-h-[72px]"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Suspension history</Label>
+              {suspensionHistoryLoading ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+                </p>
+              ) : suspensionHistory.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No suspensions on record yet.</p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto space-y-1.5 rounded-md border border-border p-2">
+                  {suspensionHistory.map((s) => (
+                    <div key={s._id} className="text-xs">
+                      <p className="font-medium text-foreground">
+                        {new Date(s.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        {s.startDate !== s.endDate ? ` – ${new Date(s.endDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : ""}
+                      </p>
+                      <p className="text-muted-foreground">
+                        {s.reason || "No reason given"} • {s.movedCount} moved{s.unresolvedCount ? `, ${s.unresolvedCount} unresolved` : ""}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSuspendDialogOpen(false)} disabled={suspendSubmitting}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleSuspendDates} disabled={suspendSubmitting || !suspendStartDate}>
+              {suspendSubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CalendarOff className="h-4 w-4 mr-2" />}
+              Suspend &amp; Reschedule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* BeeBright Scheduling Spec, Section 3b: Emergency Adjustment */}
+      <Dialog open={emergencyDialogOpen} onOpenChange={setEmergencyDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Emergency Reschedule</DialogTitle>
+            <DialogDescription>
+              Moves only this student's session to a date/time you choose. No other student's or tutor's schedule is affected. A reason is required.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="emergency-new-date">New date</Label>
+              <Input
+                id="emergency-new-date"
+                type="date"
+                value={emergencyNewDate}
+                onChange={(e) => setEmergencyNewDate(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="emergency-new-start">New start time</Label>
+                <Input
+                  id="emergency-new-start"
+                  type="time"
+                  value={emergencyNewStartTime}
+                  onChange={(e) => setEmergencyNewStartTime(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="emergency-new-end">New end time</Label>
+                <Input
+                  id="emergency-new-end"
+                  type="time"
+                  value={emergencyNewEndTime}
+                  onChange={(e) => setEmergencyNewEndTime(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="emergency-reason">Reason</Label>
+              <Textarea
+                id="emergency-reason"
+                value={emergencyReason}
+                onChange={(e) => setEmergencyReason(e.target.value)}
+                placeholder="e.g. Family emergency reported by parent"
+                className="min-h-[72px]"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEmergencyDialogOpen(false)} disabled={emergencySubmitting}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleEmergencyReschedule}
+              disabled={emergencySubmitting || !emergencyNewDate || !emergencyNewStartTime || !emergencyNewEndTime || !emergencyReason.trim()}
+            >
+              {emergencySubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <AlertTriangle className="h-4 w-4 mr-2" />}
+              Reschedule
             </Button>
           </DialogFooter>
         </DialogContent>

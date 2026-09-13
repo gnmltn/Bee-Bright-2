@@ -545,6 +545,30 @@ export interface WeeklyScheduleTutorOption {
   availability?: string;
 }
 
+export interface PlaygroupGroupOption {
+  _id: string;
+  name?: string;
+  tutors: { _id: string; firstName: string; middleName?: string; lastName: string }[];
+  daysOfWeek: number[];
+  startTime: string;
+  endTime: string;
+  childCount: number;
+  tutorCount: number;
+  maxChildren: number;
+  hasRoom: boolean;
+}
+
+export interface SuspensionRecord {
+  _id: string;
+  startDate: string;
+  endDate: string;
+  reason?: string;
+  triggeredBy?: { _id: string; firstName?: string; middleName?: string; lastName?: string } | null;
+  movedCount: number;
+  unresolvedCount: number;
+  createdAt?: string;
+}
+
 export interface WeeklyScheduleTemplateEntryPayload {
   dayOfWeek: number;
   startTime: string;
@@ -595,12 +619,35 @@ export const scheduleService = {
     }),
   create: (data: { studentId?: string; students?: string[]; tutorId?: string; tutorIds?: string[]; subjectId: string; date: string; startTime: string; endTime: string; sessionType?: 'one-on-one' | 'small-group' | 'playgroup' }) =>
     api.post('/schedules', data),
+  /** Provide either studentId (existing student User) or enrollmentId (resolves/lazily creates the student User from the enrollment). */
   createMonthly: (data: {
-    studentId: string;
+    studentId?: string;
+    enrollmentId?: string;
     tutorId: string;
     subjectId: string;
     daySlots: { dayOfWeek: number; startTime: string; endTime: string }[];
   }) => api.post('/schedules/monthly', data),
+  /** List active Toddlers Playgroup groups, optionally filtered to an exact day-set + time-window match. */
+  listPlaygroupGroups: (params?: { daysOfWeek?: number[]; startTime?: string; endTime?: string }) =>
+    api.get<{ success: boolean; groups: PlaygroupGroupOption[] }>('/schedules/playgroup-groups', {
+      params: {
+        ...(params?.daysOfWeek ? { daysOfWeek: params.daysOfWeek.join(',') } : {}),
+        ...(params?.startTime ? { startTime: params.startTime } : {}),
+        ...(params?.endTime ? { endTime: params.endTime } : {}),
+      },
+    }),
+  /** Create a new Toddlers Playgroup group (tutorIds/daysOfWeek/startTime/endTime) or join an existing one (groupId) — generates/extends a month of sessions and enrolls the student. */
+  createOrJoinPlaygroupGroup: (data: {
+    groupId?: string;
+    tutorIds?: string[];
+    daysOfWeek?: number[];
+    startTime?: string;
+    endTime?: string;
+    name?: string;
+    studentId?: string;
+    enrollmentId?: string;
+    subjectId: string;
+  }) => api.post('/schedules/playgroup-groups', data),
   markTutorUnavailability: (data: {
     tutorId: string;
     startDate: string;
@@ -608,6 +655,13 @@ export const scheduleService = {
     reason?: string;
     autoAssign?: boolean;
   }) => api.post('/schedules/tutor-unavailability', data),
+  /** Section 3a: system-wide — reschedules every affected session (1-on-1 + Playgroup) to the next conflict-free occurrence for that same pair. */
+  suspendDates: (data: { startDate: string; endDate?: string; reason?: string }) =>
+    api.post<{ success: boolean; message: string; suspension: SuspensionRecord }>('/schedules/suspend', data),
+  listSuspensions: () => api.get<{ success: boolean; suspensions: SuspensionRecord[] }>('/schedules/suspensions'),
+  /** Section 3b: single-student — admin picks the new date/time directly. One-on-one sessions only. */
+  emergencyReschedule: (scheduleId: string, data: { newDate: string; newStartTime: string; newEndTime: string; reason: string }) =>
+    api.post(`/schedules/${scheduleId}/emergency-reschedule`, data),
   assignSubstitute: (scheduleId: string, data: { replacementTutorId: string; reason?: string }) =>
     api.patch(`/schedules/${scheduleId}/substitute`, data),
   cleanupDuplicates: () => api.post('/schedules/cleanup-duplicates'),

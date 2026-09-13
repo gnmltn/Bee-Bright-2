@@ -255,6 +255,7 @@ const requestPasswordChangeCode = async (req, res) => {
       }
     }
 
+    user.passwordChangeOtpHash = hashOtp(otp);
     user.passwordChangeOtpExpires = new Date(now + PASSWORD_CHANGE_OTP_EXPIRES_MINUTES * 60 * 1000);
     user.passwordChangeOtpLastSentAt = new Date(now);
     user.passwordChangeOtpAttempts = 0;

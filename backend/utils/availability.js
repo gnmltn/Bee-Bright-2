@@ -49,6 +49,9 @@ function parseAvailability(employmentType, availabilityStr) {
 }
 
 const SLOT_MINUTES_2HR = 120;
+// 1-on-1 (Academic Tutorial / Examination Preparation) sessions are 1 hour — BeeBright
+// Scheduling Spec, 2026-09-14 (deliberate system-wide change from the earlier 2-hour rule).
+const SLOT_MINUTES_1HR = 60;
 
 function getSlotsForDay(availabilitySlots, dayOfWeek, slotMinutes = SLOT_MINUTES_2HR) {
   const slots = [];
@@ -84,4 +87,4 @@ function getSlotsByDayOfWeek(employmentType, availabilityStr, slotMinutes = SLOT
   return slotsByDay;
 }
 
-module.exports = { parseAvailability, getSlotsForDay, getSlotsByDayOfWeek, SLOT_MINUTES_2HR };
+module.exports = { parseAvailability, getSlotsForDay, getSlotsByDayOfWeek, SLOT_MINUTES_2HR, SLOT_MINUTES_1HR };

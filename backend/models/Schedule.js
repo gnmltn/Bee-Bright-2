@@ -145,6 +145,14 @@ const scheduleSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
     description: 'True for pre-created sessions students can enroll in'
+  },
+
+  // Toddlers Playgroup group roster this session belongs to (null for one-on-one /
+  // small-group / legacy playgroup sessions created before groups existed).
+  group: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlaygroupGroup',
+    default: null
   }
 }, {
   timestamps: true
@@ -191,5 +199,8 @@ scheduleSchema.index({ sessionSource: 1, weeklyScheduleTemplateEntryId: 1 });
 
 // Find available sessions (not full)
 scheduleSchema.index({ isEnrollableByStudents: 1, sessionType: 1, date: 1 });
+
+// Find a playgroup group's sessions (roster lookup, date-range generation)
+scheduleSchema.index({ group: 1, date: 1 });
 
 module.exports = mongoose.model('Schedule', scheduleSchema);
