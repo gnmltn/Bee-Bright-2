@@ -53,17 +53,21 @@ import {
   scheduleService,
   materialService,
   gradeService,
+  remarkService,
   announcementService,
   auditLogService,
   uploadsBaseUrl,
   type LearningMaterialItem,
   type GradeItem,
+  type RemarkItem,
+  type RemarkTemplateType,
   type AnnouncementItem,
   type AuditLogItem,
 } from "@/services/api";
 import { PROGRAM_CATEGORIES, PROGRAM_LABELS } from "@/constants/programs";
 import { AITab } from "@/components/ai/AITab";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
+import { RemarkForm } from "@/components/tutor/RemarkForm";
 
 
 /** Infer material type from file extension for backend */
@@ -540,6 +544,15 @@ export default function TutorDashboard() {
   const [editRemarks, setEditRemarks] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
+  // ─── Student Remarks state (replaces the grading workflow) ────────────────────
+  const [remarks, setRemarks] = useState<RemarkItem[]>([]);
+  const [remarksLoading, setRemarksLoading] = useState(false);
+  const [remarkFormStudentId, setRemarkFormStudentId] = useState("");
+  const [remarkFormMode, setRemarkFormMode] = useState<"create" | "edit" | "correct">("create");
+  const [remarkFormTarget, setRemarkFormTarget] = useState<RemarkItem | null>(null);
+  const [remarkFormConsent, setRemarkFormConsent] = useState(true);
+  const [remarkFilterStudentId, setRemarkFilterStudentId] = useState(ALL_STUDENTS_VALUE);
+
   // Program options for materials (same structure as grading)
   const materialProgramOptions = PROGRAM_CATEGORIES;
 
@@ -626,6 +639,29 @@ export default function TutorDashboard() {
 
     return PROGRAM_CATEGORIES.filter((prog) => categoryIds.has(prog.id));
   }, [gradeFormStudentId, sessions]);
+
+  // ─── Which remark template applies to the selected student ────────────────────
+  // Same inference as the grade form (subject-name keyword matching against this
+  // tutor's own schedule with the student), mapped to the student's programCode.
+  const remarkTemplateForSelectedStudent = useMemo((): RemarkTemplateType | null => {
+    if (!remarkFormStudentId) return null;
+    const categoryIds = new Set<string>();
+    sessions.forEach((s) => {
+      if (!s.subject) return;
+      const studentIds = [
+        s.student?._id ? String(s.student._id) : null,
+        ...(Array.isArray(s.students) ? s.students.map((st) => String(st._id)) : []),
+      ].filter(Boolean) as string[];
+      if (!studentIds.includes(remarkFormStudentId)) return;
+      const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
+      if (inferred) categoryIds.add(inferred);
+    });
+    const prog = PROGRAM_CATEGORIES.find((p) => categoryIds.has(p.id));
+    if (!prog) return null;
+    if (prog.programCode === "TPG101") return "toddler_observation";
+    if (prog.programCode === "EXP106") return "examination_progress";
+    return "academic_progress";
+  }, [remarkFormStudentId, sessions]);
 
   useEffect(() => {
     if (!gradeFormProgramCategoryId) return;
@@ -770,6 +806,40 @@ export default function TutorDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash, user?.role]);
+
+  // ─── Student Remarks fetchers ─────────────────────────────────────────────────
+  const fetchRemarks = () => {
+    setRemarksLoading(true);
+    const studentIdParam = remarkFilterStudentId === ALL_STUDENTS_VALUE ? undefined : remarkFilterStudentId;
+    remarkService
+      .listMine(studentIdParam)
+      .then((res) => {
+        if (res.data?.success && Array.isArray(res.data.remarks)) {
+          setRemarks(res.data.remarks);
+        } else {
+          setRemarks([]);
+        }
+      })
+      .catch(() => setRemarks([]))
+      .finally(() => setRemarksLoading(false));
+  };
+
+  useEffect(() => {
+    if (user?.role === "tutor" && location.hash === "#remarks") {
+      fetchRemarks();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.hash, user?.role, remarkFilterStudentId]);
+
+  // Check the selected student's media/attachment consent status (Section C.11).
+  useEffect(() => {
+    if (!remarkFormStudentId) { setRemarkFormConsent(true); return; }
+    let cancelled = false;
+    remarkService.getStudentConsentStatus(remarkFormStudentId)
+      .then((res) => { if (!cancelled) setRemarkFormConsent(Boolean(res.data?.hasMediaConsent)); })
+      .catch(() => { if (!cancelled) setRemarkFormConsent(false); });
+    return () => { cancelled = true; };
+  }, [remarkFormStudentId]);
 
   // ─── Grade handlers ───────────────────────────────────────────────────────────
   const handleAddGrade = (e: React.FormEvent) => {
@@ -1333,7 +1403,7 @@ export default function TutorDashboard() {
     "#attendance": "attendance",
     "#schedule": "schedule",
     "#materials": "materials",
-    "#grades": "grades",
+    "#remarks": "remarks",
     "#announcements": "announcements",
     "#activity": "activity",
   };
@@ -2351,6 +2421,131 @@ export default function TutorDashboard() {
                       title="AI Assistant"
                       description="Recommend these materials to students who are struggling or want extra practice. Chat for schedule and system help."
                     />
+                  </div>
+                </TabsContent>
+
+                {/* ══ STUDENT REMARKS TAB ══ */}
+                <TabsContent value="remarks" className="space-y-6">
+                  <div className="bg-card rounded-xl border border-border p-6">
+                    <h2 className="text-2xl font-bold text-foreground mb-1">Student Remarks</h2>
+                    <p className="text-muted-foreground">
+                      Publish session-based observations. Replaces grading — a remark is not a grade, ranking, or pass/fail result.
+                    </p>
+                  </div>
+
+                  <div className="bg-card rounded-xl border border-border">
+                    <div className="p-4 border-b border-border">
+                      <h3 className="font-bold text-lg text-foreground">
+                        {remarkFormMode === "correct" ? "Correct Published Remark" : remarkFormMode === "edit" ? "Edit Draft" : "New Remark"}
+                      </h3>
+                    </div>
+                    <div className="p-4">
+                      {remarkFormMode === "create" && (
+                        <div className="space-y-1 mb-4">
+                          <Label>Student *</Label>
+                          <Select value={remarkFormStudentId} onValueChange={setRemarkFormStudentId}>
+                            <SelectTrigger className="w-full sm:w-80">
+                              <SelectValue placeholder={tutorAssignedStudentsList.length === 0 ? "No assigned students yet" : "Select student"} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {tutorAssignedStudentsList.map((stu) => (
+                                <SelectItem key={stu._id} value={stu._id}>{stu.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {remarkFormStudentId && !remarkTemplateForSelectedStudent && (
+                            <p className="text-xs text-destructive">Could not determine this student's program from your schedule with them.</p>
+                          )}
+                        </div>
+                      )}
+
+                      {remarkFormMode === "create" && remarkFormStudentId && remarkTemplateForSelectedStudent && (
+                        <RemarkForm
+                          studentId={remarkFormStudentId}
+                          studentLabel={tutorAssignedStudentsList.find((s) => s._id === remarkFormStudentId)?.name || ""}
+                          templateType={remarkTemplateForSelectedStudent}
+                          hasMediaConsent={remarkFormConsent}
+                          mode="create"
+                          onSaved={() => { setRemarkFormStudentId(""); fetchRemarks(); }}
+                        />
+                      )}
+
+                      {(remarkFormMode === "edit" || remarkFormMode === "correct") && remarkFormTarget && (
+                        <RemarkForm
+                          studentId={typeof remarkFormTarget.student === "object" ? remarkFormTarget.student._id : String(remarkFormTarget.student)}
+                          studentLabel={remarkFormTarget.student ? `${remarkFormTarget.student.firstName} ${remarkFormTarget.student.lastName}` : ""}
+                          templateType={remarkFormTarget.templateType}
+                          hasMediaConsent={remarkFormConsent}
+                          existingRemark={remarkFormTarget}
+                          mode={remarkFormMode}
+                          onCancel={() => { setRemarkFormMode("create"); setRemarkFormTarget(null); }}
+                          onSaved={() => { setRemarkFormMode("create"); setRemarkFormTarget(null); fetchRemarks(); }}
+                        />
+                      )}
+
+                      {remarkFormMode === "create" && !remarkFormStudentId && (
+                        <p className="text-sm text-muted-foreground">Select a student above to start a new remark.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-card rounded-xl border border-border">
+                    <div className="p-4 border-b border-border flex items-center justify-between gap-4 flex-wrap">
+                      <h3 className="font-bold text-lg text-foreground">Remark History</h3>
+                      <Select value={remarkFilterStudentId} onValueChange={setRemarkFilterStudentId}>
+                        <SelectTrigger className="w-full sm:w-[200px]">
+                          <SelectValue placeholder="All students" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ALL_STUDENTS_VALUE}>All students</SelectItem>
+                          {tutorAssignedStudentsList.map((stu) => (
+                            <SelectItem key={stu._id} value={stu._id}>{stu.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="p-4">
+                      {remarksLoading ? (
+                        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+                      ) : remarks.length === 0 ? (
+                        <p className="text-center text-muted-foreground py-6">No remarks yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {remarks.map((r) => (
+                            <div key={r._id} className="rounded-md border border-border p-3 flex items-start justify-between gap-3 flex-wrap">
+                              <div>
+                                <p className="text-sm font-medium text-foreground">
+                                  {r.student ? `${r.student.firstName} ${r.student.lastName}` : "—"}{" "}
+                                  <span
+                                    className={`ml-1 rounded-full px-2 py-0.5 text-[11px] ${
+                                      r.status === "published" ? "bg-success/10 text-success" : r.status === "pending_admin_review" ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground"
+                                    }`}
+                                  >
+                                    {r.status === "published" ? (r.isCurrentVersion ? "Published" : "Superseded") : r.status === "pending_admin_review" ? "Pending Admin Review" : "Draft"}
+                                  </span>
+                                </p>
+                                <p className="text-xs text-muted-foreground">{new Date(r.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                                {r.status === "draft" && r.rejectionReason && (
+                                  <p className="text-xs text-destructive mt-1">Rejected: {r.rejectionReason}</p>
+                                )}
+                              </div>
+                              <div className="flex gap-2">
+                                {r.status === "draft" && (
+                                  <Button type="button" size="sm" variant="outline" onClick={() => { setRemarkFormTarget(r); setRemarkFormMode("edit"); }}>
+                                    Continue editing
+                                  </Button>
+                                )}
+                                {r.status === "published" && r.isCurrentVersion && (
+                                  <Button type="button" size="sm" variant="outline" onClick={() => { setRemarkFormTarget(r); setRemarkFormMode("correct"); }}>
+                                    Correct
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </TabsContent>
 

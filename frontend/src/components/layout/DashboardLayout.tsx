@@ -16,10 +16,10 @@ import {
   Menu,
   X,
   CreditCard,
-  Award,
   Activity,
   ClipboardList,
   Inbox,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -66,7 +66,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Attendance", href: "/tutor-dashboard#attendance", icon: Calendar },
     { name: "Schedule", href: "/tutor-dashboard#schedule", icon: Calendar },
     { name: "Materials", href: "/tutor-dashboard#materials", icon: FileText },
-    { name: "Grades", href: "/tutor-dashboard#grades", icon: Award },
+    { name: "Remarks", href: "/tutor-dashboard#remarks", icon: MessageSquare },
     { name: "Announcements", href: "/tutor-dashboard#announcements", icon: Bell },
     { name: "Activity", href: "/tutor-dashboard#activity", icon: Activity },
     { name: "Settings", href: "/tutor-dashboard/settings", icon: Settings },
@@ -78,6 +78,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Payments", href: "/admin-dashboard#payments", icon: DollarSign },
     { name: "Reports", href: "/admin-dashboard#reports", icon: FileText },
     { name: "Schedule", href: "/admin-dashboard#schedule", icon: Calendar },
+    { name: "Remarks", href: "/admin-dashboard#remarks", icon: MessageSquare },
     { name: "Requests", href: "/admin-dashboard/escalations", icon: Inbox },
     { name: "Announcements", href: "/admin-dashboard#announcements", icon: Bell },
     { name: "Audit Logs", href: "/admin-dashboard#audit-logs", icon: ClipboardList },
@@ -91,6 +92,7 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Payments", href: "/super-admin-dashboard#payments", icon: DollarSign },
     { name: "Reports", href: "/super-admin-dashboard#reports", icon: FileText },
     { name: "Schedule", href: "/super-admin-dashboard#schedule", icon: Calendar },
+    { name: "Remarks", href: "/super-admin-dashboard#remarks", icon: MessageSquare },
     { name: "Requests", href: "/super-admin-dashboard/escalations", icon: Inbox },
     { name: "Announcements", href: "/super-admin-dashboard#announcements", icon: Bell },
     { name: "Audit Logs", href: "/super-admin-dashboard#audit-logs", icon: ClipboardList },

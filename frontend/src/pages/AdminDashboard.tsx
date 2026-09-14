@@ -33,6 +33,7 @@ import {
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import { OneOnOneSchedulingWizard } from "@/components/admin/OneOnOneSchedulingWizard";
 import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulingWizard";
+import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
@@ -1662,6 +1663,22 @@ export default function AdminDashboard() {
     setPendingUserAction({ type: "archive", user: adminUser });
   };
 
+  // Student Remarks feature: record media/attachment consent for a student enrolled
+  // before this feature existed (User.consents[] has no wizard-driven entry for them yet).
+  const handleGrantMediaConsent = async (studentId: string, studentName: string) => {
+    try {
+      const res = await userService.grantMediaConsent(studentId);
+      if (res.data?.success) {
+        toast.success(res.data.message || `Media consent recorded for ${studentName}.`);
+      } else {
+        toast.error(res.data?.message || "Failed to record media consent.");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to record media consent.";
+      toast.error(msg);
+    }
+  };
+
   const handleUnarchiveUser = (adminUser: AdminUser, closeDetails = false) => {
     setPendingUserAction({ type: "unarchive", user: adminUser, closeDetails });
   };
@@ -1680,6 +1697,7 @@ export default function AdminDashboard() {
     "#payments": "payments",
     "#reports": "reports",
     "#schedule": "schedule",
+    "#remarks": "remarks",
     "#users": "users",
     "#announcements": "announcements",
     "#audit-logs": "audit-logs",
@@ -3708,6 +3726,17 @@ export default function AdminDashboard() {
               </div>
             </TabsContent>
 
+            {/* Remarks Tab — BeeBright Student Remarks Spec v2, Section D */}
+            <TabsContent value="remarks" className="space-y-6">
+              <div className="bg-card rounded-xl border border-border p-4">
+                <h3 className="font-display font-bold text-lg text-foreground">Student Remarks</h3>
+                <p className="text-sm text-muted-foreground">Review remarks that include an attachment before they become visible to parents.</p>
+              </div>
+              <div className="bg-card rounded-xl border border-border p-4">
+                <RemarksReviewQueue />
+              </div>
+            </TabsContent>
+
             {/* Users Tab */}
             <TabsContent value="users" className="space-y-6">
               {/* User Summary */}
@@ -3859,6 +3888,17 @@ export default function AdminDashboard() {
                                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast.info(`Viewing ${name}'s profile...`)}>
                                     <UserCheck className="h-4 w-4" />
                                   </Button>
+                                  {u.role === "student" && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8"
+                                      title="Grant media/attachment consent (Student Remarks)"
+                                      onClick={() => { void handleGrantMediaConsent(u._id, name); }}
+                                    >
+                                      <FileText className="h-4 w-4" />
+                                    </Button>
+                                  )}
                                   <Button
                                     variant="ghost"
                                     size="icon"

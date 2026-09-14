@@ -32,10 +32,13 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { StarRating } from "@/components/ui/star-rating";
+import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, assessmentService, scheduleService, materialService, gradeService, announcementService, auditLogService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { enrollmentService, assessmentService, scheduleService, materialService, gradeService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import { AITab } from "@/components/ai/AITab";
@@ -178,6 +181,12 @@ export default function StudentDashboard() {
   const [assignedMaterialsLoading, setAssignedMaterialsLoading] = useState(false);
   const [progressGrades, setProgressGrades] = useState<GradeItem[]>([]);
   const [progressGradesLoading, setProgressGradesLoading] = useState(false);
+  const [progressRemarks, setProgressRemarks] = useState<RemarkItem[]>([]);
+  const [progressRemarksLoading, setProgressRemarksLoading] = useState(false);
+  const [remarkAttachmentUrls, setRemarkAttachmentUrls] = useState<Record<string, string>>({});
+  const [remarkProgramFilter, setRemarkProgramFilter] = useState("all");
+  const [remarkTutorFilter, setRemarkTutorFilter] = useState("all");
+  const [remarkActivityFilter, setRemarkActivityFilter] = useState("");
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(false);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<AnnouncementItem | null>(null);
@@ -281,6 +290,64 @@ export default function StudentDashboard() {
       .catch(() => setProgressGrades([]))
       .finally(() => setProgressGradesLoading(false));
   }, [isParent, activeChildUserId, readyToFetchChildData]);
+
+  useEffect(() => {
+    if (!readyToFetchChildData) return;
+    if (isParent && !activeChildUserId) {
+      setProgressRemarks([]);
+      setProgressRemarksLoading(false);
+      return;
+    }
+    setProgressRemarksLoading(true);
+    remarkService
+      .getMyProgress(isParent ? activeChildUserId ?? undefined : undefined)
+      .then((res) => {
+        if (res.data?.success && Array.isArray(res.data.remarks)) {
+          setProgressRemarks(res.data.remarks);
+        } else {
+          setProgressRemarks([]);
+        }
+      })
+      .catch(() => setProgressRemarks([]))
+      .finally(() => setProgressRemarksLoading(false));
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
+
+  useEffect(() => {
+    const withAttachments = progressRemarks.filter((r) => r.attachment?.path);
+    if (withAttachments.length === 0) { setRemarkAttachmentUrls({}); return; }
+    let cancelled = false;
+    Promise.all(withAttachments.map(async (r) => {
+      try {
+        const url = await remarkService.getAttachmentObjectUrl(r._id);
+        return [r._id, url] as const;
+      } catch {
+        return null;
+      }
+    })).then((results) => {
+      if (cancelled) return;
+      const map: Record<string, string> = {};
+      results.forEach((entry) => { if (entry) map[entry[0]] = entry[1]; });
+      setRemarkAttachmentUrls(map);
+    });
+    return () => { cancelled = true; };
+  }, [progressRemarks]);
+
+  const filteredProgressRemarks = useMemo(() => {
+    return progressRemarks.filter((r) => {
+      if (remarkProgramFilter !== "all" && r.programCode !== remarkProgramFilter) return false;
+      if (remarkTutorFilter !== "all" && r.tutor?._id !== remarkTutorFilter) return false;
+      if (remarkActivityFilter.trim() && !r.activities.some((a) => a.toLowerCase().includes(remarkActivityFilter.trim().toLowerCase()))) return false;
+      return true;
+    });
+  }, [progressRemarks, remarkProgramFilter, remarkTutorFilter, remarkActivityFilter]);
+
+  const remarkTutorFilterOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    progressRemarks.forEach((r) => {
+      if (r.tutor?._id) seen.set(r.tutor._id, [r.tutor.firstName, r.tutor.lastName].filter(Boolean).join(" "));
+    });
+    return [...seen.entries()];
+  }, [progressRemarks]);
 
   useEffect(() => {
     if (!readyToFetchChildData) return;
@@ -1590,8 +1657,8 @@ export default function StudentDashboard() {
                         <Award className="h-7 w-7 text-primary" />
                       </div>
                       <div>
-                        <h3 className="font-display text-xl md:text-2xl font-bold text-foreground">My Progress</h3>
-                        <p className="text-sm text-muted-foreground mt-1">Grades and progress from your tutors, by program and subject.</p>
+                        <h3 className="font-display text-xl md:text-2xl font-bold text-foreground">{isParent ? "My Child's Progress" : "My Progress"}</h3>
+                        <p className="text-sm text-muted-foreground mt-1">Session remarks published by your tutors.</p>
                       </div>
                     </div>
                   </motion.div>
@@ -1643,109 +1710,116 @@ export default function StudentDashboard() {
                     </motion.div>
                   )}
 
-                  {progressGradesLoading ? (
+                  {/* Student Remarks — replaces the old grading display (BeeBright Student Remarks Spec v2) */}
+                  <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+                    <div className="flex flex-wrap gap-3">
+                      <Select value={remarkProgramFilter} onValueChange={setRemarkProgramFilter}>
+                        <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All programs" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All programs</SelectItem>
+                          <SelectItem value="TPG101">Toddlers Playgroup</SelectItem>
+                          <SelectItem value="ACT102">Academic Tutorial</SelectItem>
+                          <SelectItem value="EXP106">Examination Preparation</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select value={remarkTutorFilter} onValueChange={setRemarkTutorFilter}>
+                        <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All tutors" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All tutors</SelectItem>
+                          {remarkTutorFilterOptions.map(([id, name]) => (
+                            <SelectItem key={id} value={id}>{name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={remarkActivityFilter}
+                        onChange={(e) => setRemarkActivityFilter(e.target.value)}
+                        placeholder="Filter by activity/topic…"
+                        className="w-full sm:w-56"
+                      />
+                    </div>
+                  </div>
+
+                  {progressRemarksLoading ? (
                     <div className="flex justify-center py-16">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
                     </div>
-                  ) : progressGrades.length === 0 ? (
+                  ) : filteredProgressRemarks.length === 0 ? (
                     <div className="rounded-2xl border border-border bg-card p-12 text-center">
                       <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
                         <Award className="h-8 w-8 text-muted-foreground" />
                       </div>
-                      <p className="font-medium text-foreground">No grades yet</p>
-                      <p className="text-sm text-muted-foreground mt-1">Your tutors will add grades here as you complete activities and assessments.</p>
+                      <p className="font-medium text-foreground">No remarks yet</p>
+                      <p className="text-sm text-muted-foreground mt-1">Your tutors will publish session remarks here.</p>
                     </div>
                   ) : (
-                    <>
-                      {overallProgressPercent != null && (
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          className="rounded-2xl border border-border bg-card p-6"
-                        >
-                          <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Overall average</h4>
-                          <div className="flex items-center gap-4">
-                            <div className="relative h-24 w-24 rounded-full bg-muted flex items-center justify-center">
-                              <svg className="h-24 w-24 -rotate-90" viewBox="0 0 36 36">
-                                <path
-                                  className="text-muted stroke-current"
-                                  strokeWidth="3"
-                                  fill="none"
-                                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                                />
-                                <path
-                                  className="text-primary stroke-current transition-all duration-700"
-                                  strokeWidth="3"
-                                  strokeDasharray={`${overallProgressPercent}, 100`}
-                                  fill="none"
-                                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                                />
-                              </svg>
-                              <span className="absolute text-2xl font-bold text-foreground">{overallProgressPercent}%</span>
-                            </div>
-                            <div>
-                              <p className="text-sm text-muted-foreground">{progressGrades.length} grade(s) recorded</p>
-                              <p className="text-xs text-muted-foreground mt-1">Across your programs and subjects</p>
-                            </div>
-                          </div>
-                        </motion.div>
-                      )}
-
-                      <div className="space-y-6">
-                        {gradesByProgram.map(([programLabel, items], idx) => {
-                          const avg = items.length > 0
-                            ? Math.round(
-                                items.reduce((s, g) => s + (g.percentage ?? Math.round((g.score / g.maxScore) * 100)), 0) / items.length
-                              )
-                            : 0;
-                          const headerBg = avg >= 90 ? "bg-success/10" : avg >= 75 ? "bg-primary/10" : avg >= 60 ? "bg-warning/10" : "bg-destructive/10";
-                          const avgColor = avg >= 90 ? "text-success" : avg >= 75 ? "text-primary" : avg >= 60 ? "text-warning" : "text-destructive";
-                          return (
-                            <motion.div
-                              key={programLabel}
-                              initial={{ opacity: 0, y: 12 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ delay: idx * 0.05 }}
-                              className="rounded-2xl border border-border bg-card overflow-hidden"
-                            >
-                              <div className={`p-4 border-b border-border ${headerBg}`}>
-                                <h4 className="font-display font-bold text-foreground">{programLabel}</h4>
+                    <div className="space-y-4">
+                      {filteredProgressRemarks.map((r, idx) => {
+                        const tutorName = r.tutor ? [r.tutor.firstName, r.tutor.lastName].filter(Boolean).join(" ") : "";
+                        return (
+                          <motion.div
+                            key={r._id}
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: Math.min(idx, 8) * 0.04 }}
+                            className="rounded-2xl border border-border bg-card overflow-hidden"
+                          >
+                            <div className="p-4 border-b border-border bg-primary/5 flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <h4 className="font-display font-bold text-foreground">
+                                  {r.templateType === "toddler_observation" ? "Toddler Observation" : r.templateType === "examination_progress" ? "Examination Preparedness" : "Academic Tutorial"}
+                                </h4>
                                 <p className="text-sm text-muted-foreground mt-0.5">
-                                  Average: <span className={`font-semibold ${avgColor}`}>{avg}%</span> · {items.length} grade(s)
+                                  {new Date(r.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                  {tutorName && ` · ${tutorName}`}
                                 </p>
                               </div>
-                              <div className="divide-y divide-border">
-                                {items.map((g) => {
-                                  const pct = g.percentage ?? Math.round((g.score / g.maxScore) * 100);
-                                  const barColor = pct >= 90 ? "bg-success" : pct >= 75 ? "bg-primary" : pct >= 60 ? "bg-warning" : "bg-destructive";
-                                  const tutorName = g.tutor ? [g.tutor.firstName, g.tutor.lastName].filter(Boolean).join(" ") : "";
-                                  return (
-                                    <div key={g._id} className="p-4 hover:bg-muted/30 transition-colors">
-                                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                                        <span className="font-medium text-foreground">{g.subjectItem}</span>
-                                        <span className="text-sm text-muted-foreground">
-                                          {g.score} / {g.maxScore} ({pct}%) · {g.period}
-                                          {tutorName && ` · ${tutorName}`}
-                                        </span>
-                                      </div>
-                                      <div className="h-2 rounded-full bg-muted overflow-hidden">
-                                        <div
-                                          className={`h-full rounded-full ${barColor} transition-all duration-500`}
-                                          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-                                        />
-                                      </div>
-                                      {g.remarks && (
-                                        <p className="text-xs text-muted-foreground mt-2 italic">&ldquo;{g.remarks}&rdquo;</p>
-                                      )}
+                            </div>
+                            <div className="p-4 space-y-3">
+                              {r.activities.length > 0 && (
+                                <p className="text-sm text-foreground"><span className="font-medium">Activities:</span> {r.activities.join(", ")}</p>
+                              )}
+                              {r.templateType === "toddler_observation" && r.ratings && (
+                                <div className="grid grid-cols-2 gap-2">
+                                  {([
+                                    ["participationEngagement", "Participation"],
+                                    ["socialInteraction", "Social Interaction"],
+                                    ["followingDirections", "Following Directions"],
+                                    ["overallBehavior", "Overall Behavior"],
+                                  ] as const).map(([key, label]) => (
+                                    <div key={key} className="flex items-center justify-between text-xs">
+                                      <span className="text-muted-foreground">{label}</span>
+                                      <StarRating value={r.ratings?.[key] ?? null} onChange={() => {}} disabled max={3} />
                                     </div>
-                                  );
-                                })}
-                              </div>
-                            </motion.div>
-                          );
-                        })}
-                      </div>
-                    </>
+                                  ))}
+                                </div>
+                              )}
+                              {r.remarkBullets.length > 0 && (
+                                <ul className="list-disc pl-5 text-sm text-foreground space-y-1">
+                                  {r.remarkBullets.map((b, i) => <li key={i}>{b}</li>)}
+                                </ul>
+                              )}
+                              {r.nextFocus && <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Next Focus:</span> {r.nextFocus}</p>}
+                              {r.parentSupportSuggestion && <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Parent support:</span> {r.parentSupportSuggestion}</p>}
+                              {r.templateType === "examination_progress" && r.examInfo && (r.examInfo.topic || r.examInfo.scoreResult || r.examInfo.mistakesToReview || r.examInfo.studyGoal) && (
+                                <div className="rounded-md bg-muted/40 p-3 text-sm space-y-1">
+                                  {r.examInfo.topic && <p><span className="font-medium">Topic:</span> {r.examInfo.topic}</p>}
+                                  {r.examInfo.scoreResult && <p><span className="font-medium">Score:</span> {r.examInfo.scoreResult}</p>}
+                                  {r.examInfo.mistakesToReview && <p><span className="font-medium">To review:</span> {r.examInfo.mistakesToReview}</p>}
+                                  {r.examInfo.studyGoal && <p><span className="font-medium">Study goal:</span> {r.examInfo.studyGoal}</p>}
+                                </div>
+                              )}
+                              {r.attachment && (
+                                <FilePreview
+                                  src={remarkAttachmentUrls[r._id] ? { dataUrl: remarkAttachmentUrls[r._id], fileName: r.attachment.fileName || "attachment", fileSize: r.attachment.size } : undefined}
+                                  label="Attachment"
+                                />
+                              )}
+                            </div>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
                   )}
 
                   {/* AI recommendations embedded in Progress tab (no extra heading wrapper) */}

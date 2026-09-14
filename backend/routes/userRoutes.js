@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllUsers, createTutor, createAdmin, deleteUser, unarchiveUser, permanentlyDeleteUser } = require('../controllers/userController');
+const { getAllUsers, createTutor, createAdmin, deleteUser, unarchiveUser, permanentlyDeleteUser, grantMediaConsent } = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/auth');
 
 // Admin: list all users
@@ -15,5 +15,7 @@ router.delete('/:id/permanent', protect, authorize('admin'), permanentlyDeleteUs
 router.delete('/:id', protect, authorize('admin'), deleteUser);
 // Admin: unarchive user
 router.patch('/:id/unarchive', protect, authorize('admin'), unarchiveUser);
+// Admin: record media/attachment consent for a student (Student Remarks feature)
+router.post('/:id/media-consent', protect, authorize('admin'), grantMediaConsent);
 
 module.exports = router;

@@ -459,6 +459,8 @@ export const userService = {
     password: string;
     phone: string;
   }) => api.post('/users/admins', data),
+  /** Admin: record media/attachment consent for a student who has none on file (Student Remarks feature). */
+  grantMediaConsent: (studentId: string) => api.post<{ success: boolean; message: string }>(`/users/${studentId}/media-consent`),
 };
 
 // Dashboard Service (Admin)
@@ -829,6 +831,100 @@ export const gradeService = {
   updateGrade: (id: string, data: { score?: number; maxScore?: number; period?: string; remarks?: string }) =>
     api.put<{ success: boolean; grade: GradeItem }>(`/grades/${id}`, data),
   deleteGrade: (id: string) => api.delete(`/grades/${id}`),
+};
+
+// Student Remarks — replaces the grading workflow (tutor writes; parent/student view-only;
+// admin approves remarks that include an attachment before they're parent-visible).
+export interface RemarkRatings {
+  participationEngagement: number | null;
+  socialInteraction: number | null;
+  followingDirections: number | null;
+  overallBehavior: number | null;
+}
+
+export interface RemarkExamInfo {
+  topic?: string;
+  scoreResult?: string;
+  mistakesToReview?: string;
+  studyGoal?: string;
+}
+
+export interface RemarkAttachmentMeta {
+  path?: string;
+  fileName?: string;
+  mimetype?: string;
+  size?: number;
+  uploadedAt?: string;
+}
+
+export type RemarkTemplateType = 'toddler_observation' | 'academic_progress' | 'examination_progress';
+export type RemarkProgramCode = 'TPG101' | 'ACT102' | 'EXP106';
+export type RemarkStatus = 'draft' | 'pending_admin_review' | 'published';
+
+export interface RemarkItem {
+  _id: string;
+  student?: { _id: string; firstName: string; lastName: string; middleName?: string };
+  tutor?: { _id: string; firstName: string; lastName: string };
+  programCode: RemarkProgramCode;
+  templateType: RemarkTemplateType;
+  date: string;
+  activities: string[];
+  ratings?: RemarkRatings;
+  remarkBullets: string[];
+  nextFocus: string;
+  parentSupportSuggestion?: string;
+  examInfo?: RemarkExamInfo;
+  attachment?: RemarkAttachmentMeta | null;
+  status: RemarkStatus;
+  publishedAt?: string | null;
+  rootRemarkId?: string | null;
+  correctionOf?: string | null;
+  correctionReason?: string;
+  isCurrentVersion: boolean;
+  reviewedBy?: { _id: string; firstName: string; lastName: string } | null;
+  reviewedAt?: string | null;
+  rejectionReason?: string;
+  createdAt?: string;
+}
+
+export interface RemarkFormPayload {
+  studentId: string;
+  action: 'draft' | 'publish';
+  date: string;
+  activities: string[];
+  ratings?: Partial<RemarkRatings>;
+  remarkBullets: string[];
+  nextFocus: string;
+  parentSupportSuggestion?: string;
+  examInfo?: RemarkExamInfo;
+  attachmentDataUrl?: string;
+  attachmentFileName?: string;
+}
+
+export const remarkService = {
+  create: (data: RemarkFormPayload) =>
+    api.post<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>('/remarks', data),
+  update: (id: string, data: Omit<RemarkFormPayload, 'studentId'>) =>
+    api.put<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>(`/remarks/${id}`, data),
+  correct: (id: string, data: Omit<RemarkFormPayload, 'studentId' | 'action'> & { correctionReason: string }) =>
+    api.post<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>(`/remarks/${id}/correct`, data),
+  listMine: (studentId?: string) =>
+    api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/mine', { params: studentId ? { studentId } : {} }),
+  /** studentId is required only for a parent viewing a specific child's progress. */
+  getMyProgress: (studentId?: string, filters?: { tutorId?: string; programCode?: string; activity?: string; startDate?: string; endDate?: string }) =>
+    api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/my-progress', { params: { ...(studentId ? { studentId } : {}), ...filters } }),
+  listPendingReview: () => api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/pending-review'),
+  getStudentConsentStatus: (studentId: string) => api.get<{ success: boolean; hasMediaConsent: boolean }>(`/remarks/student-consent/${studentId}`),
+  review: (id: string, data: { decision: 'approve' | 'reject'; reason?: string }) =>
+    api.patch<{ success: boolean; message: string; remark: RemarkItem }>(`/remarks/${id}/review`, data),
+  getHistory: (id: string) => api.get<{ success: boolean; history: RemarkItem[] }>(`/remarks/${id}/history`),
+  /** Fetches the attachment through the protected, auth-checked route and returns a
+   * local object URL — a plain <img src> can't carry the auth token, so this can't be a
+   * bare URL string. Caller should URL.revokeObjectURL it when done, if long-lived. */
+  getAttachmentObjectUrl: async (id: string): Promise<string> => {
+    const res = await api.get(`/remarks/${id}/attachment`, { responseType: 'blob' });
+    return URL.createObjectURL(res.data as Blob);
+  },
 };
 
 export type AnnouncementItem = {

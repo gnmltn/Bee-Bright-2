@@ -542,6 +542,43 @@ const permanentlyDeleteUser = async (req, res) => {
   }
 };
 
+// @desc    Record media/attachment consent for a student who has none on file yet
+//          (e.g. enrolled before the Student Remarks feature existed). Reuses the same
+//          User.consents[] shape the enrollment wizard writes to for every other
+//          consent item — see BeeBright Student Remarks Spec v2.
+// @route   POST /api/users/:id/media-consent
+// @access  Private (Admin)
+const grantMediaConsent = async (req, res) => {
+  try {
+    const student = await User.findOne({ _id: req.params.id, role: 'student' });
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    const alreadyGranted = (student.consents || []).some((c) => c.name === 'media_consent');
+    if (!alreadyGranted) {
+      student.consents = [...(student.consents || []), { name: 'media_consent', version: '1.0', acceptedAt: new Date() }];
+      await student.save();
+    }
+
+    logAudit({
+      req,
+      userId: req.user.id,
+      action: 'Grant Media Consent',
+      module: 'User Management',
+      description: `Admin recorded media/attachment consent for student ${student._id}`,
+      status: 'SUCCESS',
+      metadata: { studentId: String(student._id), alreadyGranted },
+    }).catch(() => {});
+
+    res.status(200).json({
+      success: true,
+      message: alreadyGranted ? 'Media consent was already on record.' : 'Media consent recorded.',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to record media consent' });
+  }
+};
+
 module.exports = {
   getAllUsers,
   createTutor,
@@ -549,4 +586,5 @@ module.exports = {
   deleteUser,
   unarchiveUser,
   permanentlyDeleteUser,
+  grantMediaConsent,
 };

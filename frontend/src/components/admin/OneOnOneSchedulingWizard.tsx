@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Calendar, Info } from "lucide-react";
+import { Loader2, Calendar, Info, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -16,6 +16,7 @@ import {
   type WeeklyScheduleSubjectOption,
   type WeeklyScheduleTutorOption,
 } from "@/services/api";
+import { StudentSearchSelect } from "./StudentSearchSelect";
 
 // BeeBright Scheduling Spec, Section 1 — student-first 1-on-1 scheduling wizard.
 // Replaces the old slot-first "create a tutor slot, assign a child later" flow for
@@ -145,6 +146,8 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
   }, [enrollments, oneOnOneSubjects]);
 
   const [selectedKey, setSelectedKey] = useState("");
+  // Bumped on reset to force StudentSearchSelect to remount and clear its own search text.
+  const [studentPickerResetKey, setStudentPickerResetKey] = useState(0);
   const [selectedDays, setSelectedDays] = useState<number[]>(DEFAULT_DAYS);
   const [selectedTime, setSelectedTime] = useState(TIME_BLOCKS[0]);
   const [selectedTutorId, setSelectedTutorId] = useState("");
@@ -212,6 +215,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
 
   const resetWizard = () => {
     setSelectedKey("");
+    setStudentPickerResetKey((k) => k + 1);
     setSelectedDays(DEFAULT_DAYS);
     setSelectedTime(TIME_BLOCKS[0]);
     setSelectedTutorId("");
@@ -257,23 +261,28 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
       </div>
 
       {/* Step 1: Select Student */}
-      <div className="space-y-1">
+      <div className="space-y-1 w-fit">
         <Label>Step 1: Student</Label>
-        <Select value={selectedKey} onValueChange={setSelectedKey}>
-          <SelectTrigger>
-            <SelectValue placeholder={studentOptions.length === 0 ? "No schedulable 1-on-1 enrollments yet" : "Select a student"} />
-          </SelectTrigger>
-          <SelectContent>
-            {studentOptions.map((option) => (
-              <SelectItem key={option.key} value={option.key}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <StudentSearchSelect
+          key={studentPickerResetKey}
+          options={studentOptions}
+          value={selectedKey}
+          onChange={setSelectedKey}
+          placeholder="Select a student"
+          emptyMessage="No schedulable 1-on-1 enrollments yet"
+          disabled={studentOptions.length === 0}
+        />
 
         {selectedOption && (
-          <div className="mt-2 rounded-md border border-border bg-background p-3 text-xs text-muted-foreground space-y-1">
+          <div className="relative w-full mt-2 rounded-md border border-border bg-background p-3 pr-7 text-xs text-muted-foreground space-y-1">
+            <button
+              type="button"
+              onClick={() => setSelectedKey("")}
+              className="absolute top-2 right-2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Clear selected student"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
             <div className="flex items-center gap-1 text-foreground font-medium">
               <Info className="h-3.5 w-3.5" /> Enrollment details
             </div>
@@ -315,7 +324,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
           ))}
         </div>
         <Select value={selectedTime} onValueChange={setSelectedTime}>
-          <SelectTrigger className="mt-2">
+          <SelectTrigger className="mt-2 w-56">
             <SelectValue placeholder="Select time" />
           </SelectTrigger>
           <SelectContent>
@@ -332,7 +341,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
       <div className="space-y-1">
         <Label>Step 3: Tutor</Label>
         <Select value={selectedTutorId} onValueChange={setSelectedTutorId} disabled={!selectedOption}>
-          <SelectTrigger>
+          <SelectTrigger className="w-56">
             <SelectValue placeholder={selectedOption ? "Select a tutor" : "Select a student first"} />
           </SelectTrigger>
           <SelectContent>
