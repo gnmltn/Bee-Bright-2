@@ -10,6 +10,7 @@ import {
   remarkService,
   type RemarkItem,
   type RemarkTemplateType,
+  type RemarkProgramCode,
   type RemarkRatings,
   type RemarkExamInfo,
 } from "@/services/api";
@@ -51,6 +52,10 @@ function todayDateInput() {
 interface RemarkFormProps {
   studentId: string;
   studentLabel: string;
+  /** The remark type (program) chosen in the "Choose Remark Type" step (Spec v3) —
+   * fixed for the lifetime of a create/edit/correct flow, threaded straight into every
+   * submitted payload rather than inferred from the student. */
+  programCode: RemarkProgramCode;
   templateType: RemarkTemplateType;
   hasMediaConsent: boolean;
   /** Present when editing an existing draft (mode="edit") or correcting a published one (mode="correct"). */
@@ -60,7 +65,7 @@ interface RemarkFormProps {
   onCancel?: () => void;
 }
 
-export function RemarkForm({ studentId, studentLabel, templateType, hasMediaConsent, existingRemark, mode, onSaved, onCancel }: RemarkFormProps) {
+export function RemarkForm({ studentId, studentLabel, programCode, templateType, hasMediaConsent, existingRemark, mode, onSaved, onCancel }: RemarkFormProps) {
   const [date, setDate] = useState(existingRemark?.date ? existingRemark.date.slice(0, 10) : todayDateInput());
   const [activities, setActivities] = useState<string[]>(existingRemark?.activities || []);
   const [activityDraft, setActivityDraft] = useState("");
@@ -100,6 +105,7 @@ export function RemarkForm({ studentId, studentLabel, templateType, hasMediaCons
     const attachmentDataUrl = attachmentFile ? await readFileAsDataUrl(attachmentFile) : undefined;
     return {
       studentId,
+      programCode,
       action,
       date,
       activities,

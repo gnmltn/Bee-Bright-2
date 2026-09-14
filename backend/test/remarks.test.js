@@ -103,9 +103,13 @@ const SUBJECT_TPG101 = { _id: 'subj-tpg101', name: 'Toddlers Playgroup', code: '
 
 const TINY_PNG_DATA_URL = 'data:image/png;base64,' + Buffer.from('fake-image-bytes').toString('base64');
 
-function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, consents = [] } = {}) {
+// `schedules` lets a test simulate a tutor assigned to a student across MULTIPLE
+// programs at once (Spec v3) — defaults to a single schedule in `subject`'s program
+// when not given explicitly. Pass `schedules: []` (or `tutorHandles: false`) to
+// simulate "not assigned to this student in any program."
+function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, consents = [] } = {}) {
   const origScheduleExists = Schedule.exists;
-  const origScheduleFindOne = Schedule.findOne;
+  const origScheduleFind = Schedule.find;
   const origUserFindById = User.findById;
   const origEnrollmentExists = Enrollment.exists;
   const origRemarkCreate = Remark.create;
@@ -119,10 +123,14 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, consents = 
   const origFsCreateReadStream = fs.createReadStream;
 
   let capturedExistsQuery = null;
+  let capturedFindQuery = null;
   const store = makeFakeRemarkStore();
+  const scheduleDocs = schedules !== undefined
+    ? schedules
+    : (tutorHandles && subject ? [{ subject }] : []);
 
   Schedule.exists = async (query) => { capturedExistsQuery = query; return tutorHandles; };
-  Schedule.findOne = () => mockQuery(subject ? { subject } : null);
+  Schedule.find = (query) => { capturedFindQuery = query; return mockQuery(scheduleDocs); };
   User.findById = () => mockQuery({ consents });
   Enrollment.exists = async () => false; // overridden per-test when parent ownership matters
   Remark.create = store.create;
@@ -138,9 +146,10 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, consents = 
   return {
     store,
     getCapturedExistsQuery: () => capturedExistsQuery,
+    getCapturedFindQuery: () => capturedFindQuery,
     restore() {
       Schedule.exists = origScheduleExists;
-      Schedule.findOne = origScheduleFindOne;
+      Schedule.find = origScheduleFind;
       User.findById = origUserFindById;
       Enrollment.exists = origEnrollmentExists;
       Remark.create = origRemarkCreate;
@@ -159,6 +168,7 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, consents = 
 function baseBody(overrides = {}) {
   return {
     studentId: 'student-1',
+    programCode: 'ACT102',
     action: 'publish',
     date: '2026-09-14',
     activities: ['Reading practice'],
@@ -193,7 +203,7 @@ test('createOrSaveRemark: Toddler template requires all four 1-3 star ratings to
   const { restore } = stubModels({ subject: SUBJECT_TPG101 });
   try {
     const res = mockRes();
-    await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ ratings: { participationEngagement: 2, socialInteraction: 3, followingDirections: 2 } }) }, res);
+    await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ programCode: 'TPG101', ratings: { participationEngagement: 2, socialInteraction: 3, followingDirections: 2 } }) }, res);
     assert.equal(res._status, 400);
     assert.match(res._body.errors.join(' '), /1-3 star rating/i);
   } finally { restore(); }
@@ -233,17 +243,40 @@ test('createOrSaveRemark: publishing with no attachment goes straight to Publish
 });
 
 test('createOrSaveRemark: assignment check is group-aware (covers Playgroup tutors[]/students[])', async () => {
-  const { restore, getCapturedExistsQuery } = stubModels({ subject: SUBJECT_TPG101 });
+  const { restore, getCapturedFindQuery } = stubModels({ subject: SUBJECT_TPG101 });
   try {
     const res = mockRes();
     await createOrSaveRemark({
       user: TUTOR_A,
-      body: baseBody({ action: 'draft', ratings: { participationEngagement: 2, socialInteraction: 2, followingDirections: 2, overallBehavior: 2 } }),
+      body: baseBody({ programCode: 'TPG101', action: 'draft', ratings: { participationEngagement: 2, socialInteraction: 2, followingDirections: 2, overallBehavior: 2 } }),
     }, res);
     assert.equal(res._status, 201, JSON.stringify(res._body));
-    const q = JSON.stringify(getCapturedExistsQuery());
+    const q = JSON.stringify(getCapturedFindQuery());
     assert.match(q, /tutors/, 'must check the group tutors[] field, not just the singular tutor');
     assert.match(q, /students/, 'must check the group students[] field, not just the singular student');
+  } finally { restore(); }
+});
+
+test('createOrSaveRemark: a tutor cannot write a remark for a program they do not actually teach this student in (tutor-student-PROGRAM level check, Spec v3)', async () => {
+  // Tutor is assigned to this student, but only in ACT102 — not in EXP106.
+  const { restore } = stubModels({ schedules: [{ subject: SUBJECT_ACT102 }] });
+  try {
+    const res = mockRes();
+    await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ programCode: 'EXP106', action: 'draft' }) }, res);
+    assert.equal(res._status, 403, JSON.stringify(res._body));
+    assert.match(res._body.message, /not assigned to teach this student in that program/i);
+  } finally { restore(); }
+});
+
+test('createOrSaveRemark: a tutor CAN write a remark for a program when they teach this student in that specific program, even alongside another program', async () => {
+  // Tutor teaches this student in both ACT102 and EXP106 (two separate Schedule docs) —
+  // requesting EXP106 must succeed even though ACT102 is also present.
+  const { restore } = stubModels({ schedules: [{ subject: SUBJECT_ACT102 }, { subject: { _id: 'subj-exp106', name: 'Examination Preparedness', code: 'EXP106' } }] });
+  try {
+    const res = mockRes();
+    await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ programCode: 'EXP106', action: 'draft' }) }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.equal(res._body.remark.programCode, 'EXP106');
   } finally { restore(); }
 });
 

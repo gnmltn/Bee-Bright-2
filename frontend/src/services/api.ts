@@ -889,6 +889,7 @@ export interface RemarkItem {
 
 export interface RemarkFormPayload {
   studentId: string;
+  programCode: RemarkProgramCode;
   action: 'draft' | 'publish';
   date: string;
   activities: string[];

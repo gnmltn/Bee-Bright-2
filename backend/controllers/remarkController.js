@@ -29,7 +29,9 @@ const SCORE_FORMAT = /^\d+(\.\d+)?\s*\/\s*\d+(\.\d+)?$|^\d+(\.\d+)?%$/;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** Group-aware assignment check — covers both 1-on-1 (tutor/student) and Playgroup
- * group sessions (tutors[]/students[]), unlike gradeController's narrower version. */
+ * group sessions (tutors[]/students[]), unlike gradeController's narrower version.
+ * Program-agnostic — use tutorHandlesStudentForProgram when the caller has already
+ * committed to a specific program (i.e. everywhere remark creation/correction happens). */
 async function tutorHandlesStudent(tutorId, studentId) {
   const found = await Schedule.exists({
     $and: [
@@ -40,18 +42,23 @@ async function tutorHandlesStudent(tutorId, studentId) {
   return Boolean(found);
 }
 
-async function resolveStudentProgramCode(tutorId, studentId) {
-  const schedule = await Schedule.findOne({
+// Student Remarks Spec v3 — a tutor may handle the same student across more than one
+// program (e.g. both Academic Tutorial and Examination Preparedness), so "is this tutor
+// assigned to this student" is not enough on its own: the assignment must be checked at
+// the tutor-student-PROGRAM level. This does not require a new data model — each
+// Schedule document is already scoped to exactly one subject/program, so the existing
+// Schedule collection already carries this granularity; it just needs the right query.
+async function tutorHandlesStudentForProgram(tutorId, studentId, programCode) {
+  const schedules = await Schedule.find({
     $and: [
       { $or: [{ tutor: tutorId }, { tutors: tutorId }] },
       { $or: [{ student: studentId }, { students: studentId }] },
     ],
   })
     .populate('subject', 'name code')
-    .sort({ date: -1 })
+    .select('subject')
     .lean();
-  if (!schedule?.subject) return null;
-  return resolveProgramCode(schedule.subject);
+  return schedules.some((s) => resolveProgramCode(s.subject) === programCode);
 }
 
 async function hasMediaConsent(studentId) {
@@ -170,25 +177,28 @@ const createOrSaveRemark = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only tutors can create remarks' });
     }
     const {
-      studentId, action, date, activities, ratings, remarkBullets, nextFocus,
+      studentId, programCode, action, date, activities, ratings, remarkBullets, nextFocus,
       parentSupportSuggestion, examInfo, attachmentDataUrl, attachmentFileName,
     } = req.body;
 
     if (!studentId) {
       return res.status(400).json({ success: false, message: 'studentId is required' });
     }
+    if (!TEMPLATE_BY_PROGRAM[programCode]) {
+      // Spec v3: the tutor now chooses the remark type (program) as its own step,
+      // before the student is even selected — the server no longer infers it.
+      return res.status(400).json({ success: false, message: 'A valid programCode (remark type) is required' });
+    }
     if (!['draft', 'publish'].includes(action)) {
       return res.status(400).json({ success: false, message: "action must be 'draft' or 'publish'" });
     }
 
-    const handles = await tutorHandlesStudent(req.user._id, studentId);
-    if (!handles) {
-      return res.status(403).json({ success: false, message: 'You can only write remarks for students assigned to you' });
-    }
-
-    const programCode = await resolveStudentProgramCode(req.user._id, studentId);
-    if (!programCode) {
-      return res.status(400).json({ success: false, message: "Could not determine this student's active program from your schedule with them" });
+    // Tutor-student-PROGRAM level check (not just tutor-student) — a tutor who teaches
+    // this student in one program must not be able to write a remark for a program they
+    // don't actually handle for that student. See Student Remarks Spec v3's new risk row.
+    const handlesForProgram = await tutorHandlesStudentForProgram(req.user._id, studentId, programCode);
+    if (!handlesForProgram) {
+      return res.status(403).json({ success: false, message: 'You are not assigned to teach this student in that program' });
     }
     const templateType = TEMPLATE_BY_PROGRAM[programCode];
 
@@ -662,7 +672,7 @@ const getRemarkAttachment = async (req, res) => {
 
 module.exports = {
   tutorHandlesStudent,
-  resolveStudentProgramCode,
+  tutorHandlesStudentForProgram,
   hasMediaConsent,
   getStudentMediaConsentStatus,
   createOrSaveRemark,

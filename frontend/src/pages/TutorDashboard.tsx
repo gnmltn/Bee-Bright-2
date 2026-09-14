@@ -61,6 +61,7 @@ import {
   type GradeItem,
   type RemarkItem,
   type RemarkTemplateType,
+  type RemarkProgramCode,
   type AnnouncementItem,
   type AuditLogItem,
 } from "@/services/api";
@@ -547,6 +548,10 @@ export default function TutorDashboard() {
   // ─── Student Remarks state (replaces the grading workflow) ────────────────────
   const [remarks, setRemarks] = useState<RemarkItem[]>([]);
   const [remarksLoading, setRemarksLoading] = useState(false);
+  // Spec v3 — "Choose Remark Type" is its own required step, chosen BEFORE the
+  // student. Never inferred from the student; always shown, even if the tutor only
+  // has one active program.
+  const [remarkTypeProgramCode, setRemarkTypeProgramCode] = useState<RemarkProgramCode | "">("");
   const [remarkFormStudentId, setRemarkFormStudentId] = useState("");
   const [remarkFormMode, setRemarkFormMode] = useState<"create" | "edit" | "correct">("create");
   const [remarkFormTarget, setRemarkFormTarget] = useState<RemarkItem | null>(null);
@@ -640,28 +645,53 @@ export default function TutorDashboard() {
     return PROGRAM_CATEGORIES.filter((prog) => categoryIds.has(prog.id));
   }, [gradeFormStudentId, sessions]);
 
-  // ─── Which remark template applies to the selected student ────────────────────
-  // Same inference as the grade form (subject-name keyword matching against this
-  // tutor's own schedule with the student), mapped to the student's programCode.
-  const remarkTemplateForSelectedStudent = useMemo((): RemarkTemplateType | null => {
-    if (!remarkFormStudentId) return null;
-    const categoryIds = new Set<string>();
+  // ─── Student Remarks Spec v3: "Choose Remark Type" step ───────────────────────
+  // Only the program(s) this tutor currently has an active Schedule-based assignment
+  // in at all — computed client-side from the already-loaded `sessions`, mirroring
+  // tutorAssignedStudentsList's derivation style. This step must always be shown, even
+  // when only one program is active (never auto-skipped).
+  const tutorActiveRemarkPrograms = useMemo(() => {
+    const activeIds = new Set<string>();
     sessions.forEach((s) => {
       if (!s.subject) return;
-      const studentIds = [
-        s.student?._id ? String(s.student._id) : null,
-        ...(Array.isArray(s.students) ? s.students.map((st) => String(st._id)) : []),
-      ].filter(Boolean) as string[];
-      if (!studentIds.includes(remarkFormStudentId)) return;
       const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
-      if (inferred) categoryIds.add(inferred);
+      if (inferred) activeIds.add(inferred);
     });
-    const prog = PROGRAM_CATEGORIES.find((p) => categoryIds.has(p.id));
-    if (!prog) return null;
-    if (prog.programCode === "TPG101") return "toddler_observation";
-    if (prog.programCode === "EXP106") return "examination_progress";
+    return PROGRAM_CATEGORIES.filter((p) => activeIds.has(p.id));
+  }, [sessions]);
+
+  // Students enrolled in the CHOSEN program AND assigned to this tutor specifically
+  // for that program — a tutor who teaches a student in only one of several programs
+  // they're enrolled in must not see them here for a program not actually taught.
+  const studentsForRemarkType = useMemo(() => {
+    if (!remarkTypeProgramCode) return [];
+    const seen = new Set<string>();
+    const list: { _id: string; name: string }[] = [];
+    sessions.forEach((s) => {
+      if (!s.subject) return;
+      const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
+      const prog = inferred ? PROGRAM_CATEGORIES.find((p) => p.id === inferred) : undefined;
+      if (!prog || prog.programCode !== remarkTypeProgramCode) return;
+      sessionStudentRecords(s).forEach((student) => {
+        const id = student._id != null ? String(student._id) : "";
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        list.push({ _id: id, name: personDisplayName(student) });
+      });
+    });
+    return list.sort((a, b) => a.name.localeCompare(b.name));
+  }, [remarkTypeProgramCode, sessions]);
+
+  function templateTypeForProgramCode(code: string): RemarkTemplateType {
+    if (code === "TPG101") return "toddler_observation";
+    if (code === "EXP106") return "examination_progress";
     return "academic_progress";
-  }, [remarkFormStudentId, sessions]);
+  }
+
+  // Changing the remark type invalidates any student already picked under the old type.
+  useEffect(() => {
+    setRemarkFormStudentId("");
+  }, [remarkTypeProgramCode]);
 
   useEffect(() => {
     if (!gradeFormProgramCategoryId) return;
@@ -2442,31 +2472,53 @@ export default function TutorDashboard() {
                     <div className="p-4">
                       {remarkFormMode === "create" && (
                         <div className="space-y-1 mb-4">
-                          <Label>Student *</Label>
-                          <Select value={remarkFormStudentId} onValueChange={setRemarkFormStudentId}>
-                            <SelectTrigger className="w-full sm:w-80">
-                              <SelectValue placeholder={tutorAssignedStudentsList.length === 0 ? "No assigned students yet" : "Select student"} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {tutorAssignedStudentsList.map((stu) => (
-                                <SelectItem key={stu._id} value={stu._id}>{stu.name}</SelectItem>
+                          <Label>Remark type *</Label>
+                          {tutorActiveRemarkPrograms.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">You have no active program assignments yet.</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {tutorActiveRemarkPrograms.map((p) => (
+                                <Button
+                                  key={p.id}
+                                  type="button"
+                                  size="sm"
+                                  variant={remarkTypeProgramCode === p.programCode ? "default" : "outline"}
+                                  className={remarkTypeProgramCode === p.programCode ? "btn-glow" : ""}
+                                  onClick={() => setRemarkTypeProgramCode(p.programCode as RemarkProgramCode)}
+                                >
+                                  {p.label}
+                                </Button>
                               ))}
-                            </SelectContent>
-                          </Select>
-                          {remarkFormStudentId && !remarkTemplateForSelectedStudent && (
-                            <p className="text-xs text-destructive">Could not determine this student's program from your schedule with them.</p>
+                            </div>
                           )}
                         </div>
                       )}
 
-                      {remarkFormMode === "create" && remarkFormStudentId && remarkTemplateForSelectedStudent && (
+                      {remarkFormMode === "create" && remarkTypeProgramCode && (
+                        <div className="space-y-1 mb-4">
+                          <Label>Student *</Label>
+                          <Select value={remarkFormStudentId} onValueChange={setRemarkFormStudentId}>
+                            <SelectTrigger className="w-full sm:w-80">
+                              <SelectValue placeholder={studentsForRemarkType.length === 0 ? "No assigned students for this program" : "Select student"} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {studentsForRemarkType.map((stu) => (
+                                <SelectItem key={stu._id} value={stu._id}>{stu.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {remarkFormMode === "create" && remarkTypeProgramCode && remarkFormStudentId && (
                         <RemarkForm
                           studentId={remarkFormStudentId}
-                          studentLabel={tutorAssignedStudentsList.find((s) => s._id === remarkFormStudentId)?.name || ""}
-                          templateType={remarkTemplateForSelectedStudent}
+                          studentLabel={studentsForRemarkType.find((s) => s._id === remarkFormStudentId)?.name || ""}
+                          programCode={remarkTypeProgramCode}
+                          templateType={templateTypeForProgramCode(remarkTypeProgramCode)}
                           hasMediaConsent={remarkFormConsent}
                           mode="create"
-                          onSaved={() => { setRemarkFormStudentId(""); fetchRemarks(); }}
+                          onSaved={() => { setRemarkFormStudentId(""); setRemarkTypeProgramCode(""); fetchRemarks(); }}
                         />
                       )}
 
@@ -2474,6 +2526,7 @@ export default function TutorDashboard() {
                         <RemarkForm
                           studentId={typeof remarkFormTarget.student === "object" ? remarkFormTarget.student._id : String(remarkFormTarget.student)}
                           studentLabel={remarkFormTarget.student ? `${remarkFormTarget.student.firstName} ${remarkFormTarget.student.lastName}` : ""}
+                          programCode={remarkFormTarget.programCode}
                           templateType={remarkFormTarget.templateType}
                           hasMediaConsent={remarkFormConsent}
                           existingRemark={remarkFormTarget}
@@ -2483,7 +2536,10 @@ export default function TutorDashboard() {
                         />
                       )}
 
-                      {remarkFormMode === "create" && !remarkFormStudentId && (
+                      {remarkFormMode === "create" && !remarkTypeProgramCode && tutorActiveRemarkPrograms.length > 0 && (
+                        <p className="text-sm text-muted-foreground">Choose a remark type above to continue.</p>
+                      )}
+                      {remarkFormMode === "create" && remarkTypeProgramCode && !remarkFormStudentId && (
                         <p className="text-sm text-muted-foreground">Select a student above to start a new remark.</p>
                       )}
                     </div>
