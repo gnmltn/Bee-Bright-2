@@ -38,7 +38,7 @@ import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, assessmentService, scheduleService, materialService, gradeService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { enrollmentService, assessmentService, scheduleService, materialService, gradeService, remarkService, announcementService, auditLogService, paymentService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import { AITab } from "@/components/ai/AITab";
@@ -825,6 +825,19 @@ export default function StudentDashboard() {
   };
 
   const handleAddChild = (resubmission?: typeof enrollments[number]) => {
+    if (!resubmission) {
+      // A plain "+ Add Child" click must start from a blank form — Cancel on this
+      // dialog doesn't itself clear `newChild`, so without this a child/program picked
+      // during an abandoned resubmission would otherwise leak into the next "new child"
+      // attempt.
+      setNewChild((current) => ({
+        ...current,
+        firstName: "",
+        lastName: "",
+        birthdate: "",
+        packageKey: "",
+      }));
+    }
     if (pricing.length === 0) {
       enrollmentService.getPricing().then((response) => {
         if (response.data?.success) {
@@ -1240,7 +1253,7 @@ export default function StudentDashboard() {
                         <h3 className="font-display font-bold text-lg text-foreground">My Child</h3>
                         <p className="text-sm text-muted-foreground">Manage each child and keep their enrollment details separate.</p>
                       </div>
-                      <Button onClick={handleAddChild} className="bg-amber-500 hover:bg-amber-600 text-white">
+                      <Button onClick={() => handleAddChild()} className="bg-amber-500 hover:bg-amber-600 text-white">
                         + Add Child
                       </Button>
                     </div>
@@ -1254,7 +1267,7 @@ export default function StudentDashboard() {
                         <div className="rounded-xl border border-dashed border-border bg-muted/20 p-8 text-center">
                           <p className="font-semibold text-foreground">No child enrolled yet.</p>
                           <p className="mt-2 text-sm text-muted-foreground">Add your first child to begin the enrollment process.</p>
-                          <Button onClick={handleAddChild} className="mt-4 bg-amber-500 hover:bg-amber-600 text-white">
+                          <Button onClick={() => handleAddChild()} className="mt-4 bg-amber-500 hover:bg-amber-600 text-white">
                             Add Child
                           </Button>
                         </div>

@@ -555,7 +555,6 @@ export default function TutorDashboard() {
   const [remarkFormStudentId, setRemarkFormStudentId] = useState("");
   const [remarkFormMode, setRemarkFormMode] = useState<"create" | "edit" | "correct">("create");
   const [remarkFormTarget, setRemarkFormTarget] = useState<RemarkItem | null>(null);
-  const [remarkFormConsent, setRemarkFormConsent] = useState(true);
   const [remarkFilterStudentId, setRemarkFilterStudentId] = useState(ALL_STUDENTS_VALUE);
 
   // Program options for materials (same structure as grading)
@@ -646,41 +645,50 @@ export default function TutorDashboard() {
   }, [gradeFormStudentId, sessions]);
 
   // ─── Student Remarks Spec v3: "Choose Remark Type" step ───────────────────────
-  // Only the program(s) this tutor currently has an active Schedule-based assignment
-  // in at all — computed client-side from the already-loaded `sessions`, mirroring
-  // tutorAssignedStudentsList's derivation style. This step must always be shown, even
-  // when only one program is active (never auto-skipped).
-  const tutorActiveRemarkPrograms = useMemo(() => {
-    const activeIds = new Set<string>();
+  // Single source of truth for BOTH the type buttons and the student dropdown: the
+  // tutor's actual (program, student) assignment pairs — a Schedule only counts if it
+  // actually has a real student attached (sessionStudentRecords), not just a subject.
+  // A subject-only "empty slot" Schedule (no student enrolled yet, e.g. an unfilled
+  // template-generated session) must never make a remark type look available when
+  // there's really nobody to write a remark about — deriving both lists from this one
+  // list of pairs is what guarantees they can never disagree.
+  const tutorRemarkAssignmentPairs = useMemo(() => {
+    const pairs: { categoryId: string; programCode: string; studentId: string; studentName: string }[] = [];
+    const seen = new Set<string>();
     sessions.forEach((s) => {
       if (!s.subject) return;
       const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
-      if (inferred) activeIds.add(inferred);
+      const prog = inferred ? PROGRAM_CATEGORIES.find((p) => p.id === inferred) : undefined;
+      if (!prog) return;
+      sessionStudentRecords(s).forEach((student) => {
+        const studentId = student._id != null ? String(student._id) : "";
+        if (!studentId) return;
+        const key = `${prog.programCode}:${studentId}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        pairs.push({ categoryId: prog.id, programCode: prog.programCode, studentId, studentName: personDisplayName(student) });
+      });
     });
-    return PROGRAM_CATEGORIES.filter((p) => activeIds.has(p.id));
+    return pairs;
   }, [sessions]);
+
+  // Only the program(s) with at least one real (program, student) pair. This step must
+  // always be shown, even when only one program is active (never auto-skipped).
+  const tutorActiveRemarkPrograms = useMemo(() => {
+    const activeIds = new Set(tutorRemarkAssignmentPairs.map((p) => p.categoryId));
+    return PROGRAM_CATEGORIES.filter((p) => activeIds.has(p.id));
+  }, [tutorRemarkAssignmentPairs]);
 
   // Students enrolled in the CHOSEN program AND assigned to this tutor specifically
   // for that program — a tutor who teaches a student in only one of several programs
   // they're enrolled in must not see them here for a program not actually taught.
   const studentsForRemarkType = useMemo(() => {
     if (!remarkTypeProgramCode) return [];
-    const seen = new Set<string>();
-    const list: { _id: string; name: string }[] = [];
-    sessions.forEach((s) => {
-      if (!s.subject) return;
-      const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
-      const prog = inferred ? PROGRAM_CATEGORIES.find((p) => p.id === inferred) : undefined;
-      if (!prog || prog.programCode !== remarkTypeProgramCode) return;
-      sessionStudentRecords(s).forEach((student) => {
-        const id = student._id != null ? String(student._id) : "";
-        if (!id || seen.has(id)) return;
-        seen.add(id);
-        list.push({ _id: id, name: personDisplayName(student) });
-      });
-    });
-    return list.sort((a, b) => a.name.localeCompare(b.name));
-  }, [remarkTypeProgramCode, sessions]);
+    return tutorRemarkAssignmentPairs
+      .filter((p) => p.programCode === remarkTypeProgramCode)
+      .map((p) => ({ _id: p.studentId, name: p.studentName }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [remarkTypeProgramCode, tutorRemarkAssignmentPairs]);
 
   function templateTypeForProgramCode(code: string): RemarkTemplateType {
     if (code === "TPG101") return "toddler_observation";
@@ -860,16 +868,6 @@ export default function TutorDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash, user?.role, remarkFilterStudentId]);
-
-  // Check the selected student's media/attachment consent status (Section C.11).
-  useEffect(() => {
-    if (!remarkFormStudentId) { setRemarkFormConsent(true); return; }
-    let cancelled = false;
-    remarkService.getStudentConsentStatus(remarkFormStudentId)
-      .then((res) => { if (!cancelled) setRemarkFormConsent(Boolean(res.data?.hasMediaConsent)); })
-      .catch(() => { if (!cancelled) setRemarkFormConsent(false); });
-    return () => { cancelled = true; };
-  }, [remarkFormStudentId]);
 
   // ─── Grade handlers ───────────────────────────────────────────────────────────
   const handleAddGrade = (e: React.FormEvent) => {
@@ -2512,27 +2510,29 @@ export default function TutorDashboard() {
 
                       {remarkFormMode === "create" && remarkTypeProgramCode && remarkFormStudentId && (
                         <RemarkForm
+                          key={`create-${remarkTypeProgramCode}-${remarkFormStudentId}`}
                           studentId={remarkFormStudentId}
                           studentLabel={studentsForRemarkType.find((s) => s._id === remarkFormStudentId)?.name || ""}
                           programCode={remarkTypeProgramCode}
                           templateType={templateTypeForProgramCode(remarkTypeProgramCode)}
-                          hasMediaConsent={remarkFormConsent}
                           mode="create"
+                          onCancel={() => { setRemarkFormStudentId(""); setRemarkTypeProgramCode(""); }}
                           onSaved={() => { setRemarkFormStudentId(""); setRemarkTypeProgramCode(""); fetchRemarks(); }}
                         />
                       )}
 
                       {(remarkFormMode === "edit" || remarkFormMode === "correct") && remarkFormTarget && (
                         <RemarkForm
+                          key={`${remarkFormMode}-${remarkFormTarget._id}`}
                           studentId={typeof remarkFormTarget.student === "object" ? remarkFormTarget.student._id : String(remarkFormTarget.student)}
                           studentLabel={remarkFormTarget.student ? `${remarkFormTarget.student.firstName} ${remarkFormTarget.student.lastName}` : ""}
                           programCode={remarkFormTarget.programCode}
                           templateType={remarkFormTarget.templateType}
-                          hasMediaConsent={remarkFormConsent}
                           existingRemark={remarkFormTarget}
                           mode={remarkFormMode}
                           onCancel={() => { setRemarkFormMode("create"); setRemarkFormTarget(null); }}
                           onSaved={() => { setRemarkFormMode("create"); setRemarkFormTarget(null); fetchRemarks(); }}
+                          onDeleted={() => { setRemarkFormMode("create"); setRemarkFormTarget(null); fetchRemarks(); }}
                         />
                       )}
 

@@ -202,7 +202,7 @@ export function SessionInactivityGuard() {
         </DialogHeader>
         <DialogFooter className="flex gap-2 sm:justify-end">
           <Button variant="outline" onClick={handleStayLoggedIn}>Cancel</Button>
-          <Button variant="destructive" onClick={performLogout}>Logout</Button>
+          <Button variant="destructive" onClick={() => performLogout(true)}>Logout</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

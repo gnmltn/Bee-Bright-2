@@ -2740,15 +2740,46 @@ const markTutorUnavailability = async (req, res) => {
 const MAX_RESCHEDULE_ATTEMPTS = 8; // ~2 months of weekly lookahead before giving up
 
 /**
+ * Monday (UTC, 00:00) of the calendar week containing `date` — BeeBright operates
+ * Monday through Saturday, so weeks are treated as Monday-start for the "make-up
+ * sessions must land in the following week" policy below.
+ */
+function getMondayOfWeek(date) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = d.getUTCDay(); // 0=Sun..6=Sat
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diffToMonday);
+  return d;
+}
+
+/**
+ * BeeBright Scheduling Spec: whenever a session is rescheduled — Suspension or
+ * Emergency Adjustment — the make-up session must fall in the week AFTER the one it's
+ * being rescheduled from, never the same current week. Returns true if `candidateDate`
+ * satisfies that (i.e. falls on or after the Monday of the week following `originalDate`).
+ */
+function isInFollowingWeekOrLater(originalDate, candidateDate) {
+  const followingWeekStart = new Date(getMondayOfWeek(originalDate));
+  followingWeekStart.setUTCDate(followingWeekStart.getUTCDate() + 7);
+  return candidateDate.getTime() >= followingWeekStart.getTime();
+}
+
+/**
  * Find the next conflict-free occurrence of the same weekday/time for a session that
  * needs to move (Suspension only — Emergency lets the admin pick the date directly).
- * Steps forward 7 days at a time so the weekday never changes. If the immediate next
- * occurrence is already taken by that same pair's own regular session (the normal
- * case for a weekly recurring slot), the search naturally continues past it — this is
- * what makes sessions "compress toward month-end" rather than colliding with the next
- * regular class. Returns the new Date, or null if nothing opens up within the cap.
+ * Steps forward 7 days at a time so the weekday never changes — this also guarantees
+ * the very first candidate already falls in the week after the original date, per the
+ * "make-up sessions land in the following week, never the current week" policy. If the
+ * immediate next occurrence is already taken by that same pair's own regular session
+ * (the normal case for a weekly recurring slot), the search naturally continues past
+ * it — this is what makes sessions "compress toward month-end" rather than colliding
+ * with the next regular class. When suspensionWindow is given (Suspension only), a
+ * candidate that still falls inside [suspensionWindow.start, suspensionWindow.end] is
+ * rejected too — otherwise a multi-week suspension could "reschedule" a session onto
+ * another date that's still within the closed period. Returns the new Date, or null if
+ * nothing opens up within the cap.
  */
-async function findNextAvailableDateForSchedule(schedule, policy) {
+async function findNextAvailableDateForSchedule(schedule, policy, suspensionWindow = null) {
   const tutorIds = Array.isArray(schedule.tutors) && schedule.tutors.length > 0
     ? schedule.tutors.map((t) => String(t?._id || t))
     : (schedule.tutor ? [String(schedule.tutor?._id || schedule.tutor)] : []);
@@ -2765,6 +2796,8 @@ async function findNextAvailableDateForSchedule(schedule, policy) {
 
     const timeError = validateTimeWindow({ date: candidate, startTime: schedule.startTime, endTime: schedule.endTime, policy });
     if (timeError) continue;
+
+    if (suspensionWindow && candidate >= suspensionWindow.start && candidate <= suspensionWindow.end) continue;
 
     let tutorsOk = true;
     for (const tutorId of tutorIds) {
@@ -2863,6 +2896,13 @@ async function notifyUnresolvedSuspension({ schedule, reason }) {
 // @desc    Mark a date (or date range) as suspended — reschedules every affected
 //          Schedule (1-on-1 and Playgroup alike) to the next conflict-free occurrence
 //          for that same pair. System-wide, no per-student picking required.
+//          Deliberately scoped by date only, not by tutor/student/program: BeeBright
+//          operates a single physical tutoring center (no branch/campus concept exists
+//          anywhere in this codebase — confirmed against User/Enrollment/Schedule/
+//          TutoringArea), so a suspension (e.g. a typhoon closure) genuinely closes
+//          every session in the affected window company-wide. This is intentional, not
+//          a missing filter — if BeeBright ever operates multiple centers, this query
+//          needs a center/branch scope added at that point.
 // @route   POST /api/schedules/suspend
 // @access  Private (Admin)
 const suspendDates = async (req, res) => {
@@ -2887,33 +2927,49 @@ const suspendDates = async (req, res) => {
     const details = [];
     let movedCount = 0;
     let unresolvedCount = 0;
+    const suspensionWindow = { start, end };
 
     // Sequential on purpose: each move must be visible to the next candidate-date
     // search (e.g. two suspended sessions for the same pair must not both land on the
-    // same reschedule date).
+    // same reschedule date). Each schedule's move is isolated in its own try/catch so
+    // one unexpected failure (e.g. a bad record) can't abort the whole batch and leave
+    // some sessions moved and others silently never processed — it's recorded as
+    // unresolved (with the error message) and the loop continues.
     for (const schedule of schedules) {
-      const policy = getProgramPolicy(schedule.subject);
       const fromDate = new Date(schedule.date);
-      const nextDate = await findNextAvailableDateForSchedule(schedule, policy);
+      try {
+        const policy = getProgramPolicy(schedule.subject);
+        const nextDate = await findNextAvailableDateForSchedule(schedule, policy, suspensionWindow);
 
-      if (!nextDate) {
+        if (!nextDate) {
+          unresolvedCount += 1;
+          details.push({ schedule: schedule._id, fromDate, toDate: null, status: 'unresolved' });
+          await notifyUnresolvedSuspension({ schedule, reason }).catch(() => {});
+          continue;
+        }
+
+        schedule.date = nextDate;
+        await schedule.save();
+        movedCount += 1;
+        details.push({ schedule: schedule._id, fromDate, toDate: nextDate, status: 'moved' });
+
+        await notifyScheduleReschedule({
+          schedule,
+          fromDate,
+          toDate: nextDate,
+          reason: reason || 'Center suspension',
+        }).catch(() => {});
+      } catch (scheduleError) {
         unresolvedCount += 1;
-        details.push({ schedule: schedule._id, fromDate, toDate: null, status: 'unresolved' });
+        details.push({
+          schedule: schedule._id,
+          fromDate,
+          toDate: null,
+          status: 'unresolved',
+          error: scheduleError.message || 'Failed to reschedule this session',
+        });
         await notifyUnresolvedSuspension({ schedule, reason }).catch(() => {});
-        continue;
       }
-
-      schedule.date = nextDate;
-      await schedule.save();
-      movedCount += 1;
-      details.push({ schedule: schedule._id, fromDate, toDate: nextDate, status: 'moved' });
-
-      await notifyScheduleReschedule({
-        schedule,
-        fromDate,
-        toDate: nextDate,
-        reason: reason || 'Center suspension',
-      }).catch(() => {});
     }
 
     const suspension = await Suspension.create({
@@ -3013,6 +3069,10 @@ const emergencyReschedule = async (req, res) => {
     const timeError = validateTimeWindow({ date: targetDate, startTime: normalizedStart, endTime: normalizedEnd, policy });
     if (timeError) {
       return res.status(400).json({ success: false, message: timeError });
+    }
+
+    if (!isInFollowingWeekOrLater(new Date(schedule.date), targetDate)) {
+      return res.status(400).json({ success: false, message: 'Emergency reschedules must be set for next week or later' });
     }
 
     const tutorIds = Array.isArray(schedule.tutors) && schedule.tutors.length > 0

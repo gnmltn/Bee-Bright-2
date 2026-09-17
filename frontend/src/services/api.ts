@@ -161,6 +161,10 @@ export const authService = {
       code?: string;
       token?: string;
       user?: Record<string, unknown>;
+      /** Only sent outside production, and only when the OTP email itself failed to
+       * send (authController.js's createOrRefreshLoginOtp SMTP-failure fallback) — lets
+       * local/dev testing continue without a working mail server. */
+      devOtp?: string;
     }>('/auth/login-start', credentials),
   adminLoginStart: (credentials: { email: string; password: string }) =>
     api.post<{
@@ -176,6 +180,8 @@ export const authService = {
       code?: string;
       token?: string;
       user?: Record<string, unknown>;
+      /** See loginStart's devOtp above — same SMTP-failure dev fallback. */
+      devOtp?: string;
     }>('/auth/admin-login-start', credentials),
   verifyLoginOtp: (payload: { email: string; verificationId: string; otp: string }) =>
     api.post('/auth/login-verify-otp', payload),
@@ -875,6 +881,11 @@ export interface RemarkItem {
   parentSupportSuggestion?: string;
   examInfo?: RemarkExamInfo;
   attachment?: RemarkAttachmentMeta | null;
+  /** Only present on GET /remarks/pending-review — whether the student's guardian has
+   * recorded attachment/media consent. Admin-facing only (Spec v3.1): the tutor is never
+   * gated on this, it's information used at the review step alongside the attachment
+   * itself. */
+  studentHasMediaConsent?: boolean;
   status: RemarkStatus;
   publishedAt?: string | null;
   rootRemarkId?: string | null;
@@ -907,6 +918,9 @@ export const remarkService = {
     api.post<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>('/remarks', data),
   update: (id: string, data: Omit<RemarkFormPayload, 'studentId'>) =>
     api.put<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>(`/remarks/${id}`, data),
+  /** Permanently deletes a draft — the "Cancel" → "Delete Draft" action. Drafts only. */
+  deleteDraft: (id: string) =>
+    api.delete<{ success: boolean; message: string }>(`/remarks/${id}`),
   correct: (id: string, data: Omit<RemarkFormPayload, 'studentId' | 'action'> & { correctionReason: string }) =>
     api.post<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>(`/remarks/${id}/correct`, data),
   listMine: (studentId?: string) =>
@@ -915,7 +929,6 @@ export const remarkService = {
   getMyProgress: (studentId?: string, filters?: { tutorId?: string; programCode?: string; activity?: string; startDate?: string; endDate?: string }) =>
     api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/my-progress', { params: { ...(studentId ? { studentId } : {}), ...filters } }),
   listPendingReview: () => api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/pending-review'),
-  getStudentConsentStatus: (studentId: string) => api.get<{ success: boolean; hasMediaConsent: boolean }>(`/remarks/student-consent/${studentId}`),
   review: (id: string, data: { decision: 'approve' | 'reject'; reason?: string }) =>
     api.patch<{ success: boolean; message: string; remark: RemarkItem }>(`/remarks/${id}/review`, data),
   getHistory: (id: string) => api.get<{ success: boolean; history: RemarkItem[] }>(`/remarks/${id}/history`),

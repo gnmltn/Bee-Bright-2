@@ -5,6 +5,17 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { StarRating } from "@/components/ui/star-rating";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import FilePreview from "@/components/enrollment/FilePreview";
 import { toast } from "sonner";
 import {
   remarkService,
@@ -57,15 +68,19 @@ interface RemarkFormProps {
    * submitted payload rather than inferred from the student. */
   programCode: RemarkProgramCode;
   templateType: RemarkTemplateType;
-  hasMediaConsent: boolean;
   /** Present when editing an existing draft (mode="edit") or correcting a published one (mode="correct"). */
   existingRemark?: RemarkItem | null;
   mode: "create" | "edit" | "correct";
   onSaved: () => void;
+  /** Dismiss with no server-side change — a plain close, or "Keep Editing". */
   onCancel?: () => void;
+  /** Called after a draft was actually deleted server-side (mode="edit" only) — lets the
+   * caller refresh Remark History so the deleted draft disappears from it. Falls back to
+   * onCancel if not provided. */
+  onDeleted?: () => void;
 }
 
-export function RemarkForm({ studentId, studentLabel, programCode, templateType, hasMediaConsent, existingRemark, mode, onSaved, onCancel }: RemarkFormProps) {
+export function RemarkForm({ studentId, studentLabel, programCode, templateType, existingRemark, mode, onSaved, onCancel, onDeleted }: RemarkFormProps) {
   const [date, setDate] = useState(existingRemark?.date ? existingRemark.date.slice(0, 10) : todayDateInput());
   const [activities, setActivities] = useState<string[]>(existingRemark?.activities || []);
   const [activityDraft, setActivityDraft] = useState("");
@@ -77,14 +92,36 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
   const [nextFocus, setNextFocus] = useState(existingRemark?.nextFocus || "");
   const [parentSupportSuggestion, setParentSupportSuggestion] = useState(existingRemark?.parentSupportSuggestion || "");
   const [examInfo, setExamInfo] = useState<RemarkExamInfo>(existingRemark?.examInfo || { topic: "", scoreResult: "", mistakesToReview: "", studyGoal: "" });
-  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  // Holds the data URL alongside the file so the preview (FilePreview, shared with the
+  // enrollment wizard and the admin review queue) can render immediately with no round
+  // trip — and so buildPayload doesn't need to re-read the file at submit time.
+  const [attachmentPreview, setAttachmentPreview] = useState<{ dataUrl: string; fileName: string; fileSize: number } | null>(null);
   const [correctionReason, setCorrectionReason] = useState("");
   const [submitting, setSubmitting] = useState<"draft" | "publish" | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
 
+  // The attachment already stored on this remark, if any. The backend always sends the
+  // `attachment` subdocument, with null fields when there is no file — so `path` is what
+  // actually tells them apart.
+  const savedAttachment = existingRemark?.attachment?.path ? existingRemark.attachment : null;
+
   useEffect(() => {
     setErrors([]);
-  }, [activities, remarkBullets, nextFocus, ratings, examInfo, attachmentFile]);
+  }, [activities, remarkBullets, nextFocus, ratings, examInfo, attachmentPreview]);
+
+  // Attachment consent is no longer a tutor-facing gate (Spec v3.1) — a tutor can always
+  // choose a file, and consent is surfaced to the admin at Pending Admin Review instead.
+  const handleAttachmentChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) { setAttachmentPreview(null); return; }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setAttachmentPreview({ dataUrl, fileName: file.name, fileSize: file.size });
+    } catch {
+      toast.error("Could not read the selected file.");
+      setAttachmentPreview(null);
+    }
+  };
 
   const addActivity = () => {
     const trimmed = activityDraft.trim();
@@ -101,41 +138,57 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
 
   const bulletWarning = bannedWordsIn(bulletDraft);
 
-  const buildPayload = async (action: "draft" | "publish") => {
-    const attachmentDataUrl = attachmentFile ? await readFileAsDataUrl(attachmentFile) : undefined;
-    return {
-      studentId,
-      programCode,
-      action,
-      date,
-      activities,
-      ratings: templateType === "toddler_observation" ? ratings : undefined,
-      remarkBullets,
-      nextFocus,
-      parentSupportSuggestion: templateType === "academic_progress" ? parentSupportSuggestion : undefined,
-      examInfo: templateType === "examination_progress" ? examInfo : undefined,
-      attachmentDataUrl,
-      attachmentFileName: attachmentFile?.name,
-    };
-  };
+  const buildPayload = (
+    action: "draft" | "publish",
+    submittedActivities: string[],
+    submittedBullets: string[],
+  ) => ({
+    studentId,
+    programCode,
+    action,
+    date,
+    activities: submittedActivities,
+    ratings: templateType === "toddler_observation" ? ratings : undefined,
+    remarkBullets: submittedBullets,
+    nextFocus,
+    parentSupportSuggestion: templateType === "academic_progress" ? parentSupportSuggestion : undefined,
+    examInfo: templateType === "examination_progress" ? examInfo : undefined,
+    attachmentDataUrl: attachmentPreview?.dataUrl,
+    attachmentFileName: attachmentPreview?.fileName,
+  });
 
   const handleSubmit = async (action: "draft" | "publish") => {
     if (mode === "correct" && !correctionReason.trim()) {
       toast.error("A correction reason is required.");
       return;
     }
+
+    // Activities and remark bullets are the only two fields that need an explicit "+"
+    // (or Enter) to turn the typed text into a chip. Text still sitting in those inputs
+    // when Save Draft/Publish is clicked used to be dropped silently, which is why they
+    // were the only fields that appeared not to persist. Commit it here instead — state
+    // updates don't apply until the next render, so the committed values are also passed
+    // straight into the payload rather than read back from state.
+    const pendingActivity = activityDraft.trim();
+    const pendingBullet = bulletDraft.trim();
+    const submittedActivities = pendingActivity ? [...activities, pendingActivity] : activities;
+    const submittedBullets = pendingBullet ? [...remarkBullets, pendingBullet] : remarkBullets;
+    if (pendingActivity) { setActivities(submittedActivities); setActivityDraft(""); }
+    if (pendingBullet) { setRemarkBullets(submittedBullets); setBulletDraft(""); }
+
     setSubmitting(action);
     setErrors([]);
     try {
       let res;
       if (mode === "correct" && existingRemark) {
-        const payload = await buildPayload("publish"); // corrections always run full publish validation
+        // Corrections always run full publish validation.
+        const payload = buildPayload("publish", submittedActivities, submittedBullets);
         res = await remarkService.correct(existingRemark._id, { ...payload, correctionReason: correctionReason.trim() });
       } else if (mode === "edit" && existingRemark) {
-        const payload = await buildPayload(action);
+        const payload = buildPayload(action, submittedActivities, submittedBullets);
         res = await remarkService.update(existingRemark._id, payload);
       } else {
-        const payload = await buildPayload(action);
+        const payload = buildPayload(action, submittedActivities, submittedBullets);
         res = await remarkService.create(payload);
       }
       if (res.data?.success) {
@@ -149,6 +202,64 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
       setErrors(data?.errors || [data?.message || "Failed to save."]);
     } finally {
       setSubmitting(null);
+    }
+  };
+
+  // ─── Cancel -> Delete Draft (with confirmation) ────────────────────────────────
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // A brand-new, still-blank remark has nothing worth confirming over — today's
+  // default date doesn't count as "entered content."
+  const hasEnteredContent =
+    activities.length > 0 ||
+    remarkBullets.length > 0 ||
+    activityDraft.trim() !== "" ||
+    bulletDraft.trim() !== "" ||
+    nextFocus.trim() !== "" ||
+    parentSupportSuggestion.trim() !== "" ||
+    attachmentPreview !== null ||
+    Object.values(ratings).some((v) => v !== null) ||
+    Object.values(examInfo).some((v) => (v || "").trim() !== "");
+
+  const isExistingDraft = mode === "edit" && Boolean(existingRemark);
+
+  const handleCancelClick = () => {
+    // Correcting a published remark isn't a draft — there's nothing to delete, so
+    // Cancel here always just closes, same as before this feature.
+    if (mode === "correct") {
+      onCancel?.();
+      return;
+    }
+    if (isExistingDraft || hasEnteredContent) {
+      setConfirmDeleteOpen(true);
+    } else {
+      onCancel?.();
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!isExistingDraft || !existingRemark) {
+      // Nothing was ever persisted — just discard the in-memory content.
+      setConfirmDeleteOpen(false);
+      onCancel?.();
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await remarkService.deleteDraft(existingRemark._id);
+      if (res.data?.success) {
+        toast.success(res.data.message || "Draft deleted.");
+        setConfirmDeleteOpen(false);
+        (onDeleted || onCancel)?.();
+      } else {
+        toast.error(res.data?.message || "Failed to delete draft.");
+      }
+    } catch (err: unknown) {
+      const data = (err as { response?: { data?: { message?: string } } })?.response?.data;
+      toast.error(data?.message || "Failed to delete draft.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -289,17 +400,35 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
         </div>
       )}
 
-      {/* Attachment */}
+      {/* Attachment — never gated on consent (Spec v3.1): a tutor can always choose a
+          file, on a brand-new form or an existing draft. Consent is surfaced to the
+          admin at Pending Admin Review instead (see RemarksReviewQueue.tsx), not
+          enforced here. A newly chosen file gets an immediate local preview (thumbnail
+          for images, a filename row for PDFs, via the same FilePreview used by the
+          enrollment wizard and the admin review queue) so the tutor can visually
+          confirm it's the right file before saving. */}
       <div className="space-y-1">
-        <Label className="flex items-center gap-1"><Paperclip className="h-3.5 w-3.5" /> Attachment (optional)</Label>
-        {!hasMediaConsent ? (
-          <p className="text-xs text-muted-foreground">Attachment upload is disabled — this student's guardian has not yet provided media/attachment consent. An admin can record consent from the student's record.</p>
-        ) : (
-          <>
-            <Input type="file" accept="image/jpeg,image/png,application/pdf" onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)} />
-            {attachmentFile && <p className="text-xs text-muted-foreground">{attachmentFile.name} ({Math.round(attachmentFile.size / 1024)} KB)</p>}
-          </>
+        <Label htmlFor="remark-attachment" className="flex items-center gap-1"><Paperclip className="h-3.5 w-3.5" /> Attachment (optional)</Label>
+        {savedAttachment && !attachmentPreview && (
+          <p className="text-xs text-foreground">
+            Currently attached: {savedAttachment.fileName}
+            {savedAttachment.size ? ` (${Math.round(savedAttachment.size / 1024)} KB)` : ""}
+          </p>
         )}
+        <Input
+          id="remark-attachment"
+          type="file"
+          accept="image/jpeg,image/png,application/pdf"
+          onChange={handleAttachmentChange}
+        />
+        {attachmentPreview ? (
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">{savedAttachment ? "Replacing with:" : "Preview:"}</p>
+            <FilePreview src={attachmentPreview} className="max-w-xs" />
+          </div>
+        ) : savedAttachment ? (
+          <p className="text-xs text-muted-foreground">Choose a file to replace the attachment above.</p>
+        ) : null}
       </div>
 
       {errors.length > 0 && (
@@ -310,7 +439,7 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
 
       <div className="flex flex-wrap justify-end gap-2">
         {onCancel && (
-          <Button type="button" variant="outline" onClick={onCancel} disabled={Boolean(submitting)}>Cancel</Button>
+          <Button type="button" variant="outline" onClick={handleCancelClick} disabled={Boolean(submitting)}>Cancel</Button>
         )}
         {mode !== "correct" && (
           <Button type="button" variant="outline" onClick={() => handleSubmit("draft")} disabled={Boolean(submitting)}>
@@ -323,6 +452,28 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
           {mode === "correct" ? "Submit Correction" : "Publish"}
         </Button>
       </div>
+
+      <AlertDialog open={confirmDeleteOpen} onOpenChange={(open) => { if (!deleting) setConfirmDeleteOpen(open); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this draft?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this draft? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Keep Editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleConfirmDelete(); }}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Delete Draft
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

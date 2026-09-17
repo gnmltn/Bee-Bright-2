@@ -171,6 +171,60 @@ test('suspendDates: marks a session unresolved when no free date is found within
   } finally { restore(); Suspension.create = origSuspensionCreate; }
 });
 
+test('suspendDates: skips a candidate that still falls inside a multi-week suspended range', async () => {
+  const schedule = makeOneOnOneSchedule();
+  const { restore } = stubCommon();
+  const origScheduleFindRange = Schedule.find;
+  const origSuspensionCreate = Suspension.create;
+  Schedule.find = (query) => {
+    if (query && query.date && query.date.$gte) return mockQuery([schedule]);
+    return origScheduleFindRange(query);
+  };
+  let createdSuspension = null;
+  Suspension.create = async (data) => { createdSuspension = data; return { ...data, _id: 'susp-4' }; };
+  try {
+    const res = mockRes();
+    // Suspension spans two weeks (2026-09-14 to 2026-09-27). The naive +7 candidate
+    // (2026-09-21) is still inside that window and must be rejected even though
+    // nothing else conflicts with it — otherwise the session would be "rescheduled"
+    // onto a date the center is still closed for.
+    await suspendDates({ user: { id: 'admin-1', role: 'admin' }, body: { startDate: '2026-09-14', endDate: '2026-09-27', reason: 'Extended closure' } }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.equal(schedule.date.toISOString(), PLUS_14.toISOString(), 'must skip +7 since it still falls inside the suspended window');
+    assert.equal(createdSuspension.movedCount, 1);
+    assert.equal(createdSuspension.unresolvedCount, 0);
+  } finally { restore(); Suspension.create = origSuspensionCreate; }
+});
+
+test('suspendDates: isolates a per-schedule failure so the rest of the batch still succeeds', async () => {
+  const goodSchedule = makeOneOnOneSchedule({ _id: 'sched-good' });
+  const badSchedule = makeOneOnOneSchedule({
+    _id: 'sched-bad',
+    student: { _id: 'student-2', email: 'student2@example.com', firstName: 'Bad', lastName: 'Case' },
+  });
+  badSchedule.save = async () => { throw new Error('Simulated DB write failure'); };
+  const { restore } = stubCommon();
+  const origScheduleFindRange = Schedule.find;
+  const origSuspensionCreate = Suspension.create;
+  Schedule.find = (query) => {
+    if (query && query.date && query.date.$gte) return mockQuery([goodSchedule, badSchedule]);
+    return origScheduleFindRange(query);
+  };
+  let createdSuspension = null;
+  Suspension.create = async (data) => { createdSuspension = data; return { ...data, _id: 'susp-5' }; };
+  try {
+    const res = mockRes();
+    await suspendDates({ user: { id: 'admin-1', role: 'admin' }, body: { startDate: '2026-09-14', reason: 'Typhoon' } }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body), 'one bad schedule must not fail the whole request');
+    assert.equal(goodSchedule.date.toISOString(), PLUS_7.toISOString());
+    assert.equal(createdSuspension.movedCount, 1);
+    assert.equal(createdSuspension.unresolvedCount, 1);
+    const badDetail = createdSuspension.details.find((d) => d.schedule === 'sched-bad');
+    assert.equal(badDetail.status, 'unresolved');
+    assert.match(badDetail.error, /Simulated DB write failure/);
+  } finally { restore(); Suspension.create = origSuspensionCreate; }
+});
+
 test('emergencyReschedule: succeeds for a one-on-one session with a valid reason', async () => {
   const schedule = makeOneOnOneSchedule();
   const { restore } = stubCommon();
@@ -181,10 +235,11 @@ test('emergencyReschedule: succeeds for a one-on-one session with a valid reason
   EmergencyReschedule.create = async (data) => { createdRecord = data; return { ...data, _id: 'er-1' }; };
   try {
     const res = mockRes();
+    // Original session is Mon 2026-09-14; 2026-09-22 (Tue) is in the following week.
     await emergencyReschedule({
       user: { id: 'admin-1', role: 'admin' },
       params: { id: 'sched-1' },
-      body: { newDate: '2026-09-19', newStartTime: '10:00', newEndTime: '11:00', reason: 'Family emergency' },
+      body: { newDate: '2026-09-22', newStartTime: '10:00', newEndTime: '11:00', reason: 'Family emergency' },
     }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(res._body.success, true);
@@ -192,6 +247,24 @@ test('emergencyReschedule: succeeds for a one-on-one session with a valid reason
     assert.equal(schedule.endTime, '11:00');
     assert.equal(createdRecord.reason, 'Family emergency');
   } finally { restore(); Schedule.findById = origScheduleFindById; EmergencyReschedule.create = origRecordCreate; }
+});
+
+test('emergencyReschedule: rejected when the chosen date is still within the current week', async () => {
+  const schedule = makeOneOnOneSchedule();
+  const { restore } = stubCommon();
+  const origScheduleFindById = Schedule.findById;
+  Schedule.findById = () => mockQuery(schedule);
+  try {
+    const res = mockRes();
+    // Original session is Mon 2026-09-14; 2026-09-18 (Fri) is the same week.
+    await emergencyReschedule({
+      user: { id: 'admin-1', role: 'admin' },
+      params: { id: 'sched-1' },
+      body: { newDate: '2026-09-18', newStartTime: '10:00', newEndTime: '11:00', reason: 'Family emergency' },
+    }, res);
+    assert.equal(res._status, 400);
+    assert.match(res._body.message, /next week or later/i);
+  } finally { restore(); Schedule.findById = origScheduleFindById; }
 });
 
 test('emergencyReschedule: rejected for a Playgroup session (shared by multiple children)', async () => {
@@ -224,7 +297,7 @@ test('emergencyReschedule: rejected without a reason', async () => {
 
 test('emergencyReschedule: rejected when the new slot conflicts for the tutor', async () => {
   const schedule = makeOneOnOneSchedule();
-  const targetDate = new Date('2026-09-19T00:00:00.000Z');
+  const targetDate = new Date('2026-09-22T00:00:00.000Z');
   const { restore } = stubCommon({ tutorConflictDates: [targetDate] });
   const origScheduleFindById = Schedule.findById;
   Schedule.findById = () => mockQuery(schedule);
@@ -233,7 +306,7 @@ test('emergencyReschedule: rejected when the new slot conflicts for the tutor', 
     await emergencyReschedule({
       user: { id: 'admin-1', role: 'admin' },
       params: { id: 'sched-1' },
-      body: { newDate: '2026-09-19', newStartTime: '08:00', newEndTime: '09:00', reason: 'Family emergency' },
+      body: { newDate: '2026-09-22', newStartTime: '08:00', newEndTime: '09:00', reason: 'Family emergency' },
     }, res);
     assert.equal(res._status, 400);
     assert.match(res._body.message, /already has another session/i);

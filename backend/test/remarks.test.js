@@ -16,8 +16,11 @@ const Enrollment = require('../models/Enrollment');
 const Remark = require('../models/Remark');
 const {
   createOrSaveRemark,
+  updateDraftRemark,
+  deleteDraftRemark,
   correctPublishedRemark,
   listMyChildProgress,
+  listPendingReview,
   reviewRemark,
   getRemarkAttachment,
 } = require('../controllers/remarkController');
@@ -91,6 +94,12 @@ function makeFakeRemarkStore() {
       if (doc) Object.assign(doc, update);
       return { acknowledged: true };
     },
+    async deleteOne(filter) {
+      const idx = docs.findIndex((d) => matchesFilter(d, filter));
+      if (idx === -1) return { acknowledged: true, deletedCount: 0 };
+      docs.splice(idx, 1);
+      return { acknowledged: true, deletedCount: 1 };
+    },
   };
 }
 
@@ -117,10 +126,12 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
   const origRemarkFindOne = Remark.findOne;
   const origRemarkFind = Remark.find;
   const origRemarkUpdateOne = Remark.updateOne;
+  const origRemarkDeleteOne = Remark.deleteOne;
   const origFsWriteFileSync = fs.writeFileSync;
   const origFsExistsSync = fs.existsSync;
   const origFsMkdirSync = fs.mkdirSync;
   const origFsCreateReadStream = fs.createReadStream;
+  const origFsUnlinkSync = fs.unlinkSync;
 
   let capturedExistsQuery = null;
   let capturedFindQuery = null;
@@ -138,10 +149,12 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
   Remark.findOne = store.findOne;
   Remark.find = store.find;
   Remark.updateOne = store.updateOne;
+  Remark.deleteOne = store.deleteOne;
   fs.writeFileSync = () => {};
   fs.existsSync = () => true;
   fs.mkdirSync = () => {};
   fs.createReadStream = () => ({ pipe: () => {} });
+  fs.unlinkSync = () => {};
 
   return {
     store,
@@ -157,10 +170,12 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
       Remark.findOne = origRemarkFindOne;
       Remark.find = origRemarkFind;
       Remark.updateOne = origRemarkUpdateOne;
+      Remark.deleteOne = origRemarkDeleteOne;
       fs.writeFileSync = origFsWriteFileSync;
       fs.existsSync = origFsExistsSync;
       fs.mkdirSync = origFsMkdirSync;
       fs.createReadStream = origFsCreateReadStream;
+      fs.unlinkSync = origFsUnlinkSync;
     },
   };
 }
@@ -209,22 +224,29 @@ test('createOrSaveRemark: Toddler template requires all four 1-3 star ratings to
   } finally { restore(); }
 });
 
-test('createOrSaveRemark: publishing with an attachment but no media consent is rejected', async () => {
-  const { restore } = stubModels({ consents: [] });
-  try {
-    const res = mockRes();
-    await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ attachmentDataUrl: TINY_PNG_DATA_URL }) }, res);
-    assert.equal(res._status, 400);
-    assert.match(res._body.errors.join(' '), /consent/i);
-  } finally { restore(); }
-});
-
-test('createOrSaveRemark: publishing with an attachment and valid consent goes to Pending Admin Review, not Published', async () => {
+// Spec v3.1 (2026-09-17): media consent is no longer a tutor-facing blocker anywhere —
+// not at upload, not at publish. A remark with an attachment always routes to Pending
+// Admin Review on Publish (the pre-existing Option A gate), regardless of whether the
+// student's guardian has consent on record. Consent becomes admin-facing information
+// at review time instead (see listPendingReview tests below).
+test('createOrSaveRemark: publishing with an attachment goes to Pending Admin Review regardless of consent — consent ON record', async () => {
   const { restore } = stubModels({ consents: [{ name: 'media_consent', version: '1.0', acceptedAt: new Date() }] });
   try {
     const res = mockRes();
     await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ attachmentDataUrl: TINY_PNG_DATA_URL }) }, res);
     assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.equal(res._body.remark.status, 'pending_admin_review');
+    assert.equal(res._body.remark.publishedAt, null);
+    assert.ok(res._body.remark.attachment);
+  } finally { restore(); }
+});
+
+test('createOrSaveRemark: publishing with an attachment goes to Pending Admin Review regardless of consent — consent NOT on record', async () => {
+  const { restore } = stubModels({ consents: [] });
+  try {
+    const res = mockRes();
+    await createOrSaveRemark({ user: TUTOR_A, body: baseBody({ attachmentDataUrl: TINY_PNG_DATA_URL }) }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body), 'the tutor must never be blocked from publishing for missing consent');
     assert.equal(res._body.remark.status, 'pending_admin_review');
     assert.equal(res._body.remark.publishedAt, null);
     assert.ok(res._body.remark.attachment);
@@ -343,6 +365,27 @@ test('correctPublishedRemark: a correction with a new attachment goes to Pending
   } finally { restore(); }
 });
 
+test('correctPublishedRemark: a correction with a new attachment succeeds even with NO consent on record', async () => {
+  const { restore, store } = stubModels({ consents: [] });
+  try {
+    const original = await store.create({
+      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress',
+      status: 'published', isCurrentVersion: true, publishedAt: new Date(),
+      date: new Date(), activities: ['Reading'], remarkBullets: ['Good progress.'], nextFocus: 'Keep going.',
+    });
+
+    const res = mockRes();
+    await correctPublishedRemark({
+      user: TUTOR_A,
+      params: { id: original._id },
+      body: { correctionReason: 'Added the worksheet photo.', attachmentDataUrl: TINY_PNG_DATA_URL },
+    }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body), 'a tutor must never be blocked from correcting-with-an-attachment for missing consent');
+    assert.equal(res._body.remark.status, 'pending_admin_review');
+    assert.ok(res._body.remark.attachment?.path);
+  } finally { restore(); }
+});
+
 test('correctPublishedRemark: a correction with no attachment change publishes immediately and flips isCurrentVersion', async () => {
   const { restore, store } = stubModels();
   try {
@@ -397,4 +440,271 @@ test('getRemarkAttachment: rejects a caller who is neither the assigned tutor, t
     await getRemarkAttachment({ user: TUTOR_B, params: { id: remark._id } }, res);
     assert.equal(res._status, 403);
   } finally { restore(); Enrollment.exists = origEnrollmentExists; }
+});
+
+// ─── Save Draft persistence regression coverage ────────────────────────────────
+// Bug report: "fill in fields, Save Draft, reopen via Continue editing -> form is
+// blank." Rigorous live testing (real HTTP + real DB + a full browser E2E run) could
+// not reproduce this against the current code — these tests lock in that every field
+// really does round-trip through both draft-save paths, so a future regression here
+// gets caught immediately rather than requiring another full investigation.
+
+test('createOrSaveRemark: Save Draft persists every entered field exactly (create path)', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const res = mockRes();
+    await createOrSaveRemark({
+      user: TUTOR_A,
+      body: baseBody({
+        action: 'draft',
+        activities: ['Reading comprehension worksheet', 'Times tables drill'],
+        remarkBullets: ['The student showed improvement in reading fluency.'],
+        nextFocus: 'Continue phonics review.',
+        parentSupportSuggestion: 'Practice flashcards 10 minutes nightly.',
+      }),
+    }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    const saved = res._body.remark;
+    assert.deepEqual(saved.activities, ['Reading comprehension worksheet', 'Times tables drill']);
+    assert.deepEqual(saved.remarkBullets, ['The student showed improvement in reading fluency.']);
+    assert.equal(saved.nextFocus, 'Continue phonics review.');
+    assert.equal(saved.parentSupportSuggestion, 'Practice flashcards 10 minutes nightly.');
+
+    // What "Continue editing" actually reads (listMyRemarks returns the whole doc,
+    // no field selection) — confirm the persisted doc itself carries the same values.
+    const persisted = store.docs.find((d) => d._id === saved._id);
+    assert.deepEqual(persisted.activities, saved.activities);
+    assert.deepEqual(persisted.remarkBullets, saved.remarkBullets);
+    assert.equal(persisted.nextFocus, saved.nextFocus);
+  } finally { restore(); }
+});
+
+test('updateDraftRemark: Save Draft persists every entered field exactly (re-save path)', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const draft = await store.create({
+      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress',
+      status: 'draft', activities: [], remarkBullets: [], nextFocus: '',
+    });
+    const res = mockRes();
+    await updateDraftRemark({
+      user: TUTOR_A,
+      params: { id: draft._id },
+      body: {
+        action: 'draft',
+        date: '2026-09-14',
+        activities: ['Reading comprehension worksheet'],
+        remarkBullets: ['Needs more practice with carrying in addition.'],
+        nextFocus: 'Continue phonics review and start double-digit addition.',
+      },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.deepEqual(res._body.remark.activities, ['Reading comprehension worksheet']);
+    assert.deepEqual(res._body.remark.remarkBullets, ['Needs more practice with carrying in addition.']);
+    assert.equal(res._body.remark.nextFocus, 'Continue phonics review and start double-digit addition.');
+
+    const persisted = store.docs.find((d) => d._id === draft._id);
+    assert.deepEqual(persisted.activities, ['Reading comprehension worksheet']);
+    assert.equal(persisted.nextFocus, 'Continue phonics review and start double-digit addition.');
+  } finally { restore(); }
+});
+
+// Bug report #2 (same day): "Activities and Tutor remark bullets specifically come back
+// empty after Save Draft + Continue Editing, across all three templates" — also not
+// reproducible live (browser E2E with multiple chips, all 3 templates, a full page
+// reload, and a second edit-resave cycle all round-tripped correctly), but these three
+// templates share these two fields and hadn't each been exercised with MULTIPLE items
+// in the permanent suite before, so lock that in per template.
+for (const { subject, programCode } of [
+  { subject: SUBJECT_TPG101, programCode: 'TPG101' },
+  { subject: SUBJECT_ACT102, programCode: 'ACT102' },
+  { subject: { _id: 'subj-exp106', name: 'Examination Preparation', code: 'EXP106' }, programCode: 'EXP106' },
+]) {
+  test(`createOrSaveRemark: multi-item Activities/remarkBullets persist for ${programCode}`, async () => {
+    const { restore } = stubModels({ subject });
+    try {
+      const res = mockRes();
+      await createOrSaveRemark({
+        user: TUTOR_A,
+        body: baseBody({
+          programCode,
+          action: 'draft',
+          activities: ['Activity one', 'Activity two', 'Activity three'],
+          remarkBullets: ['Bullet one', 'Bullet two'],
+        }),
+      }, res);
+      assert.equal(res._status, 201, JSON.stringify(res._body));
+      assert.deepEqual(res._body.remark.activities, ['Activity one', 'Activity two', 'Activity three']);
+      assert.deepEqual(res._body.remark.remarkBullets, ['Bullet one', 'Bullet two']);
+    } finally { restore(); }
+  });
+}
+
+// ─── Attachments on a DRAFT ───────────────────────────────────────────────────
+// Both draft paths used to `return` before any attachment handling, so a file chosen
+// on a brand-new remark (or added to an existing draft) was silently dropped and only
+// ever stored when publishing. Attachments must be storable from the very first save.
+
+const CONSENT_OK = [{ name: 'media_consent', version: '1.0', acceptedAt: new Date() }];
+
+test('createOrSaveRemark: Save Draft stores an attachment on a brand-new remark — consent ON record', async () => {
+  const { restore } = stubModels({ consents: CONSENT_OK });
+  try {
+    const res = mockRes();
+    await createOrSaveRemark({
+      user: TUTOR_A,
+      body: baseBody({ action: 'draft', attachmentDataUrl: TINY_PNG_DATA_URL, attachmentFileName: 'worksheet.png' }),
+    }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.equal(res._body.remark.status, 'draft', 'an attachment must not push a draft into review on its own');
+    assert.ok(res._body.remark.attachment?.path, 'the draft must carry a stored attachment path');
+    assert.equal(res._body.remark.attachment.fileName, 'worksheet.png');
+  } finally { restore(); }
+});
+
+test('createOrSaveRemark: Save Draft stores an attachment on a brand-new remark even with NO consent on record', async () => {
+  const { restore } = stubModels({ consents: [] });
+  try {
+    const res = mockRes();
+    await createOrSaveRemark({
+      user: TUTOR_A,
+      body: baseBody({ action: 'draft', attachmentDataUrl: TINY_PNG_DATA_URL, attachmentFileName: 'worksheet.png' }),
+    }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body), 'a tutor must never be blocked from attaching a file for missing consent');
+    assert.equal(res._body.remark.status, 'draft');
+    assert.ok(res._body.remark.attachment?.path, 'the draft must carry a stored attachment path');
+    assert.equal(res._body.remark.attachment.fileName, 'worksheet.png');
+  } finally { restore(); }
+});
+
+test('updateDraftRemark: Save Draft stores a newly chosen attachment on an existing draft', async () => {
+  const { restore, store } = stubModels({ consents: CONSENT_OK });
+  try {
+    const draft = await store.create({
+      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'draft',
+    });
+    const res = mockRes();
+    await updateDraftRemark({
+      user: TUTOR_A,
+      params: { id: draft._id },
+      body: { action: 'draft', attachmentDataUrl: TINY_PNG_DATA_URL, attachmentFileName: 'worksheet.png' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.remark.status, 'draft');
+    assert.ok(res._body.remark.attachment?.path);
+    assert.equal(res._body.remark.attachment.fileName, 'worksheet.png');
+  } finally { restore(); }
+});
+
+test('updateDraftRemark: stores a newly chosen attachment on an existing draft even with NO consent on record', async () => {
+  const { restore, store } = stubModels({ consents: [] });
+  try {
+    const draft = await store.create({
+      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'draft',
+    });
+    const res = mockRes();
+    await updateDraftRemark({
+      user: TUTOR_A,
+      params: { id: draft._id },
+      body: { action: 'draft', attachmentDataUrl: TINY_PNG_DATA_URL, attachmentFileName: 'worksheet.png' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body), 'a tutor must never be blocked from attaching a file for missing consent');
+    assert.equal(res._body.remark.status, 'draft');
+    assert.ok(res._body.remark.attachment?.path);
+    assert.equal(res._body.remark.attachment.fileName, 'worksheet.png');
+  } finally { restore(); }
+});
+
+test('updateDraftRemark: re-saving a draft without choosing a new file keeps the existing attachment', async () => {
+  const { restore, store } = stubModels({ consents: CONSENT_OK });
+  try {
+    const draft = await store.create({
+      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'draft',
+      attachment: { path: 'remark-existing.png', fileName: 'already-there.png', mimetype: 'image/png', size: 123 },
+    });
+    const res = mockRes();
+    await updateDraftRemark({
+      user: TUTOR_A,
+      params: { id: draft._id },
+      body: { action: 'draft', nextFocus: 'Edited text, no new file.' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.remark.attachment?.fileName, 'already-there.png', 'the stored attachment must survive a plain re-save');
+  } finally { restore(); }
+});
+
+// ─── listPendingReview: consent surfaced to the admin (Spec v3.1) ─────────────
+// Consent is no longer checked anywhere on the tutor side — it becomes information the
+// admin sees here, together with the attachment itself, to decide Approve or Reject.
+
+test('listPendingReview: includes studentHasMediaConsent per remark, and never leaks the raw consents array', async () => {
+  const { restore, store } = stubModels();
+  try {
+    await store.create({
+      student: { _id: 'student-1', firstName: 'Ana', lastName: 'Cruz', consents: [{ name: 'media_consent', version: '1.0', acceptedAt: new Date() }] },
+      tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review',
+    });
+    await store.create({
+      student: { _id: 'student-2', firstName: 'Ben', lastName: 'Dizon', consents: [] },
+      tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review',
+    });
+
+    const res = mockRes();
+    await listPendingReview({ user: ADMIN }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+
+    const withConsent = res._body.remarks.find((r) => r.student._id === 'student-1');
+    const withoutConsent = res._body.remarks.find((r) => r.student._id === 'student-2');
+    assert.equal(withConsent.studentHasMediaConsent, true);
+    assert.equal(withoutConsent.studentHasMediaConsent, false);
+    assert.equal(withConsent.student.consents, undefined, 'the raw consents array must not be sent to the client');
+    assert.equal(withoutConsent.student.consents, undefined);
+  } finally { restore(); }
+});
+
+// ─── deleteDraftRemark (Cancel -> Delete Draft feature) ────────────────────────
+
+test('deleteDraftRemark: tutor can permanently delete their own draft', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const draft = await store.create({ student: 'student-1', tutor: TUTOR_A.id, status: 'draft' });
+    const res = mockRes();
+    await deleteDraftRemark({ user: TUTOR_A, params: { id: draft._id } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(store.docs.find((d) => d._id === draft._id), undefined, 'the draft must be gone from the store');
+  } finally { restore(); }
+});
+
+test('deleteDraftRemark: rejects deleting a published remark (must use correction, not delete)', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const published = await store.create({ student: 'student-1', tutor: TUTOR_A.id, status: 'published', isCurrentVersion: true });
+    const res = mockRes();
+    await deleteDraftRemark({ user: TUTOR_A, params: { id: published._id } }, res);
+    assert.equal(res._status, 400);
+    assert.match(res._body.message, /must be corrected, not deleted/i);
+    assert.ok(store.docs.find((d) => d._id === published._id), 'the published remark must NOT be deleted');
+  } finally { restore(); }
+});
+
+test('deleteDraftRemark: rejects a tutor deleting a DIFFERENT tutor\'s draft', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const draft = await store.create({ student: 'student-1', tutor: TUTOR_A.id, status: 'draft' });
+    const res = mockRes();
+    await deleteDraftRemark({ user: TUTOR_B, params: { id: draft._id } }, res);
+    assert.equal(res._status, 404);
+    assert.ok(store.docs.find((d) => d._id === draft._id), 'another tutor\'s draft must survive untouched');
+  } finally { restore(); }
+});
+
+test('deleteDraftRemark: rejects a non-tutor caller', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const draft = await store.create({ student: 'student-1', tutor: TUTOR_A.id, status: 'draft' });
+    const res = mockRes();
+    await deleteDraftRemark({ user: ADMIN, params: { id: draft._id } }, res);
+    assert.equal(res._status, 403);
+    assert.ok(store.docs.find((d) => d._id === draft._id));
+  } finally { restore(); }
 });

@@ -3,7 +3,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const Remark = require('../models/Remark');
 const Schedule = require('../models/Schedule');
-const User = require('../models/User');
 const { logAudit } = require('../utils/auditService');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
 const { resolveProgramCode } = require('../utils/schedulingPolicy');
@@ -28,20 +27,6 @@ const SCORE_FORMAT = /^\d+(\.\d+)?\s*\/\s*\d+(\.\d+)?$|^\d+(\.\d+)?%$/;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Group-aware assignment check — covers both 1-on-1 (tutor/student) and Playgroup
- * group sessions (tutors[]/students[]), unlike gradeController's narrower version.
- * Program-agnostic — use tutorHandlesStudentForProgram when the caller has already
- * committed to a specific program (i.e. everywhere remark creation/correction happens). */
-async function tutorHandlesStudent(tutorId, studentId) {
-  const found = await Schedule.exists({
-    $and: [
-      { $or: [{ tutor: tutorId }, { tutors: tutorId }] },
-      { $or: [{ student: studentId }, { students: studentId }] },
-    ],
-  });
-  return Boolean(found);
-}
-
 // Student Remarks Spec v3 — a tutor may handle the same student across more than one
 // program (e.g. both Academic Tutorial and Examination Preparedness), so "is this tutor
 // assigned to this student" is not enough on its own: the assignment must be checked at
@@ -59,11 +44,6 @@ async function tutorHandlesStudentForProgram(tutorId, studentId, programCode) {
     .select('subject')
     .lean();
   return schedules.some((s) => resolveProgramCode(s.subject) === programCode);
-}
-
-async function hasMediaConsent(studentId) {
-  const student = await User.findById(studentId).select('consents').lean();
-  return Boolean(student?.consents?.some((c) => c.name === 'media_consent'));
 }
 
 function normalizeStringArray(value) {
@@ -147,24 +127,6 @@ async function populateRemark(id) {
     .lean();
 }
 
-// @desc    Whether this tutor's assigned student has media/attachment consent on file
-// @route   GET /api/remarks/student-consent/:studentId
-// @access  Private (Tutor)
-const getStudentMediaConsentStatus = async (req, res) => {
-  try {
-    if (req.user.role !== 'tutor') {
-      return res.status(403).json({ success: false, message: 'Only tutors can check this' });
-    }
-    const handles = await tutorHandlesStudent(req.user._id, req.params.studentId);
-    if (!handles) {
-      return res.status(403).json({ success: false, message: 'You can only check students assigned to you' });
-    }
-    const consentOk = await hasMediaConsent(req.params.studentId);
-    res.status(200).json({ success: true, hasMediaConsent: consentOk });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message || 'Failed to check consent status' });
-  }
-};
 
 // ─── A/B/C: Tutor creates, saves a draft, or publishes a remark ────────────────
 
@@ -216,31 +178,47 @@ const createOrSaveRemark = async (req, res) => {
       examInfo: normalizeExamInfo(examInfo),
     };
 
-    // Save Draft: ownership/assignment/program validated above only — spec B.1.
+    // Resolve the attachment BEFORE the draft/publish split. Save Draft used to return
+    // early here, which silently dropped a file the tutor had chosen on a brand-new
+    // remark — an attachment has to be storable from the very first save, not only when
+    // publishing. Media consent is deliberately NOT checked here (Spec v3.1): a tutor is
+    // never blocked from attaching a file or publishing because of missing consent —
+    // consent is admin-facing information used at the Pending Admin Review step instead
+    // (see listPendingReview / reviewRemark below). Only file validity (type/size) can
+    // reject an attachment now.
+    let attachment = null;
+    const attachmentErrors = [];
+    if (attachmentDataUrl) {
+      try {
+        attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
+      } catch (uploadErr) {
+        attachmentErrors.push(uploadErr.message);
+      }
+    }
+
+    // Save Draft: ownership/assignment/program validated above only — spec B.1. The
+    // attachment is the one exception: a rejected file is reported rather than quietly
+    // saved-without-it, and nothing is written so the tutor can fix it and re-save.
     if (action === 'draft') {
-      const remark = await Remark.create({ ...doc, status: 'draft' });
+      if (attachmentErrors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'The attachment could not be saved.',
+          errors: attachmentErrors,
+        });
+      }
+      const remark = await Remark.create({ ...doc, attachment: attachment || undefined, status: 'draft' });
       return res.status(201).json({ success: true, message: 'Draft saved.', remark: await populateRemark(remark._id) });
     }
 
     // Publish: full validation — spec C.2-C.3. On failure the record is kept/created as
     // Draft (never lost) and the tutor edits it further via PUT /api/remarks/:id.
-    const errors = validateForPublish(templateType, doc);
-    let attachment = null;
-    if (attachmentDataUrl) {
-      const consentOk = await hasMediaConsent(studentId);
-      if (!consentOk) {
-        errors.push('Attachment consent is required for this student before an attachment can be added.');
-      } else {
-        try {
-          attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
-        } catch (uploadErr) {
-          errors.push(uploadErr.message);
-        }
-      }
-    }
+    const errors = [...validateForPublish(templateType, doc), ...attachmentErrors];
 
     if (errors.length > 0) {
-      const draft = await Remark.create({ ...doc, status: 'draft' });
+      // Keep an accepted attachment on the fallback draft too — otherwise the file is
+      // written to disk but referenced by nothing, and the tutor has to re-pick it.
+      const draft = await Remark.create({ ...doc, attachment: attachment || undefined, status: 'draft' });
       return res.status(400).json({
         success: false,
         message: 'Please correct the highlighted fields before publishing.',
@@ -309,27 +287,38 @@ const updateDraftRemark = async (req, res) => {
     remark.parentSupportSuggestion = String(parentSupportSuggestion || '').trim();
     remark.examInfo = normalizeExamInfo(examInfo);
 
+    // Resolved before the draft/publish split for the same reason as in
+    // createOrSaveRemark: Save Draft used to return early and drop the chosen file.
+    // No new file in the payload means "keep whatever is already attached". Consent is
+    // not checked here — see the note in createOrSaveRemark.
+    let attachment = remark.attachment?.path ? remark.attachment : null;
+    const attachmentErrors = [];
+    if (attachmentDataUrl) {
+      try {
+        attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
+      } catch (uploadErr) {
+        attachmentErrors.push(uploadErr.message);
+      }
+    }
+
     if (action === 'draft') {
+      if (attachmentErrors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'The attachment could not be saved.',
+          errors: attachmentErrors,
+        });
+      }
+      remark.attachment = attachment || undefined;
       await remark.save();
       return res.status(200).json({ success: true, message: 'Draft saved.', remark: await populateRemark(remark._id) });
     }
 
-    const errors = validateForPublish(remark.templateType, remark.toObject());
-    let attachment = remark.attachment?.path ? remark.attachment : null;
-    if (attachmentDataUrl) {
-      const consentOk = await hasMediaConsent(remark.student);
-      if (!consentOk) {
-        errors.push('Attachment consent is required for this student before an attachment can be added.');
-      } else {
-        try {
-          attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
-        } catch (uploadErr) {
-          errors.push(uploadErr.message);
-        }
-      }
-    }
+    const errors = [...validateForPublish(remark.templateType, remark.toObject()), ...attachmentErrors];
 
     if (errors.length > 0) {
+      // Keep an accepted attachment on the still-draft record, same as the create path.
+      if (attachmentErrors.length === 0) remark.attachment = attachment || undefined;
       await remark.save();
       return res.status(400).json({
         success: false,
@@ -361,6 +350,52 @@ const updateDraftRemark = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to update remark' });
+  }
+};
+
+// @desc    Permanently delete a draft — the tutor's own "Cancel" → "Delete Draft" action.
+//          Drafts only: a draft is always an original (never a correction-in-progress —
+//          correctPublishedRemark has no draft branch), so there's never a correction
+//          chain referencing it and nothing else to keep consistent.
+// @route   DELETE /api/remarks/:id
+// @access  Private (Tutor, own draft only)
+const deleteDraftRemark = async (req, res) => {
+  try {
+    if (req.user.role !== 'tutor') {
+      return res.status(403).json({ success: false, message: 'Only tutors can delete their remarks' });
+    }
+    const remark = await Remark.findOne({ _id: req.params.id, tutor: req.user._id });
+    if (!remark) {
+      return res.status(404).json({ success: false, message: 'Remark not found or you cannot delete it' });
+    }
+    if (remark.status !== 'draft') {
+      return res.status(400).json({ success: false, message: 'Only drafts can be deleted. A published remark must be corrected, not deleted.' });
+    }
+
+    if (remark.attachment?.path) {
+      try {
+        const filePath = path.join(PRIVATE_UPLOADS_DIR, path.basename(remark.attachment.path));
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      } catch {
+        // Best-effort cleanup — a missing/locked file must not block the delete.
+      }
+    }
+
+    await Remark.deleteOne({ _id: remark._id });
+
+    logAudit({
+      req,
+      userId: req.user._id,
+      action: 'Delete Draft Remark',
+      module: 'Academic',
+      status: 'SUCCESS',
+      description: 'Tutor deleted a draft remark',
+      metadata: { remarkId: String(remark._id), studentId: String(remark.student) },
+    }).catch(() => {});
+
+    res.status(200).json({ success: true, message: 'Draft deleted.' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to delete draft' });
   }
 };
 
@@ -410,15 +445,10 @@ const correctPublishedRemark = async (req, res) => {
     const attachmentChanged = Boolean(attachmentDataUrl);
     let attachment = original.attachment?.path ? original.attachment : null;
     if (attachmentChanged) {
-      const consentOk = await hasMediaConsent(original.student);
-      if (!consentOk) {
-        errors.push('Attachment consent is required for this student before an attachment can be added.');
-      } else {
-        try {
-          attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
-        } catch (uploadErr) {
-          errors.push(uploadErr.message);
-        }
+      try {
+        attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
+      } catch (uploadErr) {
+        errors.push(uploadErr.message);
       }
     }
 
@@ -538,11 +568,23 @@ const listMyChildProgress = async (req, res) => {
 const listPendingReview = async (req, res) => {
   try {
     const remarks = await Remark.find({ status: 'pending_admin_review' })
-      .populate('student', 'firstName lastName middleName')
+      .populate('student', 'firstName lastName middleName consents')
       .populate('tutor', 'firstName lastName')
       .sort({ createdAt: 1 })
       .lean();
-    res.status(200).json({ success: true, remarks });
+    // Spec v3.1 — consent is no longer checked before a tutor can attach/publish; it's
+    // now information the admin uses here, together with the attachment content itself,
+    // to decide Approve or Reject. Compute the boolean and strip the raw consents array
+    // back off the populated student before sending.
+    const withConsent = remarks.map((r) => {
+      const hasConsent = Boolean(r.student?.consents?.some((c) => c.name === 'media_consent'));
+      if (r.student) {
+        const { consents, ...studentRest } = r.student;
+        return { ...r, student: studentRest, studentHasMediaConsent: hasConsent };
+      }
+      return { ...r, studentHasMediaConsent: hasConsent };
+    });
+    res.status(200).json({ success: true, remarks: withConsent });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to load the review queue' });
   }
@@ -671,12 +713,10 @@ const getRemarkAttachment = async (req, res) => {
 };
 
 module.exports = {
-  tutorHandlesStudent,
   tutorHandlesStudentForProgram,
-  hasMediaConsent,
-  getStudentMediaConsentStatus,
   createOrSaveRemark,
   updateDraftRemark,
+  deleteDraftRemark,
   correctPublishedRemark,
   listMyRemarks,
   listMyChildProgress,

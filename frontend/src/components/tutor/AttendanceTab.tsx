@@ -2,6 +2,16 @@ import { useMemo, useState, useCallback } from "react";
 import { CheckCircle2, XCircle, Users, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProgressBar } from "@/components/ui/progress-bar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { scheduleService } from "@/services/api";
 
@@ -60,6 +70,7 @@ export interface AttendanceTabProps {
 export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabProps) {
   const [view, setView] = useState<"today" | "history" | "summary">("today");
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<{ session: SessionItem; status: "present" | "absent"; previousStatus: "present" | "absent" } | null>(null);
 
   const todayStr = useMemo(() => {
     const t = new Date();
@@ -125,7 +136,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
     return Array.from(byStudent.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [uniqueSessions, todayStr]);
 
-  const markAttendance = useCallback((session: SessionItem, status: "present" | "absent") => {
+  const submitAttendance = useCallback((session: SessionItem, status: "present" | "absent") => {
     const sessionDay = dateOnly(session.date);
     if (sessionDay > todayStr) {
       toast.error("You can only mark attendance for today or past sessions.");
@@ -144,13 +155,32 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
         toast.error(msg);
       })
       .finally(() => setMarkingId(null));
-  }, [onRefresh]);
+  }, [onRefresh, todayStr]);
 
   const getStatus = (s: SessionItem): AttendanceStatus => {
     const v = s.attendanceStatus as string | undefined;
     if (v === "present" || v === "absent") return v;
     return "unmarked";
   };
+
+  // Clicking the already-marked status is a harmless no-op. Switching between Present
+  // and Absent once a status is already on record requires confirmation first, so a
+  // stray click can't silently flip a tutor's earlier attendance call.
+  const handleMarkClick = useCallback((session: SessionItem, status: "present" | "absent") => {
+    const current = getStatus(session);
+    if (current === status) return;
+    if (current === "unmarked") {
+      submitAttendance(session, status);
+      return;
+    }
+    setPendingSwitch({ session, status, previousStatus: current });
+  }, [submitAttendance]);
+
+  const confirmSwitch = useCallback(() => {
+    if (!pendingSwitch) return;
+    submitAttendance(pendingSwitch.session, pendingSwitch.status);
+    setPendingSwitch(null);
+  }, [pendingSwitch, submitAttendance]);
 
   const renderSessionRow = (session: SessionItem, showDate: boolean) => {
     const studentName = session.student
@@ -186,7 +216,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
             variant={status === "present" ? "default" : "outline"}
             size="sm"
             className={`gap-1 ${status === "present" ? "bg-success hover:bg-success/90" : ""}`}
-            onClick={() => markAttendance(session, "present")}
+            onClick={() => handleMarkClick(session, "present")}
             disabled={!!markingId}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -196,7 +226,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
             variant={status === "absent" ? "destructive" : "outline"}
             size="sm"
             className="gap-1"
-            onClick={() => markAttendance(session, "absent")}
+            onClick={() => handleMarkClick(session, "absent")}
             disabled={!!markingId}
           >
             <XCircle className="h-3.5 w-3.5" />
@@ -314,6 +344,26 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
           </div>
         </div>
       )}
+
+      <AlertDialog open={!!pendingSwitch} onOpenChange={(open) => { if (!open) setPendingSwitch(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Change attendance to {pendingSwitch?.status === "present" ? "Present" : "Absent"}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingSwitch?.session.student
+                ? [pendingSwitch.session.student.firstName, pendingSwitch.session.student.middleName, pendingSwitch.session.student.lastName].filter(Boolean).join(" ")
+                : "This student"}{" "}
+              was already marked {pendingSwitch?.previousStatus === "present" ? "Present" : "Absent"}. This will overwrite that record.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSwitch}>
+              Yes, mark as {pendingSwitch?.status === "present" ? "Present" : "Absent"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

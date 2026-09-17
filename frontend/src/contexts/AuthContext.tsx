@@ -135,10 +135,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // ============ DEV BYPASS - remove when backend is ready ============
 const DEV_BYPASS =false; // set to false to disable
-const DEV_ROLE: UserRole = "student"; // change to "student", "tutor", or "admin"
+const DEV_ROLE: "student" | "tutor" | "admin" = "student"; // change to "student", "tutor", or "admin"
 
 if (DEV_BYPASS) {
-  const devUsers: Record<UserRole, User> = {
+  const devUsers: Record<"student" | "tutor" | "admin", User> = {
     student: {
       id: "dev-student-1",
       firstName: "Student",

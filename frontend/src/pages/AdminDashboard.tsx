@@ -31,6 +31,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
+import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import { OneOnOneSchedulingWizard } from "@/components/admin/OneOnOneSchedulingWizard";
 import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulingWizard";
 import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
@@ -219,10 +220,9 @@ const handleExportAll = (enrollmentsList: AdminEnrollment[], usersList: AdminUse
 
   csvContent += "--- ENROLLMENTS ---\nName,Programs,Date,Status\n";
   (enrollmentsList || []).forEach((e: AdminEnrollment) => {
-    const eAny = e as Record<string, unknown>;
-    const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+    const snap = e.studentSnapshot;
     const name = snap ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim() : "—";
-    const programs = (eAny.packages as { displayName?: string }[] | undefined)?.map((p) => p.displayName).join("; ") || e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
+    const programs = e.packages?.map((p) => p.displayName).join("; ") || e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
     const date = formatEnrollmentDate(e.enrollmentDate || e.createdAt);
     const status = enrollmentStatusLabel(e.status);
     csvContent += `${name},${programs},${date},${status}\n`;
@@ -459,6 +459,7 @@ export default function AdminDashboard() {
       consentItems?: { name?: string; accepted?: boolean }[];
       rejectionReason?: string; allowResubmission?: boolean; statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
       student?: AdminEnrollment["student"] & { guardianName?: string; guardianPhone?: string; studentId?: string };
+      preEnrollmentAssessment?: PreEnrollmentAssessment | null;
       requirementDocuments?: {
         birthCertificate?: { path?: string | null; fileName?: string | null; uploadedAt?: string | null };
         studentPhoto?: { path?: string | null; fileName?: string | null; uploadedAt?: string | null };
@@ -2421,13 +2422,12 @@ export default function AdminDashboard() {
                       <div className="p-4 text-center text-sm text-muted-foreground">No enrollments yet</div>
                     ) : (
                       enrollments.slice(0, 5).map((enrollment) => {
-                        const eAny = enrollment as Record<string, unknown>;
-                        const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+                        const snap = enrollment.studentSnapshot;
                         const name = snap
                           ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim()
                           : "—";
                         const initials = name !== "—" ? name.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—";
-                        const programs = (eAny.packages as { displayName?: string }[] | undefined)
+                        const programs = enrollment.packages
                           ?.map((p) => p.displayName).join(", ") || enrollment.selectedSubjects?.map((s) => s.name).join(", ") || "—";
                         const status = enrollmentStatusLabel(enrollment.status);
                         return (
@@ -2558,32 +2558,29 @@ export default function AdminDashboard() {
                           if (!statusMatch) return false;
                           if (!enrollmentSearch.trim()) return true;
                           const q = enrollmentSearch.toLowerCase();
-                          const eAny = e as Record<string, unknown>;
-                          const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
-                          const eid = String(eAny.enrollmentId || '').toLowerCase();
+                          const snap = e.studentSnapshot;
+                          const eid = String(e.enrollmentId || '').toLowerCase();
                           const studentName = snap
                             ? `${snap.firstName || ''} ${snap.lastName || ''}`.toLowerCase()
                             : '';
-                          const parentAny = eAny.parent as { firstName?: string; lastName?: string } | undefined;
-                          const parentName = parentAny ? `${parentAny.firstName || ''} ${parentAny.lastName || ''}`.toLowerCase() : '';
+                          const parentName = e.parent ? `${e.parent.firstName || ''} ${e.parent.lastName || ''}`.toLowerCase() : '';
                           return studentName.includes(q) || eid.includes(q) || parentName.includes(q);
                         });
                         if (filtered.length === 0) return (
                           <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No enrollments match the selected filter.</td></tr>
                         );
                         return filtered.map((enrollment) => {
-                          const eAny = enrollment as Record<string, unknown>;
-                          const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string } | undefined;
+                          const snap = enrollment.studentSnapshot;
                           // Student name always comes from studentSnapshot — the child is not a separate User
                           const name = snap
                             ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim()
                             : '—';
-                          const packages = (eAny.packages as { displayName?: string }[] | undefined) || [];
+                          const packages = enrollment.packages || [];
                           const programsLabel = packages.length > 0
                             ? packages.map((p) => p.displayName || '').join(', ')
                             : enrollment.selectedSubjects?.map((s) => s.name).join(', ') || '—';
-                          const enrollmentId = String(eAny.enrollmentId || enrollment._id);
-                          const latestPayment = (eAny.latestPayment as { status?: string; paymentMethod?: string; amountDue?: number; _id?: string } | undefined);
+                          const enrollmentId = String(enrollment.enrollmentId || enrollment._id);
+                          const latestPayment = enrollment.latestPayment;
                           const payMethod = latestPayment?.paymentMethod || '';
                           const payStatus = latestPayment?.status || enrollment.paymentStatus || 'pending';
                           const isActionable = ['submitted', 'payment_under_verification', 'pending_approval', 'pending'].includes(enrollment.status);
@@ -3443,7 +3440,7 @@ export default function AdminDashboard() {
                                             <UserAvatar
                                               src={null}
                                               fallback={tName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()}
-                                              size={7}
+                                              size={8}
                                             />
                                             <p className="text-sm text-foreground">{tName}</p>
                                           </div>
@@ -5285,15 +5282,14 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
           ) : viewEnrollmentData ? (() => {
             const e = viewEnrollmentData.enrollment;
-            const eAny = e as Record<string, unknown>;
-            const snap = eAny.studentSnapshot as { firstName?: string; lastName?: string; birthdate?: string; computedAge?: number } | undefined;
-            const parent = eAny.parent as { firstName?: string; lastName?: string; email?: string; phone?: string } | undefined;
-            const packages = (eAny.packages as { displayName?: string; price?: number; paymentOption?: string }[] | undefined) || [];
-            const preferredStart = eAny.preferredStartDate ? new Date(String(eAny.preferredStartDate)).toLocaleDateString('en-PH') : '—';
-            const preferredTime = String(eAny.preferredTime || '—');
-            const healthInfo = eAny.healthInfo as { allergies?: string; medications?: string; specialNeeds?: boolean; specialNeedsDetails?: string } | undefined;
-            const consentItems = (eAny.consentItems as { name?: string; accepted?: boolean }[] | undefined) || [];
-            const statusHistory = (eAny.statusHistory as { status?: string; at?: string; byRole?: string; note?: string }[] | undefined) || [];
+            const snap = e.studentSnapshot;
+            const parent = e.parent;
+            const packages = e.packages || [];
+            const preferredStart = e.preferredStartDate ? new Date(String(e.preferredStartDate)).toLocaleDateString('en-PH') : '—';
+            const preferredTime = String(e.preferredTime || '—');
+            const healthInfo = e.healthInfo;
+            const consentItems = e.consentItems || [];
+            const statusHistory = e.statusHistory || [];
             const statusColors: Record<string, string> = {
               approved: 'bg-emerald-100 text-emerald-800', active: 'bg-emerald-100 text-emerald-800',
               pending_approval: 'bg-purple-100 text-purple-800', payment_under_verification: 'bg-amber-100 text-amber-800',
@@ -5306,9 +5302,9 @@ export default function AdminDashboard() {
               <div className="space-y-5">
                 {/* Status badge */}
                 <div className="flex items-center gap-3">
-                  {eAny.enrollmentId && <span className="font-mono font-bold text-foreground">{String(eAny.enrollmentId)}</span>}
+                  {e.enrollmentId && <span className="font-mono font-bold text-foreground">{String(e.enrollmentId)}</span>}
                   <span className={`text-xs px-2 py-1 rounded-full font-medium ${sc}`}>{e.status}</span>
-                  {(eAny.allowResubmission as boolean) && <span className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-800 font-medium">Resubmission Allowed</span>}
+                  {e.allowResubmission && <span className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-800 font-medium">Resubmission Allowed</span>}
                 </div>
 
                 {/* Parent info */}
@@ -5322,7 +5318,7 @@ export default function AdminDashboard() {
 
                 {/* Enrollment requirement documents — Birth Certificate, 2×2 Photo, Guardian ID */}
                 {(() => {
-                  const rd = eAny.requirementDocuments as Record<string, { path?: string | null; fileName?: string | null; uploadedAt?: string | null } | undefined> | undefined;
+                  const rd = e.requirementDocuments;
                   const docs = [
                     { key: 'birthCertificate', label: 'Student Birth Certificate', doc: rd?.birthCertificate },
                     { key: 'studentPhoto', label: 'Recent 2×2 Photo of Student', doc: rd?.studentPhoto },
@@ -5364,10 +5360,10 @@ export default function AdminDashboard() {
                     <>
                       <p>{[snap.firstName, snap.lastName].filter(Boolean).join(' ') || '—'}</p>
                       {snap.birthdate && <p className="text-muted-foreground">Born: {new Date(snap.birthdate).toLocaleDateString('en-PH')} · Age: {snap.computedAge ? `${snap.computedAge.toFixed(1)} yrs` : '—'}</p>}
-                      {(eAny.studentId as string) && <p className="text-muted-foreground">Student ID: <span className="font-mono font-semibold text-foreground">{String(eAny.studentId)}</span></p>}
+                      {e.studentId && <p className="text-muted-foreground">Student ID: <span className="font-mono font-semibold text-foreground">{String(e.studentId)}</span></p>}
                     </>
                   ) : <p className="text-muted-foreground">—</p>}
-                  {(eAny.preferredStartDate as string) && <p className="text-muted-foreground">Preferred start: {preferredStart} ({preferredTime})</p>}
+                  {e.preferredStartDate && <p className="text-muted-foreground">Preferred start: {preferredStart} ({preferredTime})</p>}
                 </div>
 
                 {/* Programs */}
@@ -5393,10 +5389,10 @@ export default function AdminDashboard() {
                   </div>
                 )}
 
-                {eAny.preEnrollmentAssessment && (
+                {e.preEnrollmentAssessment && (
                   <div className="p-3 bg-sky-50 border border-sky-200 rounded-lg">
                     <p className="font-semibold text-sky-900 text-xs uppercase tracking-wide mb-2">Pre-Enrollment Assessment</p>
-                    <EnrollmentAssessmentView assessment={eAny.preEnrollmentAssessment as never} compact />
+                    <EnrollmentAssessmentView assessment={e.preEnrollmentAssessment} compact />
                   </div>
                 )}
 
@@ -5458,10 +5454,10 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Rejection reason */}
-                {e.status === 'rejected' && (eAny.rejectionReason as string) && (
+                {e.status === 'rejected' && e.rejectionReason && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
                     <p className="font-semibold text-red-800 mb-1">Rejection Reason</p>
-                    <p className="text-red-700">{String(eAny.rejectionReason)}</p>
+                    <p className="text-red-700">{String(e.rejectionReason)}</p>
                   </div>
                 )}
 

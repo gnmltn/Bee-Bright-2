@@ -44,6 +44,7 @@ const suspensionSchema = new mongoose.Schema(
         fromDate: { type: Date, required: true },
         toDate: { type: Date, default: null },
         status: { type: String, enum: ['moved', 'unresolved'], required: true },
+        error: { type: String, default: undefined },
         _id: false,
       },
     ],
