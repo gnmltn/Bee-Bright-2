@@ -684,7 +684,10 @@ const loginStart = async (req, res) => {
     const user = await User.findOne(buildEmailLookupFilter(email)).select('+password');
 
     if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      // Same generic message as every other failure branch below (wrong password,
+      // wrong role) — a distinct "no such user" message would itself let an
+      // attacker enumerate which emails have accounts.
+      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
     if (!user.password) {
@@ -716,18 +719,10 @@ const loginStart = async (req, res) => {
     }
 
     if (role && user.role !== role.toLowerCase()) {
-      // Special case: parent accounts authenticate through the "Parent/Guardian" role.
-      // If the client sent 'student' but the account is 'parent', give a clear helpful message.
-      if (user.role === 'parent' && role === 'student') {
-        return res.status(401).json({
-          success: false,
-          message: 'You have a Parent/Guardian account. Please select "Parent / Guardian" on the login page.'
-        });
-      }
-      return res.status(401).json({
-        success: false,
-        message: `Invalid credentials. You are registered as a ${user.role}.`
-      });
+      // Deliberately generic: never hint at the account's actual registered role in
+      // the response — doing so would let an attacker who already has an email
+      // address confirm which role's login form to target for further attempts.
+      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
     if (user.role === 'student' || user.role === 'tutor' || user.role === 'parent') {
@@ -751,7 +746,7 @@ const loginStart = async (req, res) => {
         description: 'Failed - Wrong password',
         status: 'FAILED'
       }).catch(() => {});
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
 
     if (isPasswordExpired(user)) {

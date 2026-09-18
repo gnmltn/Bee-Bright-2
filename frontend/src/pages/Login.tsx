@@ -263,13 +263,13 @@ export default function Login() {
               {roles.map((role, index) => (
                 <motion.div key={role.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.1 }}>
                   <Card
-                    className={`cursor-pointer transition-all duration-300 hover:shadow-lg ${
+                    className={`h-full cursor-pointer transition-all duration-300 hover:shadow-lg ${
                       selectedRole === role.id ? "ring-2 ring-primary border-primary" : "hover:border-primary/50"
                     }`}
                     onClick={() => handleRoleSelect(role.id)}
                   >
                     <CardHeader className="text-center pb-2">
-                      <div className={`w-16 h-16 mx-auto rounded-full bg-gradient-to-br ${role.color} flex items-center justify-center mb-3`}>
+                      <div className={`w-16 h-16 mx-auto rounded-full bg-primary bg-gradient-to-br ${role.color} flex items-center justify-center mb-3`}>
                         <role.icon className="h-8 w-8 text-primary-foreground" />
                       </div>
                       <CardTitle className="text-xl">{role.name}</CardTitle>

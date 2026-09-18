@@ -218,40 +218,40 @@ export function ChatBot() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex h-14 w-14 items-center justify-center rounded-full border border-slate-700/70 bg-slate-950 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.35)] transition-all duration-300 hover:scale-105 hover:border-amber-400/60 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400/70 focus:ring-offset-2"
+          className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-[0_20px_50px_rgba(15,23,42,0.25)] transition-all duration-300 hover:scale-105 hover:border-primary/60 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/70 focus:ring-offset-2"
           aria-label="Open chatbot"
         >
-          <MessageCircle className="h-6 w-6 text-amber-300" />
+          <MessageCircle className="h-6 w-6 text-primary" />
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[min(92vw,28rem)] rounded-[28px] border border-slate-800 bg-slate-950 p-0 text-slate-100 shadow-[0_24px_80px_rgba(15,23,42,0.55)]"
+        className="w-[min(92vw,28rem)] rounded-[28px] border border-border bg-popover p-0 text-popover-foreground shadow-[0_24px_80px_rgba(15,23,42,0.35)]"
         align="end"
         side="top"
         sideOffset={12}
       >
-        <div className="relative flex h-[min(78vh,44rem)] min-h-0 flex-col overflow-hidden rounded-[28px] bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.16),_transparent_34%),linear-gradient(180deg,#111827_0%,#020617_72%)]">
-          <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/60 to-transparent" />
-          <div className="flex items-center justify-between border-b border-slate-800/90 px-5 py-4">
+        <div className="relative flex h-[min(78vh,44rem)] min-h-0 flex-col overflow-hidden rounded-[28px] bg-[radial-gradient(circle_at_top,_hsl(38_92%_50%/0.14),_transparent_34%),linear-gradient(180deg,_hsl(var(--card))_0%,_hsl(var(--background))_72%)]">
+          <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-amber-300/20 bg-amber-400/10 text-amber-200">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
                 <Bot className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-slate-50">Bee Bright Assistant</p>
-                <p className="text-xs text-slate-400">School assistant with grounded replies</p>
+                <p className="text-sm font-semibold text-foreground">Bee Bright Assistant</p>
+                <p className="text-xs text-muted-foreground">School assistant with grounded replies</p>
               </div>
             </div>
-            <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200">
+            <div className="rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success">
               Online
             </div>
           </div>
           {!hasConversationStarted ? (
-            <div className="border-b border-slate-800/90 px-4 py-3">
+            <div className="border-b border-border px-4 py-3">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300/90">{questionnaire.title}</p>
-                  <p className="text-xs text-slate-500">Tap any question to send it instantly.</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">{questionnaire.title}</p>
+                  <p className="text-xs text-muted-foreground">Tap any question to send it instantly.</p>
                 </div>
               </div>
               <ScrollArea className="max-h-[180px] pr-2 sm:max-h-[220px]">
@@ -262,7 +262,7 @@ export function ChatBot() {
                       type="button"
                       onClick={() => handleQuestionnaireClick(question)}
                       disabled={loading}
-                      className="rounded-full border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-left text-xs text-slate-200 transition hover:border-amber-300/50 hover:text-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full border border-border bg-muted/60 px-3 py-1.5 text-left text-xs text-foreground transition hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {question}
                     </button>
@@ -279,21 +279,21 @@ export function ChatBot() {
                   className={`flex items-start gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}
                 >
                   {m.role === "assistant" ? (
-                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-200">
+                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-foreground">
                       <Bot className="h-4 w-4" />
                     </div>
                   ) : null}
                   <div
                     className={`max-w-[85%] whitespace-pre-wrap rounded-3xl px-4 py-3 text-sm leading-6 shadow-sm ${
                       m.role === "user"
-                        ? "rounded-tr-md border border-amber-300/10 bg-gradient-to-br from-amber-400 to-amber-500 text-slate-950"
-                        : "rounded-tl-md border border-slate-800 bg-slate-900/90 text-slate-100"
+                        ? "rounded-tr-md border border-amber-300/10 bg-gradient-to-br from-amber-400 to-amber-500 text-slate-950 dark:bg-none dark:bg-muted dark:border-border dark:text-primary"
+                        : "rounded-tl-md border border-border bg-muted text-foreground dark:text-primary"
                     }`}
                   >
                     {m.content}
                   </div>
                   {m.role === "user" ? (
-                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-300/20 bg-amber-400/10 text-amber-200">
+                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/10 text-primary">
                       <User2 className="h-4 w-4" />
                     </div>
                   ) : null}
@@ -301,11 +301,11 @@ export function ChatBot() {
               ))}
               {loading && (
                 <div className="flex items-start gap-3">
-                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-200">
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-foreground">
                     <Bot className="h-4 w-4" />
                   </div>
-                  <div className="flex items-center gap-2 rounded-3xl rounded-tl-md border border-slate-800 bg-slate-900/90 px-4 py-3 text-sm text-slate-300">
-                    <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
+                  <div className="flex items-center gap-2 rounded-3xl rounded-tl-md border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
                     Thinking
                   </div>
                 </div>
@@ -313,8 +313,8 @@ export function ChatBot() {
               <div ref={scrollRef} />
             </div>
           </ScrollArea>
-          <div className="border-t border-slate-800/90 bg-slate-950/90 px-4 pb-4 pt-3 backdrop-blur">
-            <div className="rounded-[24px] border border-slate-800 bg-slate-900/90 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="border-t border-border bg-popover/90 px-4 pb-4 pt-3 backdrop-blur">
+            <div className="rounded-[24px] border border-border bg-muted/60 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
               <Textarea
                 ref={textareaRef}
                 placeholder="Message Bee Bright Assistant"
@@ -328,15 +328,15 @@ export function ChatBot() {
                 }}
                 disabled={loading}
                 rows={1}
-                className="max-h-[140px] min-h-[52px] resize-none border-0 bg-transparent px-3 py-3 text-sm leading-6 text-slate-100 placeholder:text-slate-500 focus-visible:ring-0 focus-visible:ring-offset-0"
+                className="max-h-[140px] min-h-[52px] resize-none border-0 bg-transparent px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
               />
               <div className="flex items-center justify-between px-1 pb-1">
-                <p className="text-xs text-slate-500">Enter to send, Shift+Enter for a new line</p>
+                <p className="text-xs text-muted-foreground">Enter to send, Shift+Enter for a new line</p>
                 <Button
                   size="icon"
                   onClick={handleSend}
                   disabled={!canSend}
-                  className="h-10 w-10 rounded-full bg-amber-400 text-slate-950 transition hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500"
+                  className="h-10 w-10 rounded-full bg-amber-400 text-slate-950 transition hover:bg-amber-300 disabled:bg-muted disabled:text-muted-foreground"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>

@@ -3,11 +3,8 @@ import {
   GraduationCap,
   Calendar,
   Users,
-  BookOpen,
-  TrendingUp,
   CreditCard,
   ClipboardCheck,
-  BarChart3,
 } from "lucide-react";
 
 const features = [
@@ -30,18 +27,6 @@ const features = [
     color: "bg-success/10 text-success",
   },
   {
-    icon: BookOpen,
-    title: "Learning Materials",
-    description: "Access comprehensive study materials and resources anytime.",
-    color: "bg-accent/10 text-accent",
-  },
-  {
-    icon: TrendingUp,
-    title: "Progress Tracking",
-    description: "Monitor your academic growth with detailed progress reports.",
-    color: "bg-primary/10 text-primary",
-  },
-  {
     icon: CreditCard,
     title: "Easy Payments",
     description: "Convenient payment options with transparent invoicing.",
@@ -52,12 +37,6 @@ const features = [
     title: "Attendance Monitoring",
     description: "Track attendance and ensure consistent learning participation.",
     color: "bg-success/10 text-success",
-  },
-  {
-    icon: BarChart3,
-    title: "Performance Analytics",
-    description: "Data-driven insights to identify strengths and areas for improvement.",
-    color: "bg-accent/10 text-accent",
   },
 ];
 
@@ -109,7 +88,7 @@ export function FeaturesSection() {
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true }}
-          className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6"
+          className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6"
         >
           {features.map((feature, index) => (
             <motion.div

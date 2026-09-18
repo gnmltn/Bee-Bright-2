@@ -44,7 +44,7 @@ const PROGRAMS = [
     tagline: "One-on-one tutoring that makes a difference!",
     description:
       "Guaranteed 1-on-1 tutorial sessions with advancement in lessons, homework assistance, and enhancement across all subjects — from Pre-school to Senior High School.",
-    schedule: "Mon – Sat  8:00 AM – 6:00 PM",
+    schedule: "Mon – Sat  8:00 AM – 5:00 PM",
     ageRange: "2 years old and up",
     sessionType: "1-on-1 sessions",
     icon: BookOpen,
@@ -78,7 +78,7 @@ const PROGRAMS = [
     tagline: "Comprehensive review for improved performance!",
     description:
       "Focused exam review sessions designed to build test mastery, boost confidence, and sharpen test-taking strategies for any major examination.",
-    schedule: "Mon – Sat  8:00 AM – 6:00 PM",
+    schedule: "Mon – Sat  8:00 AM – 5:00 PM",
     ageRange: "2 to 4 years old",
     sessionType: "1-on-1 sessions only",
     icon: GraduationCap,
