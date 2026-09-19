@@ -190,9 +190,14 @@ async function getDefaultTutoringAreaId(sessionType) {
   return area?._id || null;
 }
 
+// A student is only schedulable once admin has actually approved the enrollment —
+// 'active' is the model's legacy alias for 'approved' (see Enrollment.status enum),
+// nothing else counts. paymentStatus === 'paid' can be true well before approval
+// (e.g. while status is still 'payment_under_verification' or 'pending_approval'),
+// so it is deliberately NOT treated as a shortcut here.
 function isSchedulableEnrollmentStatus(enrollment) {
   const status = String(enrollment?.status || '');
-  return ['active', 'approved'].includes(status) || (enrollment?.paymentStatus === 'paid' && status !== 'cancelled' && status !== 'rejected');
+  return status === 'active' || status === 'approved';
 }
 
 async function ensureStudentUserForEnrollment(enrollmentDoc) {
@@ -833,13 +838,12 @@ async function removeSchedulesWithRemovedTutors() {
 // @access  Private (Admin)
 const getScheduleOptions = async (req, res) => {
   try {
-    // Some flows set paymentStatus='paid' but leave status not updated.
-    // Include both "active" and "paid (not cancelled)" to avoid empty schedule options.
+    // Only admin-approved enrollments are schedulable — 'active' is the legacy
+    // alias for 'approved'. paymentStatus is deliberately not consulted here: a
+    // 'paid' proof can exist well before admin approval (see
+    // isSchedulableEnrollmentStatus for the shared rationale).
     const eligibleEnrollments = await Enrollment.find({
-      $or: [
-        { status: 'active' },
-        { paymentStatus: 'paid', status: { $ne: 'cancelled' } }
-      ]
+      status: { $in: ['active', 'approved'] }
     })
       .populate('selectedSubjects', 'name code')
       .lean();

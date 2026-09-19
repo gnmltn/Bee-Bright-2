@@ -19,6 +19,7 @@ import {
   type WeeklyScheduleTutorOption,
 } from "@/services/api";
 import { StudentSearchSelect } from "./StudentSearchSelect";
+import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
 
 // BeeBright Scheduling Spec, Section 2 — group-based Toddlers Playgroup scheduling.
 // Replaces the old slot-first panel: pick the student first, then days + a fixed time
@@ -52,14 +53,6 @@ function childNameFromEnrollment(enrollment: AdminEnrollment) {
   const snap = enrollment.studentSnapshot;
   const snapshotName = [snap?.firstName, snap?.middleName, snap?.lastName].filter(Boolean).join(" ");
   return snapshotName || enrollment.studentId || "Child";
-}
-
-function enrollmentIsSchedulable(enrollment: AdminEnrollment) {
-  const status = enrollment.status || "";
-  return (
-    ["active", "approved"].includes(status) ||
-    (enrollment.paymentStatus === "paid" && status !== "cancelled" && status !== "rejected")
-  );
 }
 
 function enrollmentCoversPlaygroup(enrollment: AdminEnrollment): boolean {
@@ -98,7 +91,7 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
 
   const studentOptions = useMemo<StudentOption[]>(() => {
     return enrollments
-      .filter((enrollment) => enrollmentIsSchedulable(enrollment) && enrollmentCoversPlaygroup(enrollment))
+      .filter((enrollment) => isEnrollmentSchedulable(enrollment) && enrollmentCoversPlaygroup(enrollment))
       .map((enrollment) => ({
         key: enrollment._id,
         enrollment,

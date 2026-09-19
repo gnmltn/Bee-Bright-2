@@ -17,6 +17,7 @@ import {
   type WeeklyScheduleTutorOption,
 } from "@/services/api";
 import { StudentSearchSelect } from "./StudentSearchSelect";
+import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
 
 // BeeBright Scheduling Spec, Section 1 — student-first 1-on-1 scheduling wizard.
 // Replaces the old slot-first "create a tutor slot, assign a child later" flow for
@@ -53,14 +54,6 @@ function childNameFromEnrollment(enrollment: AdminEnrollment) {
   const snap = enrollment.studentSnapshot;
   const snapshotName = [snap?.firstName, snap?.middleName, snap?.lastName].filter(Boolean).join(" ");
   return snapshotName || enrollment.studentId || "Child";
-}
-
-function enrollmentIsSchedulable(enrollment: AdminEnrollment) {
-  const status = enrollment.status || "";
-  return (
-    ["active", "approved"].includes(status) ||
-    (enrollment.paymentStatus === "paid" && status !== "cancelled" && status !== "rejected")
-  );
 }
 
 function enrollmentCoveredOneOnOneSubjects(
@@ -131,7 +124,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
   const studentOptions = useMemo<StudentSubjectOption[]>(() => {
     const options: StudentSubjectOption[] = [];
     for (const enrollment of enrollments) {
-      if (!enrollmentIsSchedulable(enrollment)) continue;
+      if (!isEnrollmentSchedulable(enrollment)) continue;
       const covered = enrollmentCoveredOneOnOneSubjects(enrollment, oneOnOneSubjects);
       for (const subject of covered) {
         options.push({

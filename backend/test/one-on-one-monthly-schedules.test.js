@@ -7,9 +7,15 @@
  *      package-only enrollment (what the live enrollment wizard actually creates)
  *      can now be scheduled.
  *   2. Enrollment-status check now uses isSchedulableEnrollmentStatus (active OR
- *      approved OR paid), not a hardcoded status: 'active' filter.
+ *      approved), not a hardcoded status: 'active' filter.
  *   3. Sessions must be exactly 1 hour (schedulingPolicy.js durationMinutes 120->60);
  *      a 2-hour daySlot is now rejected instead of accepted.
+ *
+ * 2026-09-19: isSchedulableEnrollmentStatus previously also accepted ANY status
+ * (other than cancelled/rejected) as long as paymentStatus was 'paid' — which
+ * wrongly let a still-pending_approval enrollment (payment proof submitted, but
+ * admin hasn't approved yet) be scheduled. That paymentStatus shortcut is removed;
+ * only 'active'/'approved' are schedulable now — see the two new tests below.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -162,6 +168,44 @@ test('createMonthlySchedules: approved-status enrollment (not yet active) can be
     await createMonthlySchedules(baseReq(), res);
     assert.equal(res._status, 201, JSON.stringify(res._body));
     assert.equal(res._body.success, true);
+  } finally { restore(); }
+});
+
+test('createMonthlySchedules: pending_approval enrollment with paymentStatus=paid is rejected (not yet admin-approved)', async () => {
+  const enrollment = {
+    _id: 'enr-pending',
+    student: 'student-1',
+    status: 'pending_approval',
+    paymentStatus: 'paid',
+    startDate: new Date(),
+    packages: [{ programCode: 'ACT102' }],
+    selectedSubjects: [],
+  };
+  const { restore } = stubModels({ enrollment });
+  try {
+    const res = mockRes();
+    await createMonthlySchedules(baseReq(), res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.match(res._body.message, /no active enrollment/i);
+  } finally { restore(); }
+});
+
+test('createMonthlySchedules: payment_under_verification enrollment with paymentStatus=paid is rejected', async () => {
+  const enrollment = {
+    _id: 'enr-under-verification',
+    student: 'student-1',
+    status: 'payment_under_verification',
+    paymentStatus: 'paid',
+    startDate: new Date(),
+    packages: [{ programCode: 'ACT102' }],
+    selectedSubjects: [],
+  };
+  const { restore } = stubModels({ enrollment });
+  try {
+    const res = mockRes();
+    await createMonthlySchedules(baseReq(), res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.match(res._body.message, /no active enrollment/i);
   } finally { restore(); }
 });
 
