@@ -7,6 +7,7 @@ const {
   submitPaymentProof,
   getMyEnrollments,
   trackEnrollment,
+  getEnrollmentAvailability,
   createEnrollment,
   getEnrollmentById,
   getEnrollmentByStudent,
@@ -26,6 +27,7 @@ const { protect, authorize, optionalProtect } = require('../middleware/auth');
 router.post('/send-verification-code', sendEnrollmentVerificationCode);
 router.post('/verify-email-code', verifyEnrollmentEmailCode);
 router.get('/track', trackEnrollment); // GET /enrollments/track?enrollmentId=&email=
+router.get('/availability', getEnrollmentAvailability); // GET /enrollments/availability?date=&programCode=
 
 // ── Pricing (public read, admin write) ───────────────────────────────────
 router.get('/pricing', getAllPricing);

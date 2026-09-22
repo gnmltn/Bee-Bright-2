@@ -28,7 +28,11 @@ import Step5StudentInfo    from '@/components/enrollment/steps/Step5StudentInfo'
 import Step6Programs       from '@/components/enrollment/steps/Step6Programs';
 import StepAssessment      from '@/components/enrollment/steps/StepAssessment';
 import Step7Schedule       from '@/components/enrollment/steps/Step7Schedule';
-import Step8Guardian       from '@/components/enrollment/steps/Step8Guardian';
+// Step8Guardian.tsx retired 2026-09-22 — the "Parent/Guardian" step was
+// entirely pre-filled from the parent's own account (nothing new collected)
+// and its Alternate Guardian/Emergency Contact fields were never read by
+// anything downstream. Component file kept in place, unreferenced, matching
+// this project's hide-not-delete convention for superseded steps.
 import Step9Health         from '@/components/enrollment/steps/Step9Health';
 import Step10Billing       from '@/components/enrollment/steps/Step10Billing';
 import Step11Consent       from '@/components/enrollment/steps/Step11Consent';
@@ -70,7 +74,6 @@ const BASE_STEPS: StepDef[] = [
   { id: 'student', label: 'Student Info' },
   { id: 'programs', label: 'Programs' },
   { id: 'schedule', label: 'Schedule Pref' },
-  { id: 'guardian', label: 'Guardian' },
   { id: 'health', label: 'Health' },
   { id: 'billing', label: 'Billing' },
   { id: 'agreement', label: 'Agreement' },
@@ -363,7 +366,6 @@ export default function EnrollmentWizard() {
                 {currentStepId === 'programs' && <Step6Programs       {...stepProps} />}
                 {currentStepId === 'assessment' && <StepAssessment      {...stepProps} />}
                 {currentStepId === 'schedule' && <Step7Schedule       {...stepProps} />}
-                {currentStepId === 'guardian' && <Step8Guardian       {...stepProps} />}
                 {currentStepId === 'health' && <Step9Health         {...stepProps} />}
                 {currentStepId === 'billing' && <Step10Billing       {...stepProps} />}
                 {currentStepId === 'agreement' && <Step11Consent       {...stepProps} />}

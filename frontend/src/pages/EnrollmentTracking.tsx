@@ -44,7 +44,7 @@ const STATUS_CONFIG: Record<string, { icon: React.ElementType; color: string; bg
   cancelled:                { icon: XCircle,       color: 'text-gray-600',    bg: 'bg-gray-50',    border: 'border-gray-200',   desc: 'This enrollment has been cancelled.' },
 };
 
-const PAYMENT_METHOD_LABELS: Record<string, string> = { gcash: 'GCash', seabank: 'SeaBank', bdo: 'BDO' };
+const PAYMENT_METHOD_LABELS: Record<string, string> = { gcash: 'GCash', maribank: 'MariBank', bdo: 'BDO' };
 
 export default function EnrollmentTracking() {
   const { toast } = useToast();

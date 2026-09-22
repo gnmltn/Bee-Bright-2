@@ -1,9 +1,14 @@
-import { useState } from 'react';
-import { CalendarDays, Sun, Sunset, Clock } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CalendarDays, Sun, Sunset, Clock, Loader2, CheckCircle2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
+import { enrollmentService } from '@/services/api';
+import { PROGRAM_LABELS, type ActiveProgramCode } from '@/constants/programs';
+
+type AvailabilitySlot = { label: string; available: number; total: number };
+type AvailabilityResponse = Record<string, AvailabilitySlot>;
 
 interface Props {
   data: WizardData;
@@ -65,6 +70,64 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
 
   const selectedDays = data.preferredDays ?? [];
 
+  // ── Live tutor-capacity availability, per enrolled program ──────────────
+  // Informational only — helps the parent pick a realistic slot; the admin
+  // still manually assigns the specific tutor after approval.
+  const selectedProgramCodes = Array.from(
+    new Set(
+      data.selectedPackages
+        .map((p) => p.programCode)
+        .filter((code): code is ActiveProgramCode => code === 'TPG101' || code === 'ACT102' || code === 'EXP106')
+    )
+  );
+  const programCodesKey = selectedProgramCodes.join(',');
+
+  const [availability, setAvailability] = useState<Record<string, AvailabilityResponse>>({});
+  const [loadingAvailability, setLoadingAvailability] = useState<Record<string, boolean>>({});
+  const [availabilityError, setAvailabilityError] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!data.preferredStartDate || selectedProgramCodes.length === 0) return;
+    let cancelled = false;
+    selectedProgramCodes.forEach((code) => {
+      setLoadingAvailability((prev) => ({ ...prev, [code]: true }));
+      setAvailabilityError((prev) => ({ ...prev, [code]: '' }));
+      enrollmentService
+        .getAvailability(data.preferredStartDate, code)
+        .then((res) => {
+          if (cancelled) return;
+          setAvailability((prev) => ({ ...prev, [code]: res.data.slots }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAvailabilityError((prev) => ({ ...prev, [code]: 'Could not load availability for this date. Please try again.' }));
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setLoadingAvailability((prev) => ({ ...prev, [code]: false }));
+        });
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.preferredStartDate, programCodesKey]);
+
+  const pickSlot = (programCode: string, startTime: string, endTime: string, label: string) => {
+    const current = data.preferredSlots ?? [];
+    const alreadyPicked = current.some(
+      (s) => s.programCode === programCode && s.startTime === startTime && s.endTime === endTime
+    );
+    const next = alreadyPicked
+      ? current.filter((s) => s.programCode !== programCode) // clicking the same slot again deselects it
+      : [...current.filter((s) => s.programCode !== programCode), { programCode, startTime, endTime, label }];
+    update({ preferredSlots: next });
+  };
+
+  const slotStatus = (slot: AvailabilitySlot): { text: string; disabled: boolean } => {
+    if (slot.available <= 0) return { text: 'Fully Booked', disabled: true };
+    if (slot.available === slot.total) return { text: 'Available', disabled: false };
+    return { text: `Available Slots: ${slot.available}`, disabled: false };
+  };
+
   return (
     <div className="space-y-6">
 
@@ -102,6 +165,81 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
           Choose a date within the next 6 months. Sessions will not start before this date.
         </p>
       </div>
+
+      {/* ── Live Tutor-Capacity Availability (per enrolled program) ── */}
+      {selectedProgramCodes.length > 0 && (
+        <div className="space-y-4">
+          <div>
+            <Label className="font-semibold">Time Slot Availability</Label>
+            <p className="text-xs text-muted-foreground">
+              Optional — pick a slot to tell us your preference. The admin will still confirm
+              the final tutor and schedule after your enrollment is approved.
+            </p>
+          </div>
+
+          {!data.preferredStartDate ? (
+            <p className="text-xs text-muted-foreground italic">
+              Choose a Preferred Start Date above to see available time slots.
+            </p>
+          ) : (
+            selectedProgramCodes.map((code) => {
+              const slots = availability[code];
+              const loading = loadingAvailability[code];
+              const error = availabilityError[code];
+              const pickedForProgram = (data.preferredSlots ?? []).find((s) => s.programCode === code);
+
+              return (
+                <div key={code} className="border border-border rounded-xl p-4 space-y-3">
+                  <p className="text-sm font-semibold text-foreground">{PROGRAM_LABELS[code]}</p>
+
+                  {loading && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Checking availability…
+                    </div>
+                  )}
+
+                  {!loading && error && (
+                    <p className="text-xs text-destructive">{error}</p>
+                  )}
+
+                  {!loading && !error && slots && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {Object.entries(slots)
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([key, slot]) => {
+                          const [startTime, endTime] = key.split('-');
+                          const { text, disabled } = slotStatus(slot);
+                          const selected = pickedForProgram?.startTime === startTime && pickedForProgram?.endTime === endTime;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => pickSlot(code, startTime, endTime, slot.label)}
+                              className={`flex flex-col items-center justify-center gap-1 rounded-lg border-2 py-2.5 px-2 text-center transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                disabled
+                                  ? 'border-border bg-muted text-muted-foreground cursor-not-allowed opacity-60'
+                                  : selected
+                                    ? 'border-amber-500 bg-amber-500 text-white shadow-sm'
+                                    : 'border-border bg-card text-foreground hover:border-amber-400'
+                              }`}
+                            >
+                              <span className="text-sm font-semibold flex items-center gap-1">
+                                {selected && <CheckCircle2 className="h-3.5 w-3.5" />}
+                                {slot.label}
+                              </span>
+                              <span className="text-[11px]">{text}</span>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
 
       {/* ── Available Days ── */}
       <div className="space-y-2">

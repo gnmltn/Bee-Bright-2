@@ -103,7 +103,7 @@ export default function Step1Requirements({ data, update, onNext }: Props) {
         <div>
           <p className="font-semibold text-foreground text-sm">Payment</p>
           <p className="text-muted-foreground text-xs mt-0.5">
-            Full payment or 50% down payment accepted via GCash, SeaBank, or BDO.
+            Full payment or 50% down payment accepted via GCash, MariBank, or BDO.
             Payment proof is uploaded later in the wizard.
           </p>
         </div>

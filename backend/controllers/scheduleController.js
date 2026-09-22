@@ -3453,5 +3453,6 @@ module.exports = {
   getPlaygroupTutorRequirement,
   timeRangesOverlap,
   getMinutesSinceMidnight,
-  getSessionEndTime
+  getSessionEndTime,
+  canTutorHandleSchedule
 };

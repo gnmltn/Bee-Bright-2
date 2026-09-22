@@ -79,10 +79,13 @@ const paymentSchema = new mongoose.Schema({
     default: 'pending'
   },
 
-  // Extended payment methods: GCash, SeaBank, BDO
+  // Extended payment methods: GCash, MariBank, BDO
   paymentMethod: {
     type: String,
-    enum: ['gcash', 'seabank', 'bdo', 'blockchain'], // blockchain kept for legacy records
+    // 'seabank' renamed to 'maribank' (2026-09-22 rebrand) — existing rows are
+    // migrated by scripts/migrate-seabank-to-maribank.js; 'blockchain' kept for
+    // unrelated legacy records.
+    enum: ['gcash', 'maribank', 'bdo', 'blockchain'],
     default: 'gcash'
   },
 

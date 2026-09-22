@@ -8,10 +8,11 @@ import type { WizardData } from '../wizard-types';
 import { computeTotalFee } from '../wizard-types';
 import DocUploadField from '../DocUploadField';
 
-// Real logo assets from src/assets (seabank_logo.png, bdo_logo.jpg)
-// GCash has no image file in assets — uses brand-colour SVG instead
-import seabankLogo from '@/assets/seabank_logo.png';
+// Real logo assets from src/assets (bdo_logo.jpg, maribank_logo.png)
+// GCash has no image file in assets — uses brand-colour SVG instead.
+// The old seabank_logo.png asset is left in place, unreferenced.
 import bdoLogo from '@/assets/bdo_logo.jpg';
+import maribankLogo from '@/assets/maribank_logo.png';
 
 interface Props {
   data: WizardData;
@@ -46,17 +47,17 @@ const METHODS = [
     ),
   },
   {
-    id: 'seabank' as const,
-    label: 'SeaBank',
-    accentColor: '#2D4DA0',
-    bgSelected: '#EEF2FF',
+    id: 'maribank' as const,
+    label: 'MariBank',
+    accentColor: '#F97316',
+    bgSelected: '#FFF3E8',
     accountName: 'Bee Bright Tutorial Center',
     accountNumber: '5678-9012-3456',
     branch: 'Main Branch',
     logo: (
       <img
-        src={seabankLogo}
-        alt="SeaBank"
+        src={maribankLogo}
+        alt="MariBank"
         className="h-9 w-auto object-contain"
         draggable={false}
       />

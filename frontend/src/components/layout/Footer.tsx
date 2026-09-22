@@ -10,6 +10,7 @@ const footerLinks = {
     { name: "Home", href: "/" },
     { name: "About Us", href: "/about" },
     { name: "Enrollment", href: "/enrollment" },
+    { name: "Track Enrollment", href: "/track-enrollment" },
     { name: "Login", href: "/login" },
   ],
 };

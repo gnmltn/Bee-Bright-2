@@ -1,7 +1,7 @@
 /**
  * Enrollment Controller — redesigned for Bee Bright v2
  * Supports: parent wizard flow, age-based program selection,
- * GCash/SeaBank/BDO payments, granular status FSM.
+ * GCash/MariBank/BDO payments, granular status FSM.
  */
 const crypto = require('crypto');
 const path = require('path');
@@ -27,6 +27,8 @@ const {
 const { validateAndBuildAssessment } = require('../utils/validateAssessment');
 const Schedule = require('../models/Schedule');
 const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
+const { PROGRAM_POLICIES } = require('../utils/schedulingPolicy');
+const { canTutorHandleSchedule } = require('./scheduleController');
 
 // ── Constants ────────────────────────────────────────────────────────────
 const PROOF_DIR = path.join(__dirname, '..', 'uploads', 'payments');
@@ -39,7 +41,7 @@ const ENROLLMENT_OTP_RESEND_SECONDS = 120;
 const ENROLLMENT_OTP_MAX_ATTEMPTS = 5;
 const ENROLLMENT_VERIFIED_WINDOW_MINUTES = 30;
 
-const VALID_PAYMENT_METHODS = ['gcash', 'seabank', 'bdo'];
+const VALID_PAYMENT_METHODS = ['gcash', 'maribank', 'bdo'];
 const VALID_PREFERRED_TIMES = ['morning', 'afternoon', 'no_preference'];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -236,7 +238,7 @@ const submitEnrollment = async (req, res) => {
     // ── Validate payment method ──
     const paymentMethod = String(body.paymentMethod || 'gcash').toLowerCase();
     if (!VALID_PAYMENT_METHODS.includes(paymentMethod))
-      return res.status(400).json({ success: false, message: 'Invalid payment method. Choose GCash, SeaBank, or BDO.' });
+      return res.status(400).json({ success: false, message: 'Invalid payment method. Choose GCash, MariBank, or BDO.' });
 
     // Payment is always 50% down — ignore any 'full' sent by client
     const paymentOption = 'down';
@@ -291,6 +293,14 @@ const submitEnrollment = async (req, res) => {
           .filter((d, i, arr) => arr.indexOf(d) === i)
       : [];
 
+    // Informational only — Step 7's live-availability slot pick(s), one per
+    // enrolled program. Never trusted for auto-assignment.
+    const preferredSlots = Array.isArray(body.preferredSlots)
+      ? body.preferredSlots
+          .filter((s) => s && typeof s.programCode === 'string' && typeof s.startTime === 'string' && typeof s.endTime === 'string')
+          .map((s) => ({ programCode: s.programCode.toUpperCase(), startTime: s.startTime, endTime: s.endTime }))
+      : [];
+
     // ── Pre-enrollment assessment (required only when a matching template exists) ──
     const selectedProgramCodes = canonicalPackages.map((p) => p.programCode).filter(Boolean);
     const { assessment } = await validateAndBuildAssessment(body, selectedProgramCodes);
@@ -327,6 +337,7 @@ const submitEnrollment = async (req, res) => {
       preferredStartDate,
       preferredTime,
       preferredDays,
+      preferredSlots,
       healthInfo,
       requirementDocuments,
       paymentOption,
@@ -407,7 +418,7 @@ const submitEnrollment = async (req, res) => {
 async function getPaymentInstructionsForMethod(method) {
   const DEFAULTS = {
     gcash:   { accountName: 'Bee Bright Tutorial Center', accountNumber: '09307517208', bankBranch: null },
-    seabank: { accountName: 'Bee Bright Tutorial Center', accountNumber: '5678-9012-3456', bankBranch: 'Main Branch' },
+    maribank: { accountName: 'Bee Bright Tutorial Center', accountNumber: '5678-9012-3456', bankBranch: 'Main Branch' },
     bdo:     { accountName: 'Bee Bright Tutorial Center', accountNumber: '0098-7654-3210', bankBranch: 'Main Branch' },
   };
   const firstPricing = await Pricing.findOne({ active: true, 'meta.accountNumber': { $exists: true, $ne: null } })
@@ -855,6 +866,92 @@ const adminAddStudent = async (req, res) => {
   }
 };
 
+// ── Enrollment wizard Step 7: live tutor-capacity availability ─────────────
+// Hourly slots for 1-on-1 programs (ACT102/EXP106), 8AM-5PM, lunch skipped.
+// Toddlers Playgroup (TPG101) uses its own fixed 2-hour blocks instead — see
+// PROGRAM_POLICIES.TPG101.fixedSlots in utils/schedulingPolicy.js.
+const HOURLY_PROGRAM_SLOTS = [
+  ['08:00', '09:00'], ['09:00', '10:00'], ['10:00', '11:00'], ['11:00', '12:00'],
+  ['13:00', '14:00'], ['14:00', '15:00'], ['15:00', '16:00'], ['16:00', '17:00'],
+];
+
+// 24-hour "HH:MM" -> a display-only 12-hour label like "8AM" / "1:30PM". The
+// underlying startTime/endTime strings stay 24-hour everywhere else — this is
+// purely for the label field the frontend renders to the parent.
+function to12Hour(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return m === 0 ? `${h12}${period}` : `${h12}:${String(m).padStart(2, '0')}${period}`;
+}
+
+// @desc    Live per-hour tutor-capacity availability for the enrollment wizard's
+//          Schedule Pref step. Tells the parent "is there enough tutor capacity
+//          at this hour" only — the admin still manually assigns the specific
+//          tutor after approval; this never auto-assigns anyone.
+// @route   GET /api/enrollment/availability?date=YYYY-MM-DD&programCode=ACT102
+// @access  Public — matches the rest of the enrollment wizard's routes.
+const getEnrollmentAvailability = async (req, res) => {
+  try {
+    const { date: dateStr, programCode } = req.query;
+    if (!dateStr || !programCode) {
+      return res.status(400).json({ success: false, message: 'date and programCode are required' });
+    }
+
+    const code = String(programCode).toUpperCase();
+    const policy = PROGRAM_POLICIES[code];
+    if (!policy) {
+      return res.status(400).json({ success: false, message: 'Unknown programCode' });
+    }
+
+    const date = new Date(`${dateStr}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid date' });
+    }
+
+    // Tutors are NOT individually scoped to programs in practice — account
+    // creation only sets employmentType (full-time/part-time), nothing ever
+    // populates subjectsTaught, and there's no UI that does. Every active tutor
+    // is implicitly eligible for every program, so the pool is every active
+    // tutor, full stop — no subjectsTaught filter. (2026-09-22 fix: this used
+    // to filter by subjectsTaught, which made M always 0 in practice since the
+    // field is never populated by any real flow.)
+    const tutors = await User.find({
+      role: 'tutor',
+      isActive: true,
+      deletedAt: null,
+    }).select('_id').lean();
+    const total = tutors.length;
+
+    const slotDefs = policy.fixedSlots
+      ? policy.fixedSlots.map((s) => [s.startTime, s.endTime])
+      : HOURLY_PROGRAM_SLOTS;
+
+    const slots = {};
+    for (const [startTime, endTime] of slotDefs) {
+      let available = 0;
+      for (const tutor of tutors) {
+        const check = await canTutorHandleSchedule({
+          tutorId: tutor._id,
+          date,
+          startTime,
+          endTime,
+        });
+        if (check.ok) available += 1;
+      }
+      slots[`${startTime}-${endTime}`] = {
+        label: `${to12Hour(startTime)}-${to12Hour(endTime)}`,
+        available,
+        total,
+      };
+    }
+
+    return res.status(200).json({ success: true, date: dateStr, programCode: code, slots });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /api/payments/instructions/:method
 const getPaymentInstructions = async (req, res) => {
   try {
@@ -875,6 +972,7 @@ module.exports = {
   submitPaymentProof,
   getMyEnrollments,
   trackEnrollment,
+  getEnrollmentAvailability,
   createEnrollment,
   getEnrollmentByStudent,
   getAllEnrollments,

@@ -66,7 +66,7 @@ function pushStatusHistory(enrollment, status, actorId = null, actorRole = null,
 // ── Email notifications ────────────────────────────────────────────────────
 
 async function sendEnrollmentConfirmationEmail(to, { parentName, studentName, enrollmentId, amountDue, paymentMethod }) {
-  const methodLabel = { gcash: 'GCash', seabank: 'SeaBank', bdo: 'BDO' }[paymentMethod] || paymentMethod;
+  const methodLabel = { gcash: 'GCash', maribank: 'MariBank', bdo: 'BDO' }[paymentMethod] || paymentMethod;
   return sendEmail(
     {
       to,

@@ -129,7 +129,7 @@ export interface PricingPackage {
 }
 export const pricingService = {
   getAll: () => api.get<{ success: boolean; count: number; pricing: PricingPackage[] }>('/enrollments/pricing'),
-  getPaymentInstructions: (method: 'gcash' | 'seabank' | 'bdo') =>
+  getPaymentInstructions: (method: 'gcash' | 'maribank' | 'bdo') =>
     api.get<{ success: boolean; method: string; instructions: Record<string, string> }>(`/payments/instructions/${method}`),
 };
 
@@ -309,7 +309,7 @@ export const enrollmentService = {
   submitWizard: (data: {
     packages: { programCode: string; packageSlug: string; displayName: string; price: number; paymentOption: 'down' }[];
     paymentOption: 'down'; // always 50% down — backend enforces this
-    paymentMethod: 'gcash' | 'seabank' | 'bdo';
+    paymentMethod: 'gcash' | 'maribank' | 'bdo';
     studentFirstName: string;
     studentLastName: string;
     studentMiddleName?: string;
@@ -354,6 +354,15 @@ export const enrollmentService = {
 
   trackEnrollment: (enrollmentId: string, email: string) =>
     api.get('/enrollments/track', { params: { enrollmentId, email } }),
+
+  /** Live per-hour tutor-capacity view for Step 7 — informational only, never auto-assigns a tutor. */
+  getAvailability: (date: string, programCode: string) =>
+    api.get<{
+      success: boolean;
+      date: string;
+      programCode: string;
+      slots: Record<string, { label: string; available: number; total: number }>;
+    }>('/enrollments/availability', { params: { date, programCode } }),
 
   getMyEnrollments: () => api.get('/enrollments/my-enrollments'),
   getTutorAssessments: () => api.get('/enrollments/tutor/assessments'),

@@ -15,7 +15,7 @@ interface Props {
   toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast'];
 }
 
-const METHOD_LABELS: Record<string, string> = { gcash: 'GCash', seabank: 'SeaBank', bdo: 'BDO' };
+const METHOD_LABELS: Record<string, string> = { gcash: 'GCash', maribank: 'MariBank', bdo: 'BDO' };
 const TIME_LABELS: Record<string, string> = { morning: 'Morning (8AM–12PM)', afternoon: 'Afternoon (12PM–6PM)', no_preference: 'No Preference' };
 
 export default function Step12Review({ data, update, onBack, submitting, setSubmitting, onEnrolled, toast }: Props) {
@@ -44,6 +44,9 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         preferredStartDate: data.preferredStartDate || undefined,
         preferredTime: data.preferredTime,
         preferredDays: (data.preferredDays ?? []).length > 0 ? data.preferredDays : undefined,
+        preferredSlots: (data.preferredSlots ?? []).length > 0
+          ? data.preferredSlots.map((s) => ({ programCode: s.programCode, startTime: s.startTime, endTime: s.endTime }))
+          : undefined,
         allergies: data.allergies || undefined,
         medications: data.medications || undefined,
         specialNeeds: data.specialNeeds,
@@ -154,6 +157,12 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
           <Row label="Preferred Start" value={data.preferredStartDate ? new Date(data.preferredStartDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'} />
           <Row label="Available Days" value={(data.preferredDays ?? []).length > 0 ? data.preferredDays!.join(', ') : 'Any available weekday'} />
           <Row label="Time" value={TIME_LABELS[data.preferredTime] || '—'} />
+          {(data.preferredSlots ?? []).length > 0 && (
+            <Row
+              label="Preferred Slot"
+              value={data.preferredSlots!.map((s) => `${s.label} (${s.programCode})`).join(', ')}
+            />
+          )}
         </Section>
 
         {data.assessmentApplicable !== null && (

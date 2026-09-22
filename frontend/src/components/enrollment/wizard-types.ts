@@ -64,6 +64,12 @@ export interface WizardData {
    * Empty array = no preference (any weekday).
    */
   preferredDays: string[];
+  /**
+   * Live-availability slot picked per enrolled program (Step 7's hourly/2-hour
+   * grid). Informational only — never auto-assigns a tutor; the admin still
+   * manually assigns one after approval. One entry per programCode at most.
+   */
+  preferredSlots: { programCode: string; startTime: string; endTime: string; label: string }[];
 
   // ── Step 8 – Guardian info ────────────────────────────────────────────
   guardianName: string;
@@ -91,7 +97,7 @@ export interface WizardData {
   assessmentSnapshot: AssessmentTemplate | null;
 
   // ── Step 10 – Billing ─────────────────────────────────────────────────
-  paymentMethod: 'gcash' | 'seabank' | 'bdo';
+  paymentMethod: 'gcash' | 'maribank' | 'bdo';
   proofDataUrl: string | null;   // base64 payment receipt
   proofFileName: string | null;
   payerReference: string;
@@ -131,7 +137,7 @@ export const INITIAL_WIZARD_DATA: WizardData = {
   selectedPackages: [], paymentOption: 'down' as const,
 
   // Step 7
-  preferredStartDate: '', preferredTime: 'no_preference', preferredDays: [],
+  preferredStartDate: '', preferredTime: 'no_preference', preferredDays: [], preferredSlots: [],
 
   // Step 8
   guardianName: '', guardianPhone: '', guardianEmail: '',

@@ -82,6 +82,18 @@ const enrollmentSchema = new mongoose.Schema({
     enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
     default: [],
   },
+  // Informational only — the parent's pick from Step 7's live availability view
+  // (one entry per enrolled program). Never auto-assigns a tutor; admin still
+  // manually assigns the specific tutor after approval.
+  preferredSlots: {
+    type: [{
+      programCode: { type: String },
+      startTime: { type: String },
+      endTime: { type: String },
+      _id: false,
+    }],
+    default: [],
+  },
 
   // Health and learning information
   healthInfo: {
