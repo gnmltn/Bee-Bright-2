@@ -3,6 +3,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const Remark = require('../models/Remark');
 const Schedule = require('../models/Schedule');
+const AuditLog = require('../models/AuditLog');
+const User = require('../models/User');
 const { logAudit } = require('../utils/auditService');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
 const { resolveProgramCode } = require('../utils/schedulingPolicy');
@@ -354,9 +356,7 @@ const updateDraftRemark = async (req, res) => {
 };
 
 // @desc    Permanently delete a draft — the tutor's own "Cancel" → "Delete Draft" action.
-//          Drafts only: a draft is always an original (never a correction-in-progress —
-//          correctPublishedRemark has no draft branch), so there's never a correction
-//          chain referencing it and nothing else to keep consistent.
+//          Drafts only. A Published remark is immutable and can never be deleted either.
 // @route   DELETE /api/remarks/:id
 // @access  Private (Tutor, own draft only)
 const deleteDraftRemark = async (req, res) => {
@@ -369,7 +369,7 @@ const deleteDraftRemark = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Remark not found or you cannot delete it' });
     }
     if (remark.status !== 'draft') {
-      return res.status(400).json({ success: false, message: 'Only drafts can be deleted. A published remark must be corrected, not deleted.' });
+      return res.status(400).json({ success: false, message: 'Only drafts can be deleted. A published remark is permanent and cannot be deleted.' });
     }
 
     if (remark.attachment?.path) {
@@ -396,104 +396,6 @@ const deleteDraftRemark = async (req, res) => {
     res.status(200).json({ success: true, message: 'Draft deleted.' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to delete draft' });
-  }
-};
-
-// ─── F: Correcting a published remark ──────────────────────────────────────────
-
-// @desc    Correct a published remark — creates a new version, never overwrites
-// @route   POST /api/remarks/:id/correct
-// @access  Private (Tutor, own published+current remark only)
-const correctPublishedRemark = async (req, res) => {
-  try {
-    if (req.user.role !== 'tutor') {
-      return res.status(403).json({ success: false, message: 'Only tutors can correct remarks' });
-    }
-    const original = await Remark.findOne({ _id: req.params.id, tutor: req.user._id, status: 'published' });
-    if (!original) {
-      return res.status(404).json({ success: false, message: 'Published remark not found or you cannot correct it' });
-    }
-    if (!original.isCurrentVersion) {
-      return res.status(400).json({ success: false, message: 'Only the current published version can be corrected.' });
-    }
-
-    const {
-      correctionReason, date, activities, ratings, remarkBullets, nextFocus,
-      parentSupportSuggestion, examInfo, attachmentDataUrl, attachmentFileName,
-    } = req.body;
-    const trimmedCorrectionReason = String(correctionReason || '').trim();
-    if (!trimmedCorrectionReason) {
-      return res.status(400).json({ success: false, message: 'A correction reason is required.' });
-    }
-
-    const doc = {
-      student: original.student,
-      tutor: req.user._id,
-      programCode: original.programCode,
-      templateType: original.templateType,
-      date: date ? new Date(date) : original.date,
-      activities: activities !== undefined ? normalizeStringArray(activities) : original.activities,
-      ratings: ratings !== undefined ? normalizeRatings(ratings) : original.ratings,
-      remarkBullets: remarkBullets !== undefined ? normalizeStringArray(remarkBullets) : original.remarkBullets,
-      nextFocus: nextFocus !== undefined ? String(nextFocus).trim() : original.nextFocus,
-      parentSupportSuggestion: parentSupportSuggestion !== undefined ? String(parentSupportSuggestion).trim() : original.parentSupportSuggestion,
-      examInfo: examInfo !== undefined ? normalizeExamInfo(examInfo) : original.examInfo,
-    };
-
-    const errors = validateForPublish(original.templateType, doc);
-
-    const attachmentChanged = Boolean(attachmentDataUrl);
-    let attachment = original.attachment?.path ? original.attachment : null;
-    if (attachmentChanged) {
-      try {
-        attachment = saveAttachmentFromDataUrl(attachmentDataUrl, attachmentFileName);
-      } catch (uploadErr) {
-        errors.push(uploadErr.message);
-      }
-    }
-
-    if (errors.length > 0) {
-      return res.status(400).json({ success: false, message: 'Please correct the highlighted fields.', errors });
-    }
-
-    // Adding/changing the attachment routes the correction back through Admin review
-    // (spec F.6) before it can become the current published version; otherwise it
-    // replaces the current version immediately (spec F.7).
-    const rootId = original.rootRemarkId || original._id;
-    const needsReview = attachmentChanged;
-    const correction = await Remark.create({
-      ...doc,
-      attachment: attachment || undefined,
-      status: needsReview ? 'pending_admin_review' : 'published',
-      publishedAt: needsReview ? null : new Date(),
-      rootRemarkId: rootId,
-      correctionOf: original._id,
-      correctionReason: trimmedCorrectionReason,
-      isCurrentVersion: !needsReview,
-    });
-
-    if (!needsReview) {
-      original.isCurrentVersion = false;
-      await original.save();
-    }
-
-    logAudit({
-      req,
-      userId: req.user._id,
-      action: 'Correct Remark',
-      module: 'Academic',
-      status: 'SUCCESS',
-      description: `Tutor corrected remark ${original._id}`,
-      metadata: { originalRemarkId: original._id, correctionId: correction._id, needsReview },
-    }).catch(() => {});
-
-    res.status(201).json({
-      success: true,
-      message: needsReview ? 'Correction submitted for admin review (attachment changed).' : 'Correction published.',
-      remark: await populateRemark(correction._id),
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message || 'Failed to correct remark' });
   }
 };
 
@@ -651,6 +553,93 @@ const reviewRemark = async (req, res) => {
   }
 };
 
+// @desc    Paginated log of past approve/reject decisions, newest first — every
+//          reviewRemark call already writes a 'Review Remark' AuditLog entry
+//          (admin identity via userId, decision timestamp via createdAt, and
+//          decision/reason in metadata), so this reads that existing audit trail
+//          rather than the Remark document's own reviewedBy/reviewedAt/rejectionReason
+//          fields. Those fields get overwritten by a later decision on the same
+//          remark (a rejected draft can be revised and resubmitted) or can vanish
+//          entirely if the tutor deletes a rejected draft afterward — the audit log
+//          is the only append-only, tamper-proof record of "who decided what, when."
+// @route   GET /api/remarks/review-history?decision=approve|reject&page=&limit=
+// @access  Private (Admin)
+const listReviewHistory = async (req, res) => {
+  try {
+    const { decision, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const filter = { action: 'Review Remark', module: 'Academic' };
+    if (decision === 'approve' || decision === 'reject') {
+      filter['metadata.decision'] = decision;
+    }
+
+    const total = await AuditLog.countDocuments(filter);
+    // Deliberately NOT populated here — .populate('userId', ...) silently turns
+    // userId into null when the referenced User no longer exists, losing even the raw
+    // id. Fetched separately below so a deleted admin account is a flaggable state,
+    // not indistinguishable from an audit entry that never had a userId at all.
+    const logs = await AuditLog.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .lean();
+
+    // Batch-fetch the remarks these decisions were about, for student/tutor/program
+    // display — the audit entry itself only carries remarkId, decision, and reason.
+    const remarkIds = [...new Set(logs.map((l) => l.metadata?.remarkId).filter(Boolean).map(String))];
+    const remarks = await Remark.find({ _id: { $in: remarkIds } })
+      .populate('student', 'firstName lastName')
+      .populate('tutor', 'firstName lastName')
+      .select('student tutor programCode')
+      .lean();
+    const remarkById = new Map(remarks.map((r) => [String(r._id), r]));
+
+    const adminIds = [...new Set(logs.map((l) => l.userId).filter(Boolean).map(String))];
+    const admins = await User.find({ _id: { $in: adminIds } }).select('firstName lastName').lean();
+    const adminById = new Map(admins.map((a) => [String(a._id), a]));
+
+    const history = logs.map((l) => {
+      const remarkId = l.metadata?.remarkId ? String(l.metadata.remarkId) : null;
+      const remark = remarkId ? remarkById.get(remarkId) : null;
+      // A rejected remark becomes a Draft, which the tutor is allowed to delete — when
+      // that happens this decision's own record is the only trace of it left. Flagged
+      // explicitly rather than silently rendered with blank student/tutor/type fields.
+      const remarkDeleted = Boolean(remarkId) && !remark;
+
+      const adminId = l.userId ? String(l.userId) : null;
+      const admin = adminId ? adminById.get(adminId) : null;
+      const adminDeleted = Boolean(adminId) && !admin;
+
+      return {
+        _id: l._id,
+        remarkId,
+        decision: l.metadata?.decision || null,
+        reason: l.metadata?.reason || null,
+        reviewedAt: l.createdAt,
+        admin: admin ? { _id: admin._id, firstName: admin.firstName, lastName: admin.lastName } : null,
+        adminDeleted,
+        student: remark?.student ? { _id: remark.student._id, firstName: remark.student.firstName, lastName: remark.student.lastName } : null,
+        tutor: remark?.tutor ? { _id: remark.tutor._id, firstName: remark.tutor.firstName, lastName: remark.tutor.lastName } : null,
+        programCode: remark?.programCode || null,
+        remarkDeleted,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      history,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to load review history' });
+  }
+};
+
 // @desc    Full correction/version history for a remark's chain
 // @route   GET /api/remarks/:id/history
 // @access  Private (Admin, or the owning tutor)
@@ -717,11 +706,11 @@ module.exports = {
   createOrSaveRemark,
   updateDraftRemark,
   deleteDraftRemark,
-  correctPublishedRemark,
   listMyRemarks,
   listMyChildProgress,
   listPendingReview,
   reviewRemark,
+  listReviewHistory,
   getRemarkHistory,
   getRemarkAttachment,
 };

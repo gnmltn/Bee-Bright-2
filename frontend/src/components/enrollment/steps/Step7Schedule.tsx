@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { CalendarDays, Sun, Sunset, Clock, Loader2, CheckCircle2 } from 'lucide-react';
+import { CalendarDays, Loader2, CheckCircle2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { enrollmentService } from '@/services/api';
-import { PROGRAM_LABELS, type ActiveProgramCode } from '@/constants/programs';
+import { PROGRAM_LABELS, getRequiredDaysForPackage, type ActiveProgramCode } from '@/constants/programs';
 
 type AvailabilitySlot = { label: string; available: number; total: number };
 type AvailabilityResponse = Record<string, AvailabilitySlot>;
@@ -36,12 +36,6 @@ const DAY_SHORT: Record<string, string> = {
   Saturday: 'Sat',
 };
 
-const TIME_OPTIONS = [
-  { value: 'morning'       as const, label: 'Morning',      desc: '8:00 AM – 12:00 PM', icon: Sun },
-  { value: 'afternoon'     as const, label: 'Afternoon',    desc: '1:00 PM – 5:00 PM',  icon: Sunset },
-  { value: 'no_preference' as const, label: 'No Preference', desc: 'Any available time', icon: Clock },
-];
-
 export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -56,19 +50,32 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
       ? current.filter((d) => d !== day)
       : [...current, day];
     update({ preferredDays: next });
-    setErrors((prev) => ({ ...prev, preferredStartDate: '' }));
+    setErrors((prev) => ({ ...prev, preferredStartDate: '', preferredDays: '' }));
   };
+
+  const selectedDays = data.preferredDays ?? [];
+
+  // ── Available Days lock (Toddlers Playgroup / Academic Tutorial only) ──────
+  // Not Examination Preparation — that program keeps its free up-to-6-days pick.
+  // A parent may select packages from more than one locked program at once; the
+  // shared Available Days list then has to satisfy all of them, so the larger
+  // required count wins (it's a superset of the smaller program's need).
+  const requiredDaysCounts = data.selectedPackages
+    .map((p) => getRequiredDaysForPackage(p.programCode, p.sessionCount))
+    .filter((n): n is number => n !== null);
+  const requiredDays = requiredDaysCounts.length > 0 ? Math.max(...requiredDaysCounts) : null;
 
   const validate = (): boolean => {
     const errs: Record<string, string> = {};
     if (!data.preferredStartDate) {
       errs.preferredStartDate = 'Please choose a preferred start date.';
     }
+    if (requiredDays !== null && selectedDays.length !== requiredDays) {
+      errs.preferredDays = `This package requires selecting exactly ${requiredDays} day${requiredDays === 1 ? '' : 's'}.`;
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
-
-  const selectedDays = data.preferredDays ?? [];
 
   // ── Live tutor-capacity availability, per enrolled program ──────────────
   // Informational only — helps the parent pick a realistic slot; the admin
@@ -245,11 +252,17 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
       <div className="space-y-2">
         <Label className="font-semibold">
           Available Days{' '}
-          <span className="text-muted-foreground font-normal">(optional — select all that apply)</span>
+          <span className="text-muted-foreground font-normal">
+            {requiredDays !== null
+              ? `(select exactly ${requiredDays} day${requiredDays === 1 ? '' : 's'})`
+              : '(optional — select all that apply)'}
+          </span>
         </Label>
         <p className="text-xs text-muted-foreground">
-          Tap the days your child can attend. Leave all unselected if any weekday is fine.
-          Sessions are scheduled Monday through Saturday.
+          {requiredDays !== null
+            ? `Your selected package meets ${requiredDays} time${requiredDays === 1 ? '' : 's'} a week — pick exactly ${requiredDays} day${requiredDays === 1 ? '' : 's'} your child can attend.`
+            : 'Tap the days your child can attend. Leave all unselected if any weekday is fine.'}
+          {' '}Sessions are scheduled Monday through Saturday.
         </p>
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-1">
           {WEEKDAYS.map((day) => {
@@ -271,57 +284,28 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
             );
           })}
         </div>
-        {selectedDays.length > 0 && (
-          <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-            Selected: {selectedDays.join(', ')}
-          </p>
+        {errors.preferredDays && (
+          <p className="text-xs text-destructive">{errors.preferredDays}</p>
         )}
-        {selectedDays.length === 0 && (
-          <p className="text-xs text-muted-foreground mt-1">
-            No days selected — any available weekday is acceptable.
+        {requiredDays !== null ? (
+          <p className={`text-xs mt-1 ${selectedDays.length === requiredDays ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>
+            {selectedDays.length} of {requiredDays} selected
+            {selectedDays.length > 0 ? `: ${selectedDays.join(', ')}` : ''}
           </p>
+        ) : (
+          <>
+            {selectedDays.length > 0 && (
+              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                Selected: {selectedDays.join(', ')}
+              </p>
+            )}
+            {selectedDays.length === 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                No days selected — any available weekday is acceptable.
+              </p>
+            )}
+          </>
         )}
-      </div>
-
-      {/* ── Preferred Time ── */}
-      <div className="space-y-2">
-        <Label className="font-semibold">Preferred Time Slot</Label>
-        <div className="grid gap-3">
-          {TIME_OPTIONS.map((opt) => {
-            const active = data.preferredTime === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => update({ preferredTime: opt.value })}
-                className={`flex items-center gap-4 p-4 rounded-xl border-2 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  active
-                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/20'
-                    : 'border-border hover:border-amber-300'
-                }`}
-              >
-                <div
-                  className={`h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    active ? 'bg-amber-500 text-white' : 'bg-muted text-muted-foreground'
-                  }`}
-                >
-                  <opt.icon className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-semibold text-foreground">{opt.label}</p>
-                  <p className="text-xs text-muted-foreground">{opt.desc}</p>
-                </div>
-                <div
-                  className={`ml-auto h-5 w-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                    active ? 'border-amber-500' : 'border-muted-foreground'
-                  }`}
-                >
-                  {active && <div className="h-2.5 w-2.5 rounded-full bg-amber-500" />}
-                </div>
-              </button>
-            );
-          })}
-        </div>
       </div>
 
       <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 rounded-lg text-xs text-blue-800 dark:text-blue-300">

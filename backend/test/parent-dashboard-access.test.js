@@ -1,24 +1,25 @@
 /**
  * Final Implementation Prompt Section 2 — reframing the Student Dashboard so a
- * parent can actually view their child's schedule/progress/materials.
+ * parent can actually view their child's schedule/progress.
  *
- * Root cause fixed here: getMyProgress / getAssignedMaterials / getStudentClasses
- * all hard-required req.user.role === 'student' and queried by req.user._id —
- * for a parent (whose own account id never appears as a `student` on any
- * Schedule/Grade/LearningMaterial), this silently returned nothing (or, for
- * getStudentClasses, an explicit 403 the frontend caught and showed empty).
- * Each now accepts role 'parent' + a verified `studentId` query param.
+ * Root cause fixed here: getMyProgress / getStudentClasses both hard-required
+ * req.user.role === 'student' and queried by req.user._id — for a parent
+ * (whose own account id never appears as a `student` on any Schedule/Grade),
+ * this silently returned nothing (or, for getStudentClasses, an explicit 403
+ * the frontend caught and showed empty). Each now accepts role 'parent' + a
+ * verified `studentId` query param.
+ *
+ * (2026-09-22: the getAssignedMaterials coverage that used to live here was
+ * removed along with the Learning Materials feature itself.)
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Grade = require('../models/Grade');
-const LearningMaterial = require('../models/LearningMaterial');
 const Schedule = require('../models/Schedule');
 const Enrollment = require('../models/Enrollment');
 
 const { getMyProgress } = require('../controllers/gradeController');
-const { getAssignedMaterials } = require('../controllers/learningMaterialController');
 const { getStudentClasses } = require('../controllers/scheduleController');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
 
@@ -102,35 +103,6 @@ test('getMyProgress: non-student, non-parent roles are rejected', async () => {
   const res = mockRes();
   await getMyProgress({ user: { _id: 't1', role: 'tutor' }, query: {} }, res);
   assert.equal(res._status, 403);
-});
-
-// ── getAssignedMaterials ─────────────────────────────────────────────────────
-test('getAssignedMaterials: student role unaffected', async () => {
-  const restore = stubFind(LearningMaterial, [{ _id: 'm1' }]);
-  try {
-    const res = mockRes();
-    await getAssignedMaterials({ user: student, query: {} }, res);
-    assert.equal(res._status, 200);
-    assert.equal(res._body.materials.length, 1);
-  } finally { restore(); }
-});
-
-test('getAssignedMaterials: parent without studentId is rejected', async () => {
-  const res = mockRes();
-  await getAssignedMaterials({ user: parent, query: {} }, res);
-  assert.equal(res._status, 403);
-});
-
-test('getAssignedMaterials: parent with their own child gets that child\'s materials', async () => {
-  const origExists = Enrollment.exists;
-  Enrollment.exists = async (q) => q.parent === 'parent-1' && q.student === myChild;
-  const restore = stubFind(LearningMaterial, [{ _id: 'm1' }, { _id: 'm2' }]);
-  try {
-    const res = mockRes();
-    await getAssignedMaterials({ user: parent, query: { studentId: myChild } }, res);
-    assert.equal(res._status, 200);
-    assert.equal(res._body.materials.length, 2);
-  } finally { Enrollment.exists = origExists; restore(); }
 });
 
 // ── getStudentClasses ────────────────────────────────────────────────────────

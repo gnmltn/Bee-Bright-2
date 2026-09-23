@@ -256,10 +256,8 @@ async function findCompatibleOpenSlots({ subjectId, sessionType, enrollment, exc
       }
       return matchesParentPreference({
         preferredStartDate: enrollment.preferredStartDate,
-        preferredTime: enrollment.preferredTime,
         preferredDays: enrollment.preferredDays,
         date: row.date,
-        startTime: row.startTime,
       }).ok;
     })
     .slice(0, 8)
@@ -1207,13 +1205,11 @@ const createSchedule = async (req, res) => {
         const preferenceQuery = enrollmentId
           ? { _id: enrollmentId, status: 'active' }
           : { student: sid, status: 'active' };
-        const enrollment = await Enrollment.findOne(preferenceQuery).select('preferredStartDate preferredTime').lean();
+        const enrollment = await Enrollment.findOne(preferenceQuery).select('preferredStartDate').lean();
         if (enrollment) {
           const preferenceCheck = matchesParentPreference({
             preferredStartDate: enrollment.preferredStartDate,
-            preferredTime: enrollment.preferredTime,
             date: d,
-            startTime: normalizedStartTime,
           });
           if (!preferenceCheck.ok) return res.status(409).json({ success: false, code: 'PARENT_PREFERENCE_CONFLICT', message: preferenceCheck.reason });
         }
@@ -1416,10 +1412,8 @@ const enrollStudentInSession = async (req, res) => {
 
     const preferenceCheck = matchesParentPreference({
       preferredStartDate: enrollment.preferredStartDate,
-      preferredTime: enrollment.preferredTime,
       preferredDays: enrollment.preferredDays,
       date: schedule.date,
-      startTime: schedule.startTime,
     });
     if (!preferenceCheck.ok && !overridePreference) {
       const compatibleSlots = await findCompatibleOpenSlots({

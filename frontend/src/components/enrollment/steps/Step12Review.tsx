@@ -16,7 +16,6 @@ interface Props {
 }
 
 const METHOD_LABELS: Record<string, string> = { gcash: 'GCash', maribank: 'MariBank', bdo: 'BDO' };
-const TIME_LABELS: Record<string, string> = { morning: 'Morning (8AM–12PM)', afternoon: 'Afternoon (12PM–6PM)', no_preference: 'No Preference' };
 
 export default function Step12Review({ data, update, onBack, submitting, setSubmitting, onEnrolled, toast }: Props) {
   const amountDue = computeTotalFee(data.selectedPackages); // always 50% down
@@ -42,7 +41,6 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
           guardianId: data.docGuardianId ? { dataUrl: data.docGuardianId.dataUrl, fileName: data.docGuardianId.fileName } : undefined,
         },
         preferredStartDate: data.preferredStartDate || undefined,
-        preferredTime: data.preferredTime,
         preferredDays: (data.preferredDays ?? []).length > 0 ? data.preferredDays : undefined,
         preferredSlots: (data.preferredSlots ?? []).length > 0
           ? data.preferredSlots.map((s) => ({ programCode: s.programCode, startTime: s.startTime, endTime: s.endTime }))
@@ -156,7 +154,6 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         <Section title="Schedule Preference">
           <Row label="Preferred Start" value={data.preferredStartDate ? new Date(data.preferredStartDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'} />
           <Row label="Available Days" value={(data.preferredDays ?? []).length > 0 ? data.preferredDays!.join(', ') : 'Any available weekday'} />
-          <Row label="Time" value={TIME_LABELS[data.preferredTime] || '—'} />
           {(data.preferredSlots ?? []).length > 0 && (
             <Row
               label="Preferred Slot"

@@ -70,6 +70,14 @@ function formatSlotTime(value: string) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
+function preferredSlotLabel(enrollment: AdminEnrollment) {
+  const slot = (enrollment.preferredSlots || []).find(
+    (s) => (s.programCode || "").toUpperCase() === PLAYGROUP_CODE
+  );
+  if (!slot) return "No preference selected";
+  return `${formatSlotTime(slot.startTime)} – ${formatSlotTime(slot.endTime)}`;
+}
+
 interface StudentOption {
   key: string;
   enrollment: AdminEnrollment;
@@ -258,6 +266,7 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
                 ? ` • Preferred days: ${selectedOption.enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/")}`
                 : ""}
             </p>
+            <p>Time Slot Availability: {preferredSlotLabel(selectedOption.enrollment)}</p>
             <p>
               Guardian: {personDisplayName(selectedOption.enrollment.parent) || "—"}
               {selectedOption.enrollment.parent?.email ? ` • ${selectedOption.enrollment.parent.email}` : ""}

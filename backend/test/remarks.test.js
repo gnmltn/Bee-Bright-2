@@ -14,14 +14,15 @@ const Schedule = require('../models/Schedule');
 const User = require('../models/User');
 const Enrollment = require('../models/Enrollment');
 const Remark = require('../models/Remark');
+const AuditLog = require('../models/AuditLog');
 const {
   createOrSaveRemark,
   updateDraftRemark,
   deleteDraftRemark,
-  correctPublishedRemark,
   listMyChildProgress,
   listPendingReview,
   reviewRemark,
+  listReviewHistory,
   getRemarkAttachment,
 } = require('../controllers/remarkController');
 
@@ -105,21 +106,68 @@ function makeFakeRemarkStore() {
 
 const TUTOR_A = { id: 'tutor-a', _id: 'tutor-a', role: 'tutor' };
 const TUTOR_B = { id: 'tutor-b', _id: 'tutor-b', role: 'tutor' };
-const ADMIN = { id: 'admin-1', _id: 'admin-1', role: 'admin' };
+const ADMIN = { id: 'admin-1', _id: 'admin-1', role: 'admin', firstName: 'Ada', lastName: 'Minoza' };
+const ADMIN_2 = { id: 'admin-2', _id: 'admin-2', role: 'admin', firstName: 'Beni', lastName: 'Cruz' };
 const PARENT = { id: 'parent-1', _id: 'parent-1', role: 'parent' };
 const SUBJECT_ACT102 = { _id: 'subj-act102', name: 'Academic Tutorial', code: 'ACT102' };
 const SUBJECT_TPG101 = { _id: 'subj-tpg101', name: 'Toddlers Playgroup', code: 'TPG101' };
 
 const TINY_PNG_DATA_URL = 'data:image/png;base64,' + Buffer.from('fake-image-bytes').toString('base64');
 
+// AuditLog is a separate collection from Remark — `logAudit()` (utils/auditService.js)
+// calls `AuditLog.create` directly, so stubbing the model here also captures every
+// real logAudit() call made inside remarkController (Review Remark, Create Remark,
+// etc.) exactly like production, rather than needing tests to fabricate log entries.
+function matchesAuditFilter(doc, filter) {
+  return Object.entries(filter).every(([key, value]) => {
+    if (key.includes('.')) {
+      const [outer, inner] = key.split('.');
+      return doc[outer]?.[inner] === value;
+    }
+    return String(doc[key]) === String(value);
+  });
+}
+
+function makeFakeAuditLogStore() {
+  const docs = [];
+  let seq = 0;
+  return {
+    docs,
+    async create(data) {
+      const id = `audit-${++seq}`;
+      // Spaced fake timestamps so "newest first" sort is deterministic even when
+      // several entries are created within the same test, same millisecond.
+      const doc = { createdAt: new Date(2026, 0, 1, 0, 0, seq), ...data, _id: id };
+      docs.push(doc);
+      return doc;
+    },
+    countDocuments: async (filter) => docs.filter((d) => matchesAuditFilter(d, filter)).length,
+    find(filter) {
+      let results = docs.filter((d) => matchesAuditFilter(d, filter));
+      const q = {
+        sort(spec) {
+          const [key, dir] = Object.entries(spec)[0];
+          results = [...results].sort((a, b) => (dir === -1 ? b[key] - a[key] : a[key] - b[key]));
+          return q;
+        },
+        skip(n) { results = results.slice(n); return q; },
+        limit(n) { results = results.slice(0, n); return q; },
+        lean() { return Promise.resolve(results.map((d) => ({ ...d }))); },
+      };
+      return q;
+    },
+  };
+}
+
 // `schedules` lets a test simulate a tutor assigned to a student across MULTIPLE
 // programs at once (Spec v3) — defaults to a single schedule in `subject`'s program
 // when not given explicitly. Pass `schedules: []` (or `tutorHandles: false`) to
 // simulate "not assigned to this student in any program."
-function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, consents = [] } = {}) {
+function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, consents = [], auditUserDirectory } = {}) {
   const origScheduleExists = Schedule.exists;
   const origScheduleFind = Schedule.find;
   const origUserFindById = User.findById;
+  const origUserFind = User.find;
   const origEnrollmentExists = Enrollment.exists;
   const origRemarkCreate = Remark.create;
   const origRemarkFindById = Remark.findById;
@@ -127,6 +175,9 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
   const origRemarkFind = Remark.find;
   const origRemarkUpdateOne = Remark.updateOne;
   const origRemarkDeleteOne = Remark.deleteOne;
+  const origAuditLogCreate = AuditLog.create;
+  const origAuditLogFind = AuditLog.find;
+  const origAuditLogCountDocuments = AuditLog.countDocuments;
   const origFsWriteFileSync = fs.writeFileSync;
   const origFsExistsSync = fs.existsSync;
   const origFsMkdirSync = fs.mkdirSync;
@@ -136,6 +187,11 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
   let capturedExistsQuery = null;
   let capturedFindQuery = null;
   const store = makeFakeRemarkStore();
+  const userDirectory = auditUserDirectory || {
+    [ADMIN.id]: { firstName: ADMIN.firstName, lastName: ADMIN.lastName },
+    [ADMIN_2.id]: { firstName: ADMIN_2.firstName, lastName: ADMIN_2.lastName },
+  };
+  const auditStore = makeFakeAuditLogStore();
   const scheduleDocs = schedules !== undefined
     ? schedules
     : (tutorHandles && subject ? [{ subject }] : []);
@@ -143,6 +199,14 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
   Schedule.exists = async (query) => { capturedExistsQuery = query; return tutorHandles; };
   Schedule.find = (query) => { capturedFindQuery = query; return mockQuery(scheduleDocs); };
   User.findById = () => mockQuery({ consents });
+  // listReviewHistory batch-looks-up admins by id — resolve from the same directory
+  // the fake AuditLog store uses, so a "deleted admin account" test can simply leave an
+  // id out of the directory instead of needing a second lookup mechanism.
+  User.find = (query) => {
+    const ids = (query?._id?.$in || []).map(String);
+    const users = ids.filter((id) => userDirectory[id]).map((id) => ({ _id: id, ...userDirectory[id] }));
+    return mockQuery(users);
+  };
   Enrollment.exists = async () => false; // overridden per-test when parent ownership matters
   Remark.create = store.create;
   Remark.findById = store.findById;
@@ -150,6 +214,9 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
   Remark.find = store.find;
   Remark.updateOne = store.updateOne;
   Remark.deleteOne = store.deleteOne;
+  AuditLog.create = auditStore.create;
+  AuditLog.find = auditStore.find;
+  AuditLog.countDocuments = auditStore.countDocuments;
   fs.writeFileSync = () => {};
   fs.existsSync = () => true;
   fs.mkdirSync = () => {};
@@ -158,12 +225,14 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
 
   return {
     store,
+    auditStore,
     getCapturedExistsQuery: () => capturedExistsQuery,
     getCapturedFindQuery: () => capturedFindQuery,
     restore() {
       Schedule.exists = origScheduleExists;
       Schedule.find = origScheduleFind;
       User.findById = origUserFindById;
+      User.find = origUserFind;
       Enrollment.exists = origEnrollmentExists;
       Remark.create = origRemarkCreate;
       Remark.findById = origRemarkFindById;
@@ -171,6 +240,9 @@ function stubModels({ tutorHandles = true, subject = SUBJECT_ACT102, schedules, 
       Remark.find = origRemarkFind;
       Remark.updateOne = origRemarkUpdateOne;
       Remark.deleteOne = origRemarkDeleteOne;
+      AuditLog.create = origAuditLogCreate;
+      AuditLog.find = origAuditLogFind;
+      AuditLog.countDocuments = origAuditLogCountDocuments;
       fs.writeFileSync = origFsWriteFileSync;
       fs.existsSync = origFsExistsSync;
       fs.mkdirSync = origFsMkdirSync;
@@ -333,78 +405,117 @@ test('reviewRemark: admin reject returns the remark to Draft with a reason, requ
   } finally { restore(); }
 });
 
-test('correctPublishedRemark: a correction with a new attachment goes to Pending Admin Review and does not flip isCurrentVersion until approved', async () => {
-  const { restore, store } = stubModels({ consents: [{ name: 'media_consent', version: '1.0', acceptedAt: new Date() }] });
-  try {
-    const original = await store.create({
-      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress',
-      status: 'published', isCurrentVersion: true, publishedAt: new Date(),
-      date: new Date(), activities: ['Reading'], remarkBullets: ['Good progress.'], nextFocus: 'Keep going.',
-    });
+// ─── listReviewHistory: past approve/reject decisions (reads the AuditLog trail) ────
 
-    const res = mockRes();
-    await correctPublishedRemark({
-      user: TUTOR_A,
-      params: { id: original._id },
-      body: { correctionReason: 'Fixed a typo and added the worksheet photo.', attachmentDataUrl: TINY_PNG_DATA_URL },
-    }, res);
-    assert.equal(res._status, 201, JSON.stringify(res._body));
-    assert.equal(res._body.remark.status, 'pending_admin_review');
-    assert.equal(res._body.remark.isCurrentVersion, false, 'not current until admin approves');
-
-    const refreshedOriginal = store.docs.find((d) => d._id === original._id);
-    assert.equal(refreshedOriginal.isCurrentVersion, true, 'original stays current until the correction is approved');
-
-    // Now approve it — this is the moment the version actually flips (spec D.3/F.6).
-    const correctionId = res._body.remark._id;
-    const approveRes = mockRes();
-    await reviewRemark({ user: ADMIN, params: { id: correctionId }, body: { decision: 'approve' } }, approveRes);
-    assert.equal(approveRes._status, 200, JSON.stringify(approveRes._body));
-    assert.equal(approveRes._body.remark.isCurrentVersion, true);
-    assert.equal(store.docs.find((d) => d._id === original._id).isCurrentVersion, false, 'original flips to not-current only on approval');
-  } finally { restore(); }
-});
-
-test('correctPublishedRemark: a correction with a new attachment succeeds even with NO consent on record', async () => {
-  const { restore, store } = stubModels({ consents: [] });
-  try {
-    const original = await store.create({
-      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress',
-      status: 'published', isCurrentVersion: true, publishedAt: new Date(),
-      date: new Date(), activities: ['Reading'], remarkBullets: ['Good progress.'], nextFocus: 'Keep going.',
-    });
-
-    const res = mockRes();
-    await correctPublishedRemark({
-      user: TUTOR_A,
-      params: { id: original._id },
-      body: { correctionReason: 'Added the worksheet photo.', attachmentDataUrl: TINY_PNG_DATA_URL },
-    }, res);
-    assert.equal(res._status, 201, JSON.stringify(res._body), 'a tutor must never be blocked from correcting-with-an-attachment for missing consent');
-    assert.equal(res._body.remark.status, 'pending_admin_review');
-    assert.ok(res._body.remark.attachment?.path);
-  } finally { restore(); }
-});
-
-test('correctPublishedRemark: a correction with no attachment change publishes immediately and flips isCurrentVersion', async () => {
+test('listReviewHistory: lists approve and reject decisions newest first, with admin/student/tutor/program filled in from the remark', async () => {
   const { restore, store } = stubModels();
   try {
-    const original = await store.create({
-      student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress',
-      status: 'published', isCurrentVersion: true, publishedAt: new Date(),
-      date: new Date(), activities: ['Reading'], remarkBullets: ['Good progress.'], nextFocus: 'Keep going.',
-    });
+    const remarkA = await store.create({ student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review' });
+    const remarkB = await store.create({ student: 'student-2', tutor: TUTOR_B.id, programCode: 'TPG101', templateType: 'toddler_observation', status: 'pending_admin_review' });
+
+    await reviewRemark({ user: ADMIN, params: { id: remarkA._id }, body: { decision: 'approve' } }, mockRes());
+    await reviewRemark({ user: ADMIN_2, params: { id: remarkB._id }, body: { decision: 'reject', reason: 'Blurry photo.' } }, mockRes());
 
     const res = mockRes();
-    await correctPublishedRemark({
-      user: TUTOR_A,
-      params: { id: original._id },
-      body: { correctionReason: 'Fixed a typo.', nextFocus: 'Keep going with fluency drills.' },
-    }, res);
-    assert.equal(res._status, 201, JSON.stringify(res._body));
-    assert.equal(res._body.remark.status, 'published');
-    assert.equal(res._body.remark.isCurrentVersion, true);
-    assert.equal(store.docs.find((d) => d._id === original._id).isCurrentVersion, false);
+    await listReviewHistory({ query: {} }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.history.length, 2);
+    assert.equal(res._body.total, 2);
+
+    // Newest decision (the rejection) first.
+    const [first, second] = res._body.history;
+    assert.equal(first.decision, 'reject');
+    assert.equal(first.reason, 'Blurry photo.');
+    assert.equal(first.admin.firstName, ADMIN_2.firstName);
+    assert.equal(first.programCode, 'TPG101');
+    assert.ok(first.reviewedAt);
+
+    assert.equal(second.decision, 'approve');
+    assert.equal(second.admin.firstName, ADMIN.firstName);
+    assert.equal(second.programCode, 'ACT102');
+  } finally { restore(); }
+});
+
+test('listReviewHistory: filters by decision type', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const remarkA = await store.create({ student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review' });
+    const remarkB = await store.create({ student: 'student-2', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review' });
+    await reviewRemark({ user: ADMIN, params: { id: remarkA._id }, body: { decision: 'approve' } }, mockRes());
+    await reviewRemark({ user: ADMIN, params: { id: remarkB._id }, body: { decision: 'reject', reason: 'Not clear.' } }, mockRes());
+
+    const approvedRes = mockRes();
+    await listReviewHistory({ query: { decision: 'approve' } }, approvedRes);
+    assert.equal(approvedRes._body.history.length, 1);
+    assert.equal(approvedRes._body.history[0].decision, 'approve');
+
+    const rejectedRes = mockRes();
+    await listReviewHistory({ query: { decision: 'reject' } }, rejectedRes);
+    assert.equal(rejectedRes._body.history.length, 1);
+    assert.equal(rejectedRes._body.history[0].decision, 'reject');
+  } finally { restore(); }
+});
+
+test('listReviewHistory: paginates with a default page size of 20 and reports total/totalPages', async () => {
+  const { restore, store } = stubModels();
+  try {
+    for (let i = 0; i < 25; i++) {
+      const r = await store.create({ student: `student-${i}`, tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review' });
+      await reviewRemark({ user: ADMIN, params: { id: r._id }, body: { decision: 'approve' } }, mockRes());
+    }
+
+    const page1 = mockRes();
+    await listReviewHistory({ query: {} }, page1);
+    assert.equal(page1._body.history.length, 20, 'default page size is 20');
+    assert.equal(page1._body.total, 25);
+    assert.equal(page1._body.totalPages, 2);
+    assert.equal(page1._body.page, 1);
+
+    const page2 = mockRes();
+    await listReviewHistory({ query: { page: '2' } }, page2);
+    assert.equal(page2._body.history.length, 5);
+    assert.equal(page2._body.page, 2);
+  } finally { restore(); }
+});
+
+test('listReviewHistory: flags remarkDeleted when the underlying remark was later deleted (e.g. a rejected draft the tutor deleted)', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const remark = await store.create({ student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review' });
+    await reviewRemark({ user: ADMIN, params: { id: remark._id }, body: { decision: 'reject', reason: 'Needs revision.' } }, mockRes());
+
+    // The rejection put it back in Draft, which the tutor is allowed to delete.
+    await store.deleteOne({ _id: remark._id });
+
+    const res = mockRes();
+    await listReviewHistory({ query: {} }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.history.length, 1);
+    const entry = res._body.history[0];
+    assert.equal(entry.remarkDeleted, true, 'must be flagged rather than silently showing blank fields');
+    assert.equal(entry.decision, 'reject');
+    assert.equal(entry.reason, 'Needs revision.', 'the decision reason survives even though the remark itself is gone');
+    assert.ok(entry.admin, 'admin identity survives too');
+    assert.equal(entry.student, null);
+    assert.equal(entry.tutor, null);
+    assert.equal(entry.programCode, null);
+  } finally { restore(); }
+});
+
+test('listReviewHistory: flags adminDeleted when the reviewing admin account no longer exists', async () => {
+  // Directory intentionally leaves ADMIN out — simulates the admin's account having
+  // since been deleted, while the raw userId is still sitting on the audit entry.
+  const { restore, store } = stubModels({ auditUserDirectory: { [ADMIN_2.id]: { firstName: ADMIN_2.firstName, lastName: ADMIN_2.lastName } } });
+  try {
+    const remark = await store.create({ student: 'student-1', tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review' });
+    await reviewRemark({ user: ADMIN, params: { id: remark._id }, body: { decision: 'approve' } }, mockRes());
+
+    const res = mockRes();
+    await listReviewHistory({ query: {} }, res);
+    const entry = res._body.history[0];
+    assert.equal(entry.adminDeleted, true, 'must be flagged rather than silently showing a blank reviewer');
+    assert.equal(entry.admin, null);
+    assert.equal(entry.decision, 'approve', 'decision/reason/remark data survives even without the admin identity resolving');
   } finally { restore(); }
 });
 
@@ -675,14 +786,14 @@ test('deleteDraftRemark: tutor can permanently delete their own draft', async ()
   } finally { restore(); }
 });
 
-test('deleteDraftRemark: rejects deleting a published remark (must use correction, not delete)', async () => {
+test('deleteDraftRemark: rejects deleting a published remark (Published is immutable)', async () => {
   const { restore, store } = stubModels();
   try {
     const published = await store.create({ student: 'student-1', tutor: TUTOR_A.id, status: 'published', isCurrentVersion: true });
     const res = mockRes();
     await deleteDraftRemark({ user: TUTOR_A, params: { id: published._id } }, res);
     assert.equal(res._status, 400);
-    assert.match(res._body.message, /must be corrected, not deleted/i);
+    assert.match(res._body.message, /cannot be deleted/i);
     assert.ok(store.docs.find((d) => d._id === published._id), 'the published remark must NOT be deleted');
   } finally { restore(); }
 });

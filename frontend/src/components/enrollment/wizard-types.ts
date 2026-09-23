@@ -57,7 +57,6 @@ export interface WizardData {
 
   // ── Step 7 – Preferred schedule ───────────────────────────────────────
   preferredStartDate: string;
-  preferredTime: 'morning' | 'afternoon' | 'no_preference';
   /**
    * Days of the week the child is available.
    * Values: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday'
@@ -137,7 +136,7 @@ export const INITIAL_WIZARD_DATA: WizardData = {
   selectedPackages: [], paymentOption: 'down' as const,
 
   // Step 7
-  preferredStartDate: '', preferredTime: 'no_preference', preferredDays: [], preferredSlots: [],
+  preferredStartDate: '', preferredDays: [], preferredSlots: [],
 
   // Step 8
   guardianName: '', guardianPhone: '', guardianEmail: '',

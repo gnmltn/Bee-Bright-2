@@ -8,7 +8,6 @@ vi.mock("@/services/api", () => ({
   remarkService: {
     create: vi.fn(() => Promise.resolve({ data: { success: true, message: "Draft saved." } })),
     update: vi.fn(() => Promise.resolve({ data: { success: true, message: "Draft saved." } })),
-    correct: vi.fn(() => Promise.resolve({ data: { success: true, message: "Saved." } })),
     deleteDraft: vi.fn(() => Promise.resolve({ data: { success: true, message: "Draft deleted." } })),
   },
 }));

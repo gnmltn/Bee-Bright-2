@@ -35,6 +35,7 @@ import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment
 import { OneOnOneSchedulingWizard } from "@/components/admin/OneOnOneSchedulingWizard";
 import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulingWizard";
 import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
+import { RemarksReviewHistory } from "@/components/admin/RemarksReviewHistory";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
@@ -380,32 +381,18 @@ const parentPreferenceSummary = (enrollment: AdminEnrollment) => {
   const dateLabel = enrollment.preferredStartDate
     ? new Date(enrollment.preferredStartDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
     : "any start date";
-  const timeLabel = enrollment.preferredTime === "morning"
-    ? "morning"
-    : enrollment.preferredTime === "afternoon"
-      ? "afternoon"
-      : "no time preference";
   const daysLabel = enrollment.preferredDays && enrollment.preferredDays.length > 0
     ? enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/")
     : "any day";
-  return `${dateLabel}, ${timeLabel}, ${daysLabel}`;
+  return `${dateLabel}, ${daysLabel}`;
 };
 
-const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: string, startTime?: string) => {
+const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: string) => {
   if (enrollment.preferredStartDate && dateValue) {
     const preferred = new Date(enrollment.preferredStartDate);
     const scheduled = new Date(dateValue);
     if (!Number.isNaN(preferred.getTime()) && !Number.isNaN(scheduled.getTime()) && scheduled < preferred) {
       return { ok: false, reason: "Earlier than the parent preferred start date." };
-    }
-  }
-  if (enrollment.preferredTime && enrollment.preferredTime !== "no_preference" && startTime) {
-    const [hours, minutes] = startTime.split(":").map(Number);
-    const startMinutes = (hours || 0) * 60 + (minutes || 0);
-    const morning = startMinutes >= 8 * 60 && startMinutes < 12 * 60;
-    const afternoon = startMinutes >= 13 * 60 && startMinutes < 17 * 60;
-    if ((enrollment.preferredTime === "morning" && !morning) || (enrollment.preferredTime === "afternoon" && !afternoon)) {
-      return { ok: false, reason: `Does not match the parent ${enrollment.preferredTime} preference.` };
     }
   }
   if (enrollment.preferredDays && enrollment.preferredDays.length > 0 && dateValue) {
@@ -454,7 +441,7 @@ export default function AdminDashboard() {
       enrollmentId?: string; parent?: { firstName?: string; lastName?: string; email?: string; phone?: string } | null;
       studentSnapshot?: { firstName?: string; lastName?: string; birthdate?: string; computedAge?: number };
       packages?: { programCode?: string; displayName?: string; price?: number; paymentOption?: string }[];
-      preferredStartDate?: string; preferredTime?: string;
+      preferredStartDate?: string;
       healthInfo?: { allergies?: string; medications?: string; specialNeeds?: boolean; specialNeedsDetails?: string };
       consentItems?: { name?: string; accepted?: boolean }[];
       rejectionReason?: string; allowResubmission?: boolean; statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
@@ -3410,8 +3397,8 @@ export default function AdminDashboard() {
                           if (linkedStudentId && enrolledStudentIds.has(linkedStudentId)) return false;
                           return true;
                         });
-                        const matchingPreference = availableEnrollmentCandidates.filter((enrollmentItem) => matchesParentPreferenceClient(enrollmentItem, s.date, s.startTime).ok);
-                        const needsOverride = availableEnrollmentCandidates.filter((enrollmentItem) => !matchesParentPreferenceClient(enrollmentItem, s.date, s.startTime).ok);
+                        const matchingPreference = availableEnrollmentCandidates.filter((enrollmentItem) => matchesParentPreferenceClient(enrollmentItem, s.date).ok);
+                        const needsOverride = availableEnrollmentCandidates.filter((enrollmentItem) => !matchesParentPreferenceClient(enrollmentItem, s.date).ok);
                         const currentEnrollment = enrolledStudents.length;
                         const hasOpenSlot = currentEnrollment < maxCapacity;
                         return (
@@ -3573,7 +3560,7 @@ export default function AdminDashboard() {
                                           )}
                                           {needsOverride.map((candidate) => {
                                             const checked = scheduleEnrollmentSelectedStudentIds.includes(candidate._id);
-                                            const mismatch = matchesParentPreferenceClient(candidate, s.date, s.startTime).reason;
+                                            const mismatch = matchesParentPreferenceClient(candidate, s.date).reason;
                                             return (
                                               <DropdownMenuCheckboxItem
                                                 key={candidate._id}
@@ -3731,6 +3718,9 @@ export default function AdminDashboard() {
               </div>
               <div className="bg-card rounded-xl border border-border p-4">
                 <RemarksReviewQueue />
+              </div>
+              <div className="bg-card rounded-xl border border-border p-4">
+                <RemarksReviewHistory />
               </div>
             </TabsContent>
 
@@ -5286,7 +5276,10 @@ export default function AdminDashboard() {
             const parent = e.parent;
             const packages = e.packages || [];
             const preferredStart = e.preferredStartDate ? new Date(String(e.preferredStartDate)).toLocaleDateString('en-PH') : '—';
-            const preferredTime = String(e.preferredTime || '—');
+            const preferredDaysLabel = e.preferredDays && e.preferredDays.length > 0 ? e.preferredDays.join(', ') : 'No preference selected';
+            const preferredSlotsLabel = e.preferredSlots && e.preferredSlots.length > 0
+              ? e.preferredSlots.map((s) => `${s.programCode}: ${s.startTime}–${s.endTime}`).join(', ')
+              : 'No preference selected';
             const healthInfo = e.healthInfo;
             const consentItems = e.consentItems || [];
             const statusHistory = e.statusHistory || [];
@@ -5363,7 +5356,9 @@ export default function AdminDashboard() {
                       {e.studentId && <p className="text-muted-foreground">Student ID: <span className="font-mono font-semibold text-foreground">{String(e.studentId)}</span></p>}
                     </>
                   ) : <p className="text-muted-foreground">—</p>}
-                  {e.preferredStartDate && <p className="text-muted-foreground">Preferred start: {preferredStart} ({preferredTime})</p>}
+                  {e.preferredStartDate && <p className="text-muted-foreground">Preferred start: {preferredStart}</p>}
+                  <p className="text-muted-foreground">Time Slot Availability: {preferredSlotsLabel}</p>
+                  <p className="text-muted-foreground">Available Days: {preferredDaysLabel}</p>
                 </div>
 
                 {/* Programs */}

@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { getRecommendations, chat, publicChat, ollamaChat, getModelMetrics } = require('../controllers/aiController');
+const { chat, publicChat, ollamaChat, getModelMetrics } = require('../controllers/aiController');
 const { getAIDatasetStats } = require('../controllers/aiController');
 const { protect, authorize, optionalProtect } = require('../middleware/auth');
 const { publicAiChatLimiter, authenticatedAiChatLimiter, aiChatLimiterByAuth } = require('../middleware/rateLimit');
 
-router.get('/recommendations', protect, getRecommendations);
 router.post('/chat', protect, authenticatedAiChatLimiter, chat);
 router.post('/public-chat', publicAiChatLimiter, publicChat);
 // optionalProtect first so the limiter can tell anonymous (20/min) from authenticated (60/min).

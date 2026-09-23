@@ -95,10 +95,17 @@ function toMonthStartKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function preferredTimeLabel(preferredTime?: string | null) {
-  if (preferredTime === "morning") return "Morning";
-  if (preferredTime === "afternoon") return "Afternoon";
-  return "No time preference";
+function preferredSlotLabel(enrollment: AdminEnrollment, programCode: string) {
+  const slot = (enrollment.preferredSlots || []).find(
+    (s) => (s.programCode || "").toUpperCase() === programCode.toUpperCase()
+  );
+  if (!slot) return "No preference selected";
+  return `${formatSlotTime(slot.startTime)} – ${formatSlotTime(slot.endTime)}`;
+}
+
+function preferredDaysLabel(enrollment: AdminEnrollment) {
+  if (!enrollment.preferredDays || enrollment.preferredDays.length === 0) return "No preference selected";
+  return enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/");
 }
 
 interface StudentSubjectOption {
@@ -288,9 +295,10 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
                     day: "numeric",
                     year: "numeric",
                   })
-                : "Any date"}{" "}
-              • {preferredTimeLabel(selectedOption.enrollment.preferredTime)}
+                : "Any date"}
             </p>
+            <p>Time Slot Availability: {preferredSlotLabel(selectedOption.enrollment, selectedOption.subject.code || "")}</p>
+            <p>Available Days: {preferredDaysLabel(selectedOption.enrollment)}</p>
             <p>
               Guardian: {personDisplayName(selectedOption.enrollment.parent) || "—"}
               {selectedOption.enrollment.parent?.email ? ` • ${selectedOption.enrollment.parent.email}` : ""}

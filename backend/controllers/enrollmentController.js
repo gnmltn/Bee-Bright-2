@@ -42,7 +42,6 @@ const ENROLLMENT_OTP_MAX_ATTEMPTS = 5;
 const ENROLLMENT_VERIFIED_WINDOW_MINUTES = 30;
 
 const VALID_PAYMENT_METHODS = ['gcash', 'maribank', 'bdo'];
-const VALID_PREFERRED_TIMES = ['morning', 'afternoon', 'no_preference'];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 const normalizeEmail = (v = '') => String(v).trim().toLowerCase();
@@ -281,7 +280,6 @@ const submitEnrollment = async (req, res) => {
 
     // ── Preferred schedule ──
     const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
-    const preferredTime = VALID_PREFERRED_TIMES.includes(body.preferredTime) ? body.preferredTime : 'no_preference';
 
     // Validate and sanitise preferredDays — only Mon-Sat values accepted
     const VALID_PREFERRED_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -335,7 +333,6 @@ const submitEnrollment = async (req, res) => {
       studentSnapshot: snapshot,
       packages: canonicalPackages,
       preferredStartDate,
-      preferredTime,
       preferredDays,
       preferredSlots,
       healthInfo,

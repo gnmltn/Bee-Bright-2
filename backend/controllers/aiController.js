@@ -6,7 +6,6 @@ const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
 const User = require('../models/User');
 const Grade = require('../models/Grade');
-const LearningMaterial = require('../models/LearningMaterial');
 const Pricing = require('../models/Pricing');
 const Escalation = require('../models/Escalation');
 const { getIntentReply, getChatModelMetrics } = require('../utils/chatIntentModel');
@@ -5692,165 +5691,6 @@ function shouldUseDirectSystemReply(message, classifierResult, groundedContext) 
 }
 
 /**
- * GET /api/ai/recommendations
- * Returns recommended learning materials by role (student: by enrolled subjects; tutor: by taught subjects).
- */
-const getRecommendations = async (req, res) => {
-  try {
-    const userId = req.user._id.toString();
-    const role = req.user.role;
-
-    if (role === 'student') {
-      const enrollment = await Enrollment.findOne({ student: userId, status: 'active' })
-        .populate('selectedSubjects', 'name code')
-        .lean();
-      const subjects = enrollment?.selectedSubjects || [];
-      const recommendations = subjects.map((s) => ({
-        subjectId: s._id,
-        subjectName: s.name,
-        reason: 'Enrolled in this subject — recommended to strengthen understanding.',
-        materials: [
-          { type: 'Slides / PowerPoint', description: 'Review lesson slides from your tutor or request topic slides.' },
-          { type: 'Practice sheets', description: 'Ask your tutor for practice problems or worksheets.' },
-          { type: 'Video recap', description: 'Request short recap videos for topics you find challenging.' },
-        ],
-      }));
-
-      // Failed subjects: find grades below passing threshold and show tutor-posted
-      // materials that are explicitly linked to the *same* programCategory + subjectItem
-      // and assigned to this student. Matching is specific, but allows small text
-      // differences (e.g. "Alphabet" vs "Alphabet Writing (uppercase & lowercase)")
-      // by using case-insensitive contains checks on subjectItem.
-      const FAIL_PERCENT = 75; // realistic passing threshold (75 and above is passing)
-      const grades = await Grade.find({ student: userId }).lean();
-
-      const failing = [];
-      const failingByProgram = new Map(); // progNorm -> array of failing entries
-      for (const g of grades) {
-        if (!g.programCategory || !g.subjectItem) continue;
-        const pct = g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0;
-        if (pct < FAIL_PERCENT) {
-          const entry = {
-            programCategory: String(g.programCategory).trim(),
-            subjectItem: String(g.subjectItem).trim(),
-            progNorm: String(g.programCategory).trim().toLowerCase(),
-            subjNorm: String(g.subjectItem).trim().toLowerCase(),
-          };
-          failing.push(entry);
-          if (!failingByProgram.has(entry.progNorm)) {
-            failingByProgram.set(entry.progNorm, []);
-          }
-          failingByProgram.get(entry.progNorm).push(entry);
-        }
-      }
-
-      let materialsForFailedSubjects = [];
-      if (failing.length > 0) {
-        // Fetch all materials assigned to this student that have programCategory/subjectItem
-        const materials = await LearningMaterial.find({
-          assignedStudents: userId,
-          programCategory: { $ne: '' },
-          subjectItem: { $ne: '' },
-        })
-          .populate('uploadedBy', 'firstName lastName')
-          .sort({ createdAt: -1 })
-          .lean();
-
-        const byKey = new Map();
-        for (const m of materials) {
-          const progRaw = (m.programCategory || '').trim();
-          const subjRaw = (m.subjectItem || '').trim();
-          if (!progRaw || !subjRaw) continue;
-          const progNorm = progRaw.toLowerCase();
-          const subjNorm = subjRaw.toLowerCase();
-
-          // Find any failing grade that matches this material's program + subject.
-          // First try strict subject match, then fall back to any failing subject
-          // in the same program so we still recommend materials when titles differ.
-          let matchedFail = failing.find((fg) => {
-            if (fg.progNorm !== progNorm) return false;
-            // subject match: exact, or one contains the other (for cases like "Alphabet")
-            return (
-              fg.subjNorm === subjNorm ||
-              fg.subjNorm.includes(subjNorm) ||
-              subjNorm.includes(fg.subjNorm)
-            );
-          });
-
-          // Fallback: match by program only (use first failing subject for that program)
-          if (!matchedFail) {
-            const listForProgram = failingByProgram.get(progNorm);
-            if (!listForProgram || listForProgram.length === 0) continue;
-            matchedFail = listForProgram[0];
-          }
-
-          const key = `${matchedFail.programCategory}|${matchedFail.subjectItem}`;
-          if (!byKey.has(key)) {
-            byKey.set(key, {
-              programCategory: matchedFail.programCategory,
-              subjectItem: matchedFail.subjectItem,
-              subjectName: matchedFail.subjectItem, // shown to student
-              materials: [],
-            });
-          }
-          byKey.get(key).materials.push({
-            _id: m._id,
-            title: m.title,
-            description: m.description,
-            materialType: m.materialType,
-            category: m.category,
-            storageType: m.storageType,
-            filePath: m.filePath,
-            fileName: m.fileName,
-            url: m.url,
-            uploadedBy: m.uploadedBy
-              ? { firstName: m.uploadedBy.firstName, lastName: m.uploadedBy.lastName }
-              : null,
-            createdAt: m.createdAt,
-          });
-        }
-        materialsForFailedSubjects = Array.from(byKey.values());
-      }
-
-      return res.status(200).json({
-        success: true,
-        role: 'student',
-        recommendations,
-        materialsForFailedSubjects,
-        message: recommendations.length ? 'Recommended learning materials for your subjects.' : 'Enroll in subjects to get personalized recommendations.',
-      });
-    }
-
-    if (role === 'tutor') {
-      const tutor = await User.findById(userId).select('subjectsTaught').populate('subjectsTaught', 'name code').lean();
-      const subjects = tutor?.subjectsTaught || [];
-      const studentCount = await Schedule.distinct('student', { tutor: userId });
-      const recommendations = subjects.map((s) => ({
-        subjectId: s._id,
-        subjectName: s.name,
-        reason: 'You teach this subject — recommend these to students who need extra support.',
-        materials: [
-          { type: 'Slides / PowerPoint', description: 'Share lesson slides before or after class for review.' },
-          { type: 'Practice sheets', description: 'Provide worksheets for struggling students.' },
-          { type: 'Summary notes', description: 'One-page summaries help students catch up.' },
-        ],
-      }));
-      return res.status(200).json({
-        success: true,
-        role: 'tutor',
-        recommendations,
-        studentCount: studentCount.length,
-        message: 'Recommend these materials to students who are struggling or want extra practice.',
-      });
-    }
-
-    return res.status(403).json({ success: false, message: 'Recommendations are for students and tutors only.' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to load recommendations.' });
-  }
-};
-
-/**
  * Guardrails for the anonymous (not-logged-in) chat surface (Task 9). Runs first, only
  * when there is no authenticated user. Two short-circuits:
  *  1. Child-safety screen — applies here too, since the landing page has no login wall.
@@ -7044,7 +6884,6 @@ const getAIDatasetStats = async (req, res) => {
 };
 
 module.exports = {
-  getRecommendations,
   chat,
   publicChat,
   ollamaChat,

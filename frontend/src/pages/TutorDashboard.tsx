@@ -8,12 +8,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
-  Download,
   Mail,
-  Video,
   Loader2,
-  Link as LinkIcon,
-  Image as ImageIcon,
   ExternalLink,
   Trash2,
   Pencil,
@@ -51,13 +47,11 @@ import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
 import {
   scheduleService,
-  materialService,
   gradeService,
   remarkService,
   announcementService,
   auditLogService,
   uploadsBaseUrl,
-  type LearningMaterialItem,
   type GradeItem,
   type RemarkItem,
   type RemarkTemplateType,
@@ -65,31 +59,10 @@ import {
   type AnnouncementItem,
   type AuditLogItem,
 } from "@/services/api";
-import { PROGRAM_CATEGORIES, PROGRAM_LABELS } from "@/constants/programs";
-import { AITab } from "@/components/ai/AITab";
+import { PROGRAM_CATEGORIES } from "@/constants/programs";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
 import { RemarkForm } from "@/components/tutor/RemarkForm";
 
-
-/** Infer material type from file extension for backend */
-function inferMaterialTypeFromFile(file: File): string {
-  const name = (file.name || "").toLowerCase();
-  if (name.endsWith(".pdf")) return "pdf";
-  if (/\.(mp4|webm|mov|avi|mkv)$/.test(name)) return "video";
-  if (/\.(jpg|jpeg|png|gif|webp|svg)$/.test(name)) return "image";
-  if (/\.(doc|docx|xls|xlsx|txt|csv)$/.test(name)) return "document";
-  return "other";
-}
-
-const CATEGORIES = [
-  "Lecture Notes",
-  "Video Lecture",
-  "Practice & Exercises",
-  "Reference",
-  "Reading",
-  "Slides",
-  "Other",
-];
 
 function formatTime12h(hhmm: string) {
   if (!hhmm) return "";
@@ -506,21 +479,6 @@ export default function TutorDashboard() {
     return Array.from(map.values());
   }, [sessions]);
 
-  // ─── Materials state ──────────────────────────────────────────────────────────
-  const [materials, setMaterials] = useState<LearningMaterialItem[]>([]);
-  const [materialsLoading, setMaterialsLoading] = useState(false);
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [formTitle, setFormTitle] = useState("");
-  const [formDescription, setFormDescription] = useState("");
-  const [formCategory, setFormCategory] = useState("Lecture Notes");
-  const [formProgramCategoryId, setFormProgramCategoryId] = useState("");
-  const [formProgramSubjectItem, setFormProgramSubjectItem] = useState("");
-  const [formUrl, setFormUrl] = useState("");
-  const [formFile, setFormFile] = useState<File | null>(null);
-  const [formAssignedStudentIds, setFormAssignedStudentIds] = useState<string[]>([]);
-  const [formInputMode, setFormInputMode] = useState<"url" | "file">("file");
-
   // ─── Grades state ─────────────────────────────────────────────────────────────
   const [grades, setGrades] = useState<GradeItem[]>([]);
   const [gradesLoading, setGradesLoading] = useState(false);
@@ -553,26 +511,9 @@ export default function TutorDashboard() {
   // has one active program.
   const [remarkTypeProgramCode, setRemarkTypeProgramCode] = useState<RemarkProgramCode | "">("");
   const [remarkFormStudentId, setRemarkFormStudentId] = useState("");
-  const [remarkFormMode, setRemarkFormMode] = useState<"create" | "edit" | "correct">("create");
+  const [remarkFormMode, setRemarkFormMode] = useState<"create" | "edit">("create");
   const [remarkFormTarget, setRemarkFormTarget] = useState<RemarkItem | null>(null);
   const [remarkFilterStudentId, setRemarkFilterStudentId] = useState(ALL_STUDENTS_VALUE);
-
-  // Program options for materials (same structure as grading)
-  const materialProgramOptions = PROGRAM_CATEGORIES;
-
-  // Map programCategory id -> subject names used in backend Subject catalog / schedules
-  // Only the 3 active programs (see constants/programs.ts PROGRAM_LABELS)
-  const MATERIAL_PROGRAM_SUBJECT_NAME_MAP: Record<string, string[]> = {
-    toddlers_playgroup: [PROGRAM_LABELS.TPG101],
-    academic_tutorial:  [PROGRAM_LABELS.ACT102],
-    exam_prep:          [PROGRAM_LABELS.EXP106],
-  };
-
-  const materialProgramSubjectItems = useMemo(() => {
-    if (!formProgramCategoryId) return [];
-    const prog = PROGRAM_CATEGORIES.find((p) => p.id === formProgramCategoryId);
-    return prog?.subjectItems ?? [];
-  }, [formProgramCategoryId]);
 
   // ─── Unique students this tutor teaches ──────────────────────────────────────
   const tutorAssignedStudentsList = useMemo(() => {
@@ -591,36 +532,6 @@ export default function TutorDashboard() {
     });
     return list.sort((a, b) => a.name.localeCompare(b.name));
   }, [sessions]);
-
-  // ─── Students for selected program (material assignment) ─────────────────────
-  // Only students that this tutor actually teaches in the chosen program.
-  const studentsForSelectedPrograms = useMemo(() => {
-    if (!formProgramCategoryId) return [];
-    const subjectNames = MATERIAL_PROGRAM_SUBJECT_NAME_MAP[formProgramCategoryId] || [];
-    if (subjectNames.length === 0) return [];
-    const subjectNamesLower = subjectNames.map((n) => n.toLowerCase());
-
-    const seen = new Set<string>();
-    const list: { _id: string; name: string }[] = [];
-    sessions.forEach((s) => {
-      if (!s.subject || !s.subject.name) return;
-      const subjNameLower = s.subject.name.toLowerCase();
-      const matchesProgram = subjectNamesLower.some((needle) =>
-        subjNameLower.includes(needle)
-      );
-      if (!matchesProgram) return;
-      sessionStudentRecords(s).forEach((student) => {
-        const studentId = student._id != null ? String(student._id) : "";
-        if (!studentId || seen.has(studentId)) return;
-        seen.add(studentId);
-        list.push({
-          _id: studentId,
-          name: personDisplayName(student),
-        });
-      });
-    });
-    return list.sort((a, b) => a.name.localeCompare(b.name));
-  }, [formProgramCategoryId, sessions]);
 
   // ─── Program categories filtered to the selected student ─────────────────────
   // Strict matching: show only categories inferred from this tutor-student
@@ -797,25 +708,6 @@ export default function TutorDashboard() {
   };
 
   // ─── Data fetchers ────────────────────────────────────────────────────────────
-  const fetchMaterials = () => {
-    setMaterialsLoading(true);
-    materialService
-      .getMyMaterials()
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.materials)) {
-          setMaterials(res.data.materials);
-        } else {
-          setMaterials([]);
-        }
-      })
-      .catch(() => setMaterials([]))
-      .finally(() => setMaterialsLoading(false));
-  };
-
-  useEffect(() => {
-    if (user?.role === "tutor") fetchMaterials();
-  }, [user?.role]);
-
   const fetchGrades = () => {
     setGradesLoading(true);
     const studentIdParam =
@@ -942,108 +834,7 @@ export default function TutorDashboard() {
       .catch((err) => toast.error(err.response?.data?.message || "Delete failed."));
   };
 
-  // ─── Material upload helpers ──────────────────────────────────────────────────
-  // Keep assigned student IDs in sync with currently available students
-  // for the selected program.
-  useEffect(() => {
-    if (!formProgramCategoryId) {
-      setFormAssignedStudentIds((prev) => (prev.length === 0 ? prev : []));
-      return;
-    }
-    const idSet = new Set(studentsForSelectedPrograms.map((s) => String(s._id)));
-    setFormAssignedStudentIds((prev) => {
-      const next = prev.filter((id) => idSet.has(String(id)));
-      return next.length === prev.length && next.every((id, i) => prev[i] === id)
-        ? prev
-        : next;
-    });
-  }, [formProgramCategoryId, studentsForSelectedPrograms.length]);
-
-  const openUploadDialog = () => {
-    setFormTitle("");
-    setFormDescription("");
-    setFormCategory("Lecture Notes");
-    setFormProgramCategoryId("");
-    setFormProgramSubjectItem("");
-    setFormInputMode("file");
-    setFormUrl("");
-    setFormFile(null);
-    setFormAssignedStudentIds([]);
-    setUploadDialogOpen(true);
-  };
-
-  const handleUploadSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formTitle.trim()) { toast.error("Title is required."); return; }
-    if (!formCategory.trim()) { toast.error("Category is required."); return; }
-    if (!formProgramCategoryId) {
-      toast.error("Select a program for this material.");
-      return;
-    }
-    if (!formProgramSubjectItem) {
-      toast.error("Select a subject/topic for this program.");
-      return;
-    }
-    const prog = PROGRAM_CATEGORIES.find((p) => p.id === formProgramCategoryId);
-    if (!prog) {
-      toast.error("Invalid program selected for this material.");
-      return;
-    }
-    const isWebLink = formInputMode === "url";
-    if (isWebLink) {
-      if (!formUrl.trim()) { toast.error("URL is required for web link materials."); return; }
-    } else {
-      if (!formFile) { toast.error("Please select a file to upload."); return; }
-    }
-    const materialType = isWebLink
-      ? "web_link"
-      : formFile ? inferMaterialTypeFromFile(formFile) : "other";
-    const formData = new FormData();
-    formData.append("title", formTitle.trim());
-    formData.append("description", formDescription.trim());
-    formData.append("materialType", materialType);
-    formData.append("category", formCategory.trim());
-    // Store the human-readable program label so it matches Grade.programCategory
-    formData.append("programCategory", prog.label);
-    formData.append("subjectItem", formProgramSubjectItem);
-    if (isWebLink) formData.append("url", formUrl.trim());
-    if (formFile) formData.append("file", formFile);
-    formData.append("assignedStudents", JSON.stringify(formAssignedStudentIds));
-    setUploading(true);
-    materialService
-      .createMaterial(formData)
-      .then((res) => {
-        if (res.data?.success) {
-          toast.success("Material uploaded successfully.");
-          setUploadDialogOpen(false);
-          fetchMaterials();
-        } else {
-          toast.error("Upload failed.");
-        }
-      })
-      .catch((err) => toast.error(err.response?.data?.message || "Upload failed."))
-      .finally(() => setUploading(false));
-  };
-
-  const handleDeleteMaterial = (id: string) => {
-    if (!confirm("Delete this material? Students will no longer see it.")) return;
-    materialService
-      .deleteMaterial(id)
-      .then(() => { toast.success("Material deleted."); fetchMaterials(); })
-      .catch((err) => toast.error(err.response?.data?.message || "Delete failed."));
-  };
-
   // ─── Derived display data ─────────────────────────────────────────────────────
-  const materialsByCategory = useMemo(() => {
-    const map = new Map<string, LearningMaterialItem[]>();
-    materials.forEach((m) => {
-      const cat = m.category || "Other";
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(m);
-    });
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [materials]);
-
   const todaySchedule = useMemo(() => {
     return sessions
       .filter((s) => scheduleDateOnly(s.date) === todayStr)
@@ -1430,7 +1221,6 @@ export default function TutorDashboard() {
     "#students": "students",
     "#attendance": "attendance",
     "#schedule": "schedule",
-    "#materials": "materials",
     "#remarks": "remarks",
     "#announcements": "announcements",
     "#activity": "activity",
@@ -2349,109 +2139,6 @@ export default function TutorDashboard() {
                   </div>
                 </TabsContent>
 
-                {/* ══ MATERIALS TAB ══ */}
-                <TabsContent value="materials" className="space-y-6">
-                  <div className="bg-card rounded-xl border border-border overflow-hidden">
-                    <div className="p-4 border-b border-border flex items-center justify-between">
-                      <h3 className="font-display font-bold text-lg text-foreground">Teaching Materials</h3>
-                      <Button type="button" size="sm" onClick={openUploadDialog}>
-                        <Plus className="h-4 w-4 mr-2" />
-                        Upload Now
-                      </Button>
-                    </div>
-                    <div className="divide-y divide-border">
-                      {materialsLoading ? (
-                        <div className="flex items-center justify-center py-12">
-                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : materials.length === 0 ? (
-                        <p className="p-8 text-center text-muted-foreground">
-                          No materials uploaded yet. Use &quot;Upload Now&quot; to add PDFs, videos,
-                          web links, or images for your students.
-                        </p>
-                      ) : (
-                        materialsByCategory.map(([category, items]) => (
-                          <div key={category} className="p-4">
-                            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-                              {category}
-                            </h4>
-                            <div className="space-y-2">
-                              {items.map((material) => {
-                                const isFile = material.storageType === "file";
-                                const href =
-                                  isFile && material.filePath
-                                    ? `${uploadsBaseUrl}/uploads/${material.filePath}`
-                                    : material.url || "#";
-                                const icon =
-                                  material.materialType === "video" ? (
-                                    <Video className="h-5 w-5 text-warning" />
-                                  ) : material.materialType === "web_link" ? (
-                                    <LinkIcon className="h-5 w-5 text-info" />
-                                  ) : material.materialType === "image" ? (
-                                    <ImageIcon className="h-5 w-5 text-success" />
-                                  ) : (
-                                    <FileText className="h-5 w-5 text-info" />
-                                  );
-                                const assignedNames = (material.assignedStudents || [])
-                                  .map((s) =>
-                                    [s.firstName, s.middleName, s.lastName].filter(Boolean).join(" ")
-                                  )
-                                  .join(", ");
-                                return (
-                                  <div
-                                    key={material._id}
-                                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
-                                  >
-                                    <div className="flex items-center gap-4 min-w-0">
-                                      <div className="h-10 w-10 rounded-lg bg-background border border-border flex items-center justify-center shrink-0">
-                                        {icon}
-                                      </div>
-                                      <div className="min-w-0">
-                                        <p className="font-semibold text-foreground truncate">{material.title}</p>
-                                        <p className="text-sm text-muted-foreground">
-                                          {material.materialType} • {material.subject?.name ?? "—"}
-                                          {assignedNames ? ` • For: ${assignedNames}` : ""}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      <Button type="button" size="sm" variant="ghost" asChild>
-                                        <a href={href} target="_blank" rel="noopener noreferrer">
-                                          <Download className="h-4 w-4" />
-                                        </a>
-                                      </Button>
-                                      <Button
-                                        type="button" size="sm" variant="ghost"
-                                        onClick={() => handleDeleteMaterial(material._id)}
-                                      >
-                                        <Trash2 className="h-4 w-4 text-destructive" />
-                                      </Button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-card rounded-xl p-6 border border-border">
-                    <h3 className="font-display font-bold text-lg mb-2 text-foreground">
-                      AI Assistant &amp; Recommendations
-                    </h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Recommend materials (slides, practice) to students who need extra support.
-                      Chat for quick answers about Bee Bright.
-                    </p>
-                    <AITab
-                      title="AI Assistant"
-                      description="Recommend these materials to students who are struggling or want extra practice. Chat for schedule and system help."
-                    />
-                  </div>
-                </TabsContent>
-
                 {/* ══ STUDENT REMARKS TAB ══ */}
                 <TabsContent value="remarks" className="space-y-6">
                   <div className="bg-card rounded-xl border border-border p-6">
@@ -2464,7 +2151,7 @@ export default function TutorDashboard() {
                   <div className="bg-card rounded-xl border border-border">
                     <div className="p-4 border-b border-border">
                       <h3 className="font-bold text-lg text-foreground">
-                        {remarkFormMode === "correct" ? "Correct Published Remark" : remarkFormMode === "edit" ? "Edit Draft" : "New Remark"}
+                        {remarkFormMode === "edit" ? "Edit Draft" : "New Remark"}
                       </h3>
                     </div>
                     <div className="p-4">
@@ -2521,7 +2208,7 @@ export default function TutorDashboard() {
                         />
                       )}
 
-                      {(remarkFormMode === "edit" || remarkFormMode === "correct") && remarkFormTarget && (
+                      {remarkFormMode === "edit" && remarkFormTarget && (
                         <RemarkForm
                           key={`${remarkFormMode}-${remarkFormTarget._id}`}
                           studentId={typeof remarkFormTarget.student === "object" ? remarkFormTarget.student._id : String(remarkFormTarget.student)}
@@ -2589,11 +2276,6 @@ export default function TutorDashboard() {
                                 {r.status === "draft" && (
                                   <Button type="button" size="sm" variant="outline" onClick={() => { setRemarkFormTarget(r); setRemarkFormMode("edit"); }}>
                                     Continue editing
-                                  </Button>
-                                )}
-                                {r.status === "published" && r.isCurrentVersion && (
-                                  <Button type="button" size="sm" variant="outline" onClick={() => { setRemarkFormTarget(r); setRemarkFormMode("correct"); }}>
-                                    Correct
                                   </Button>
                                 )}
                               </div>
@@ -2856,179 +2538,6 @@ export default function TutorDashboard() {
               <Button type="submit" disabled={announcementSubmitting}>
                 {announcementSubmitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                 {editingAnnouncementId ? "Save changes" : "Submit for approval"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Upload material dialog ── */}
-      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>Upload Learning Material</DialogTitle>
-            <DialogDescription>
-              Add a PDF, video, web link, image, or document. Choose a category and which
-              students can see it.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleUploadSubmit} className="flex flex-col gap-4 overflow-y-auto pr-2">
-            <div className="grid gap-2">
-              <Label htmlFor="mat-title">Title *</Label>
-              <Input
-                id="mat-title"
-                value={formTitle}
-                onChange={(e) => setFormTitle(e.target.value)}
-                placeholder="e.g. Chapter 3 Notes"
-                maxLength={200}
-                required
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="mat-desc">Description (optional)</Label>
-              <Textarea
-                id="mat-desc"
-                value={formDescription}
-                onChange={(e) => setFormDescription(e.target.value)}
-                placeholder="Brief description for students"
-                rows={2}
-                maxLength={2000}
-                className="resize-none"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label>Category *</Label>
-              <Select value={formCategory} onValueChange={setFormCategory}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {CATEGORIES.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>Program (for this material, used in AI & grading) *</Label>
-              <Select
-                value={formProgramCategoryId}
-                onValueChange={(val) => {
-                  setFormProgramCategoryId(val);
-                  setFormProgramSubjectItem("");
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select program" />
-                </SelectTrigger>
-                <SelectContent>
-                  {materialProgramOptions.map((prog) => (
-                    <SelectItem key={prog.id} value={prog.id}>
-                      {prog.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {formProgramCategoryId && (
-              <div className="grid gap-2">
-                <Label>Subject / topic in this program *</Label>
-                <Select
-                  value={formProgramSubjectItem}
-                  onValueChange={setFormProgramSubjectItem}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select subject or topic" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {materialProgramSubjectItems.map((item) => (
-                      <SelectItem key={item} value={item}>
-                        {item}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            <div className="grid gap-2">
-              <Label>Link or file *</Label>
-              <div className="flex gap-2 border border-border rounded-md p-1 bg-muted/30">
-                <Button
-                  type="button"
-                  variant={formInputMode === "file" ? "secondary" : "ghost"}
-                  size="sm" className="flex-1"
-                  onClick={() => { setFormInputMode("file"); setFormUrl(""); }}
-                >
-                  Upload file
-                </Button>
-                <Button
-                  type="button"
-                  variant={formInputMode === "url" ? "secondary" : "ghost"}
-                  size="sm" className="flex-1"
-                  onClick={() => { setFormInputMode("url"); setFormFile(null); }}
-                >
-                  Web link
-                </Button>
-              </div>
-              {formInputMode === "url" ? (
-                <Input
-                  id="mat-url" type="url"
-                  value={formUrl}
-                  onChange={(e) => setFormUrl(e.target.value)}
-                  placeholder="https://..."
-                />
-              ) : (
-                <div>
-                  <Input
-                    id="mat-file" type="file"
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.mp4,.webm,.mov,.avi,.jpg,.jpeg,.png,.gif,.webp,.svg,.txt,.csv"
-                    onChange={(e) => setFormFile(e.target.files?.[0] ?? null)}
-                  />
-                  {formFile && (
-                    <p className="text-xs text-muted-foreground mt-1">{formFile.name}</p>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="grid gap-2">
-              <Label>Assign to students * (only students you teach in the selected program)</Label>
-              {!formProgramCategoryId ? (
-                <p className="text-sm text-muted-foreground">
-                  Select a program above to see students enrolled in that program.
-                </p>
-              ) : studentsForSelectedPrograms.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No students are currently enrolled with you in this program.
-                </p>
-              ) : (
-                <ScrollArea className="h-32 rounded-md border border-border p-2">
-                  <div className="flex flex-col gap-2">
-                    {studentsForSelectedPrograms.map((stu) => (
-                      <label key={stu._id} className="flex items-center gap-2 cursor-pointer">
-                        <Checkbox
-                          checked={formAssignedStudentIds.includes(stu._id)}
-                          onCheckedChange={(checked) => {
-                            setFormAssignedStudentIds((prev) =>
-                              checked ? [...prev, stu._id] : prev.filter((id) => id !== stu._id)
-                            );
-                          }}
-                        />
-                        <span className="text-sm">{stu.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                </ScrollArea>
-              )}
-            </div>
-            <DialogFooter className="gap-2 sm:gap-0">
-              <Button type="button" variant="outline" onClick={() => setUploadDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={uploading}>
-                {uploading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                Upload Now
               </Button>
             </DialogFooter>
           </form>

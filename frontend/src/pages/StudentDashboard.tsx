@@ -38,10 +38,9 @@ import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, assessmentService, scheduleService, materialService, gradeService, remarkService, announcementService, auditLogService, paymentService, uploadsBaseUrl, type LearningMaterialItem, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { enrollmentService, assessmentService, scheduleService, gradeService, remarkService, announcementService, auditLogService, paymentService, uploadsBaseUrl, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
-import { AITab } from "@/components/ai/AITab";
 
 function formatTime12h(hhmm: string) {
   if (!hhmm) return "";
@@ -177,8 +176,6 @@ export default function StudentDashboard() {
     tutors?: Array<{ firstName?: string; lastName?: string; middleName?: string; email?: string }>;
   }[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(true);
-  const [assignedMaterials, setAssignedMaterials] = useState<LearningMaterialItem[]>([]);
-  const [assignedMaterialsLoading, setAssignedMaterialsLoading] = useState(false);
   const [progressGrades, setProgressGrades] = useState<GradeItem[]>([]);
   const [progressGradesLoading, setProgressGradesLoading] = useState(false);
   const [progressRemarks, setProgressRemarks] = useState<RemarkItem[]>([]);
@@ -206,7 +203,7 @@ export default function StudentDashboard() {
   const [paymentReference, setPaymentReference] = useState("");
   const [hasAllergies, setHasAllergies] = useState<"yes" | "no" | "">("");
   const [hasMedicalConditions, setHasMedicalConditions] = useState<"yes" | "no" | "">("");
-  const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", preferredTime: "no_preference", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
+  const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
   const [newChildConsent, setNewChildConsent] = useState(false);
   type ChildDoc = { dataUrl: string; fileName: string; fileSize: number } | null;
   const [childDocs, setChildDocs] = useState<{ birthCert: ChildDoc; photo: ChildDoc; guardianId: ChildDoc }>({ birthCert: null, photo: null, guardianId: null });
@@ -352,27 +349,6 @@ export default function StudentDashboard() {
   useEffect(() => {
     if (!readyToFetchChildData) return;
     if (isParent && !activeChildUserId) {
-      setAssignedMaterials([]);
-      setAssignedMaterialsLoading(false);
-      return;
-    }
-    setAssignedMaterialsLoading(true);
-    materialService
-      .getAssignedMaterials(isParent ? activeChildUserId ?? undefined : undefined)
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.materials)) {
-          setAssignedMaterials(res.data.materials);
-        } else {
-          setAssignedMaterials([]);
-        }
-      })
-      .catch(() => setAssignedMaterials([]))
-      .finally(() => setAssignedMaterialsLoading(false));
-  }, [isParent, activeChildUserId, readyToFetchChildData]);
-
-  useEffect(() => {
-    if (!readyToFetchChildData) return;
-    if (isParent && !activeChildUserId) {
       setSchedules([]);
       setSchedulesLoading(false);
       return;
@@ -433,10 +409,17 @@ export default function StudentDashboard() {
     if (location.hash === "#activity") fetchActivity();
   }, [location.hash]);
 
+  // A parent may have several children (one Enrollment record each) — scope to
+  // just the currently-selected child so this doesn't mix subjects across kids.
+  // A student account only ever has its own single (implicit) record, so
+  // `enrollments` there is already scoped correctly with no filter needed.
   const enrolledSubjectsList = useMemo(() => {
     const list: { _id: string; name: string }[] = [];
     const seen = new Set<string>();
-    for (const en of enrollments) {
+    const scopedEnrollments = isParent
+      ? enrollments.filter((en) => en._id === activeChildId)
+      : enrollments;
+    for (const en of scopedEnrollments) {
       if (en.status !== "active") continue;
       for (const s of en.selectedSubjects || []) {
         const id = (s._id || s).toString();
@@ -447,7 +430,7 @@ export default function StudentDashboard() {
       }
     }
     return list;
-  }, [enrollments]);
+  }, [enrollments, isParent, activeChildId]);
 
   const childEntries = useMemo(() => {
     const map = new Map<string, {
@@ -728,16 +711,6 @@ export default function StudentDashboard() {
     }
   };
 
-  const assignedMaterialsByCategory = useMemo(() => {
-    const map = new Map<string, LearningMaterialItem[]>();
-    assignedMaterials.forEach((m) => {
-      const cat = m.category || "Other";
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(m);
-    });
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [assignedMaterials]);
-
   /** Group grades by program category for Progress tab */
   const gradesByProgram = useMemo(() => {
     const map = new Map<string, GradeItem[]>();
@@ -803,7 +776,6 @@ export default function StudentDashboard() {
     "#schedule": "schedule",
     "#progress": "progress",
     "#assessment": "assessment",
-    "#materials": "materials",
     "#announcements": "announcements",
     "#activity": "activity",
   };
@@ -816,7 +788,6 @@ export default function StudentDashboard() {
       schedule: "schedule",
       progress: "progress",
       assessment: "assessment",
-      materials: "materials",
       announcements: "announcements",
       activity: "activity",
     };
@@ -912,7 +883,6 @@ export default function StudentDashboard() {
           guardianId: childDocs.guardianId ? { dataUrl: childDocs.guardianId.dataUrl, fileName: childDocs.guardianId.fileName } : undefined,
         },
         preferredStartDate: newChild.preferredStartDate || undefined,
-        preferredTime: newChild.preferredTime as "morning" | "afternoon" | "no_preference",
         // preferredDays not collected in the quick add-child flow — defaults to no preference
         allergies: hasAllergies === "no" ? "None" : newChild.allergies.trim(),
         medications: hasMedicalConditions === "no" ? "None" : newChild.medications.trim(),
@@ -928,7 +898,7 @@ export default function StudentDashboard() {
         await paymentService.submitPaymentProof(submission.data.paymentId, { proofDataUrl, payerReference: paymentReference.trim(), paymentMethod: newChild.paymentMethod });
       }
       toast.success("Child added", { description: "The enrollment was submitted for admin review." });
-      setNewChild({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", preferredTime: "no_preference", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
+      setNewChild({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
       setNewChildConsent(false);
       setHasAllergies("");
       setHasMedicalConditions("");
@@ -1022,9 +992,6 @@ export default function StudentDashboard() {
         }
         break;
       }
-      case "Learning Materials":
-        navigate("/student-dashboard#materials", { replace: true });
-        break;
       case "View Grades":
         navigate("/student-dashboard#progress", { replace: true });
         break;
@@ -1126,7 +1093,6 @@ export default function StudentDashboard() {
                 <h4 className="font-semibold text-sm text-foreground mb-3">Quick Actions</h4>
                 {[
                   { label: "Contact Tutor", icon: MessageSquare },
-                  { label: "Learning Materials", icon: FileText },
                   { label: "View Grades", icon: Award },
                 ].map((action) => (
                   <button
@@ -1555,80 +1521,6 @@ export default function StudentDashboard() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="materials" className="space-y-6">
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-primary/5 via-card to-primary/10 p-6 md:p-8"
-                  >
-                    <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full -translate-y-1/2 translate-x-1/2" />
-                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-primary/5 rounded-full translate-y-1/2 -translate-x-1/2" />
-                    <div className="relative flex flex-col sm:flex-row sm:items-center gap-4">
-                      <div className="h-14 w-14 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
-                        <FileText className="h-7 w-7 text-primary" />
-                      </div>
-                      <div>
-                        <h3 className="font-display text-xl md:text-2xl font-bold text-foreground">Learning Materials</h3>
-                        <p className="text-sm text-muted-foreground mt-1">Materials assigned by your tutor and recommended resources by subject.</p>
-                      </div>
-                    </div>
-                  </motion.div>
-
-                  <div className="rounded-2xl border border-border bg-card overflow-hidden">
-                    <div className="p-4 border-b border-border">
-                      <h4 className="font-display font-bold text-foreground">Assigned by your tutor</h4>
-                      <p className="text-sm text-muted-foreground">PDFs, videos, links, and documents shared with you.</p>
-                    </div>
-                    {assignedMaterialsLoading ? (
-                      <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : assignedMaterials.length === 0 ? (
-                      <p className="p-6 text-center text-muted-foreground">No materials assigned yet. Your tutor will add materials here for you.</p>
-                    ) : (
-                      <div className="divide-y divide-border">
-                        {assignedMaterialsByCategory.map(([category, items]) => (
-                          <div key={category} className="p-4">
-                            <h5 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">{category}</h5>
-                            <div className="space-y-2">
-                              {items.map((material) => {
-                                const isFile = material.storageType === "file";
-                                const href = isFile && material.filePath
-                                  ? `${uploadsBaseUrl}/uploads/${material.filePath}`
-                                  : material.url || "#";
-                                const icon = material.materialType === "video" ? <Video className="h-5 w-5 text-warning" /> : material.materialType === "web_link" ? <LinkIcon className="h-5 w-5 text-info" /> : material.materialType === "image" ? <ImageIcon className="h-5 w-5 text-success" /> : <FileText className="h-5 w-5 text-info" />;
-                                return (
-                                  <a
-                                    key={material._id}
-                                    href={href}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-4 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors group"
-                                  >
-                                    <div className="h-10 w-10 rounded-lg bg-background border border-border flex items-center justify-center shrink-0">
-                                      {icon}
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <p className="font-semibold text-foreground truncate group-hover:text-primary">{material.title}</p>
-                                      <p className="text-sm text-muted-foreground">
-                                        {material.materialType} {material.subject?.name ? `• ${material.subject.name}` : ""}
-                                        {material.description ? ` — ${material.description}` : ""}
-                                      </p>
-                                    </div>
-                                    <Download className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  </a>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-
-                </TabsContent>
-
                 <TabsContent value="assessment" className="space-y-6">
                   <div className="bg-card rounded-xl border border-border overflow-hidden">
                     <div className="p-4 border-b border-border">
@@ -1726,6 +1618,16 @@ export default function StudentDashboard() {
                   {/* Student Remarks — replaces the old grading display (BeeBright Student Remarks Spec v2) */}
                   <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
                     <div className="flex flex-wrap gap-3">
+                      {isParent && (
+                        <Select value={activeChildId} onValueChange={setActiveChildId}>
+                          <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="Choose child" /></SelectTrigger>
+                          <SelectContent>
+                            {children.map((child) => (
+                              <SelectItem key={child.key} value={child.key}>{child.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                       <Select value={remarkProgramFilter} onValueChange={setRemarkProgramFilter}>
                         <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All programs" /></SelectTrigger>
                         <SelectContent>
@@ -1834,9 +1736,6 @@ export default function StudentDashboard() {
                       })}
                     </div>
                   )}
-
-                  {/* AI recommendations embedded in Progress tab (no extra heading wrapper) */}
-                  <AITab />
                 </TabsContent>
 
                 <TabsContent value="announcements" className="space-y-6">
@@ -1982,7 +1881,7 @@ export default function StudentDashboard() {
             </div>
             </div>}
             {addChildStep === 2 && <div className="space-y-2"><Label>Choose a program package</Label><p className="text-xs text-muted-foreground">Enter the birthdate first. Programs outside the child&apos;s age range are disabled.</p><div className="max-h-64 space-y-2 overflow-y-auto">{["TPG101", "ACT102", "EXP106"].map((programCode) => { const items = pricing.filter((item) => item.programCode === programCode); if (!items.length) return null; const eligibleItems = items.filter(isPackageEligible); const expanded = expandedPrograms.includes(programCode); const programName = programCode === "TPG101" ? "Toddlers Playgroup" : programCode === "ACT102" ? "Academic Tutorial" : "Examination Preparation"; return <div key={programCode} className="rounded-lg border border-border"><button type="button" disabled={eligibleItems.length === 0} onClick={() => setExpandedPrograms((current) => current.includes(programCode) ? current.filter((code) => code !== programCode) : [...current, programCode])} className={`flex w-full items-center justify-between p-3 text-left ${eligibleItems.length === 0 ? "cursor-not-allowed opacity-50" : "hover:bg-muted/50"}`}><span><span className="block text-sm font-semibold">{programName}</span><span className="text-xs text-muted-foreground">{eligibleItems.length === 0 ? (childAge === null ? "Enter birthdate to check eligibility" : "Not available for this age") : `${items.length} package${items.length === 1 ? "" : "s"}`}</span></span><span className="text-muted-foreground">{expanded ? "−" : "+"}</span></button>{expanded && eligibleItems.length > 0 && <div className="space-y-2 border-t border-border p-2">{eligibleItems.map((item) => <button type="button" key={`${item.programCode}:${item.packageSlug}`} onClick={() => setNewChild((current) => ({ ...current, packageKey: `${item.programCode}:${item.packageSlug}` }))} className={`w-full rounded-lg border p-3 text-left ${newChild.packageKey === `${item.programCode}:${item.packageSlug}` ? "border-primary bg-primary/5" : "border-border"}`}><span className="block text-sm font-medium">{item.displayName}</span><span className="text-xs text-muted-foreground">{item.durationDesc || "Package"} - PHP {item.priceFull.toLocaleString()}</span></button>)}</div>}</div>; })}</div></div>}
-            {addChildStep === 3 && <div className="space-y-2"><Label htmlFor="child-start-date">Preferred start date <span className="font-normal text-muted-foreground">(optional)</span></Label><Input id="child-start-date" type="date" value={newChild.preferredStartDate} onChange={(event) => setNewChild((current) => ({ ...current, preferredStartDate: event.target.value }))} /><Label htmlFor="child-time">Preferred time</Label><select id="child-time" value={newChild.preferredTime} onChange={(event) => setNewChild((current) => ({ ...current, preferredTime: event.target.value }))} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"><option value="no_preference">No preference</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option></select></div>}
+            {addChildStep === 3 && <div className="space-y-2"><Label htmlFor="child-start-date">Preferred start date <span className="font-normal text-muted-foreground">(optional)</span></Label><Input id="child-start-date" type="date" value={newChild.preferredStartDate} onChange={(event) => setNewChild((current) => ({ ...current, preferredStartDate: event.target.value }))} /></div>}
             {addChildStep === 4 && <div className="space-y-4"><div className="space-y-2"><Label>Does the child have allergies?</Label><div className="flex gap-2"><Button type="button" variant={hasAllergies === "yes" ? "default" : "outline"} onClick={() => setHasAllergies("yes")}>Yes</Button><Button type="button" variant={hasAllergies === "no" ? "default" : "outline"} onClick={() => { setHasAllergies("no"); setNewChild((current) => ({ ...current, allergies: "" })); }}>No</Button></div>{hasAllergies === "yes" && <Input aria-label="Allergy details" value={newChild.allergies} onChange={(event) => setNewChild((current) => ({ ...current, allergies: event.target.value }))} placeholder="List allergies" required />}</div><div className="space-y-2"><Label>Does the child have medical conditions or take medication?</Label><div className="flex gap-2"><Button type="button" variant={hasMedicalConditions === "yes" ? "default" : "outline"} onClick={() => setHasMedicalConditions("yes")}>Yes</Button><Button type="button" variant={hasMedicalConditions === "no" ? "default" : "outline"} onClick={() => { setHasMedicalConditions("no"); setNewChild((current) => ({ ...current, medications: "" })); }}>No</Button></div>{hasMedicalConditions === "yes" && <Input aria-label="Medical condition details" value={newChild.medications} onChange={(event) => setNewChild((current) => ({ ...current, medications: event.target.value }))} placeholder="List conditions or medications" required />}</div><div className="space-y-2"><Label htmlFor="child-emergency">Emergency contact</Label><Input id="child-emergency" value={newChild.emergencyContact} onChange={(event) => setNewChild((current) => ({ ...current, emergencyContact: event.target.value }))} required /></div></div>}
             {addChildStep === 5 && <div className="space-y-3"><Label className="flex items-center gap-3"><Checkbox checked={newChild.specialNeeds} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, specialNeeds: checked === true }))} /> Does the child have special learning or medical needs?</Label>{newChild.specialNeeds && <Input value={newChild.specialNeedsDetails} onChange={(event) => setNewChild((current) => ({ ...current, specialNeedsDetails: event.target.value }))} placeholder="Please provide details" />}</div>}
             {addChildStep === 6 && <div className="max-h-72 space-y-3 overflow-y-auto"><p className="text-sm text-muted-foreground">Complete the assessment when it applies to the child. If it does not apply, leave this unchecked.</p><Label className="flex items-center gap-3"><Checkbox checked={newChild.assessmentApplicable} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, assessmentApplicable: checked === true }))} /> Assessment is applicable</Label>{newChild.assessmentApplicable && assessmentTemplates.length > 0 && <><Label htmlFor="assessment-template">Assessment form</Label><select id="assessment-template" value={assessmentTemplateId} onChange={(event) => { setAssessmentTemplateId(event.target.value); setAssessmentRatings({}); setAssessmentInfo({}); }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select assessment form</option>{assessmentTemplates.map((template) => <option key={template._id} value={template._id}>{template.title}</option>)}</select>{activeAssessmentTemplate && <><p className="font-medium">{activeAssessmentTemplate.title}</p>{(activeAssessmentTemplate.infoFields || []).map((field) => <div key={field.key} className="space-y-1"><Label htmlFor={`assessment-info-${field.key}`}>{field.label}</Label><Input id={`assessment-info-${field.key}`} value={assessmentInfo[field.key] || ""} onChange={(event) => setAssessmentInfo((current) => ({ ...current, [field.key]: event.target.value }))} /></div>)}{(activeAssessmentTemplate.sections || []).map((section) => <div key={section.title} className="space-y-2"><p className="text-sm font-semibold">{section.title}</p>{(section.items || []).map((item) => <div key={item.key} className="space-y-1"><Label htmlFor={`assessment-rating-${item.key}`}>{item.label}</Label><select id={`assessment-rating-${item.key}`} value={assessmentRatings[item.key] || ""} onChange={(event) => setAssessmentRatings((current) => ({ ...current, [item.key]: event.target.value }))} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select rating</option>{(activeAssessmentTemplate.ratingScale || []).map((rating) => <option key={rating.value} value={rating.value}>{rating.label}</option>)}</select></div>)}</div>)}<Input value={newChild.assessmentRemarks} onChange={(event) => setNewChild((current) => ({ ...current, assessmentRemarks: event.target.value }))} placeholder="Assessment remarks" /></>}</>}{newChild.assessmentApplicable && assessmentTemplates.length === 0 && <p className="text-sm text-muted-foreground">No assessment is configured for this program.</p>}</div>}

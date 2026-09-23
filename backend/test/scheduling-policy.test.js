@@ -92,22 +92,22 @@ test('scheduling is limited to Monday through Saturday and operating hours', () 
 });
 
 // ─── Parent preference matching ───────────────────────────────────────────────
-test('parent preferred start date and time are not ignored', () => {
+// The "Preferred Time Slot" (Morning/Afternoon/No Preference) field was removed from
+// the enrollment wizard as redundant with the precise Time Slot Availability picker —
+// see Enrollment_Schedule_Preference_Changes.pdf Section 1. matchesParentPreference no
+// longer accepts/checks a preferredTime at all.
+test('parent preferred start date is not ignored', () => {
   const monday = '2026-09-14T00:00:00.000Z';
   assert.equal(
-    matchesParentPreference({ preferredStartDate: '2026-09-07', preferredTime: 'no_preference', date: monday, startTime: '08:00' }).ok,
+    matchesParentPreference({ preferredStartDate: '2026-09-07', date: monday }).ok,
     true
   );
   assert.equal(
-    matchesParentPreference({ preferredStartDate: '2026-09-21', preferredTime: 'morning', date: monday, startTime: '08:00' }).ok,
+    matchesParentPreference({ preferredStartDate: '2026-09-21', date: monday }).ok,
     false
   );
   assert.equal(
-    matchesParentPreference({ preferredStartDate: null, preferredTime: 'afternoon', date: monday, startTime: '08:00' }).ok,
-    false
-  );
-  assert.equal(
-    matchesParentPreference({ preferredStartDate: null, preferredTime: 'afternoon', date: monday, startTime: '13:00' }).ok,
+    matchesParentPreference({ preferredStartDate: null, date: monday }).ok,
     true
   );
 });

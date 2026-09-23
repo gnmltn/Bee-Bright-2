@@ -320,9 +320,10 @@ export const enrollmentService = {
       guardianId?: { dataUrl: string; fileName: string };
     };
     preferredStartDate?: string;
-    preferredTime?: 'morning' | 'afternoon' | 'no_preference';
     /** Days the child is available — Mon to Sat. Empty = no preference. */
     preferredDays?: string[];
+    /** Live-availability slot picked per enrolled program (Step 7). */
+    preferredSlots?: { programCode: string; startTime: string; endTime: string }[];
     allergies?: string;
     medications?: string;
     specialNeeds?: boolean;
@@ -410,9 +411,11 @@ export interface AdminEnrollment {
   studentId?: string | null;
   packages?: { programCode?: string; packageSlug?: string; displayName?: string; price?: number; paymentOption?: string }[];
   preferredStartDate?: string | null;
-  preferredTime?: string | null;
   /** Days the child is available — Mon to Sat values. Empty = no preference. */
   preferredDays?: string[];
+  /** Live-availability slot picked per enrolled program (Step 7's hourly grid) — one
+   * entry per programCode at most. Informational; never auto-assigns a tutor. */
+  preferredSlots?: { programCode: string; startTime: string; endTime: string }[];
   rejectionReason?: string | null;
   allowResubmission?: boolean;
   statusHistory?: { status?: string; at?: string; byRole?: string; note?: string }[];
@@ -714,9 +717,8 @@ export const weeklyScheduleService = {
     api.post(`/admin/weekly-schedules/${templateId}/generate-sessions`, { weekStartDate, monthSpan }),
 };
 
-// AI: recommendations (by role) + chatbot
+// AI: chatbot
 export const aiService = {
-  getRecommendations: () => api.get('/ai/recommendations'),
   chat: (message: string, history?: { role: 'user' | 'assistant'; content: string }[]) => api.post('/ai/chat', { message, history }),
   publicChat: (message: string) => api.post<{ success: boolean; reply?: string; message?: string }>('/ai/public-chat', { message }),
   getModelMetrics: () => api.get<{
@@ -789,35 +791,9 @@ export const escalationService = {
     api.patch<{ success: boolean; escalation: AdminEscalation }>(`/escalations/${id}`, body),
 };
 
-// Learning materials (tutor upload, student view assigned)
+// Base URL for static uploaded files (profile images, remark attachments, etc.)
 const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
 export const uploadsBaseUrl = apiBase.replace(/\/api\/?$/, '');
-
-export interface LearningMaterialItem {
-  _id: string;
-  title: string;
-  description?: string;
-  materialType: 'pdf' | 'video' | 'web_link' | 'image' | 'document' | 'other';
-  category: string;
-  storageType: 'file' | 'url';
-  filePath?: string | null;
-  fileName?: string | null;
-  url?: string | null;
-  uploadedBy?: { _id: string; firstName: string; lastName: string };
-  assignedStudents?: { _id: string; firstName: string; lastName: string; middleName?: string }[];
-  subject?: { _id: string; name: string; code?: string } | null;
-  createdAt?: string;
-}
-
-export const materialService = {
-  getMyMaterials: () => api.get<{ success: boolean; materials: LearningMaterialItem[] }>('/materials'),
-  /** studentId is required only for a parent viewing a specific child's materials. */
-  getAssignedMaterials: (studentId?: string) => api.get<{ success: boolean; materials: LearningMaterialItem[] }>('/materials/student/assigned', { params: studentId ? { studentId } : {} }),
-  createMaterial: (formData: FormData) => api.post<{ success: boolean; material: LearningMaterialItem }>('/materials', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }),
-  deleteMaterial: (id: string) => api.delete(`/materials/${id}`),
-};
 
 // Grades (tutor: add/list; student: my progress)
 export interface GradeItem {
@@ -897,6 +873,9 @@ export interface RemarkItem {
   studentHasMediaConsent?: boolean;
   status: RemarkStatus;
   publishedAt?: string | null;
+  /** Legacy fields from the retired "Correct Published Remark" feature. New remarks
+   * never populate rootRemarkId/correctionOf and are always isCurrentVersion: true —
+   * these only still matter for reading pre-existing corrected/superseded remarks. */
   rootRemarkId?: string | null;
   correctionOf?: string | null;
   correctionReason?: string;
@@ -922,6 +901,25 @@ export interface RemarkFormPayload {
   attachmentFileName?: string;
 }
 
+export interface RemarkReviewHistoryEntry {
+  _id: string;
+  remarkId: string | null;
+  decision: 'approve' | 'reject';
+  reason: string | null;
+  reviewedAt: string;
+  admin: { _id: string; firstName: string; lastName: string } | null;
+  /** The reviewing admin's account was later deleted — `admin` is null because of that,
+   * not because the identity was never recorded. */
+  adminDeleted: boolean;
+  student: { _id: string; firstName: string; lastName: string } | null;
+  tutor: { _id: string; firstName: string; lastName: string } | null;
+  programCode: RemarkProgramCode | null;
+  /** The remark this decision was about no longer exists (e.g. a rejected draft the
+   * tutor later deleted) — student/tutor/programCode are null because of that, not
+   * because the data was never recorded. */
+  remarkDeleted: boolean;
+}
+
 export const remarkService = {
   create: (data: RemarkFormPayload) =>
     api.post<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>('/remarks', data),
@@ -930,8 +928,6 @@ export const remarkService = {
   /** Permanently deletes a draft — the "Cancel" → "Delete Draft" action. Drafts only. */
   deleteDraft: (id: string) =>
     api.delete<{ success: boolean; message: string }>(`/remarks/${id}`),
-  correct: (id: string, data: Omit<RemarkFormPayload, 'studentId' | 'action'> & { correctionReason: string }) =>
-    api.post<{ success: boolean; message: string; remark: RemarkItem; errors?: string[] }>(`/remarks/${id}/correct`, data),
   listMine: (studentId?: string) =>
     api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/mine', { params: studentId ? { studentId } : {} }),
   /** studentId is required only for a parent viewing a specific child's progress. */
@@ -940,6 +936,8 @@ export const remarkService = {
   listPendingReview: () => api.get<{ success: boolean; remarks: RemarkItem[] }>('/remarks/pending-review'),
   review: (id: string, data: { decision: 'approve' | 'reject'; reason?: string }) =>
     api.patch<{ success: boolean; message: string; remark: RemarkItem }>(`/remarks/${id}/review`, data),
+  getReviewHistory: (params?: { decision?: 'approve' | 'reject'; page?: number; limit?: number }) =>
+    api.get<{ success: boolean; history: RemarkReviewHistoryEntry[]; page: number; limit: number; total: number; totalPages: number }>('/remarks/review-history', { params }),
   getHistory: (id: string) => api.get<{ success: boolean; history: RemarkItem[] }>(`/remarks/${id}/history`),
   /** Fetches the attachment through the protected, auth-checked route and returns a
    * local object URL — a plain <img src> can't carry the auth token, so this can't be a

@@ -139,3 +139,25 @@ export function getProgramByCategoryLabel(label: string): ProgramCategoryOption 
 export function getProgramByCode(code: string): ProgramCategoryOption | undefined {
   return PROGRAM_CATEGORIES.find((p) => p.programCode === code);
 }
+
+/**
+ * Toddlers Playgroup / Academic Tutorial packages lock the number of days a
+ * parent can select in the enrollment wizard's Available Days step to match
+ * the package's sessions-per-week. Examination Preparation is deliberately
+ * NOT included — it keeps its pre-existing free "up to 6 days" behavior.
+ * Keyed by [programCode][sessionCount] -> required day count. Mirrors
+ * backend/scripts/pricing-seed.json's sessionCount values exactly — if a
+ * package's session count ever changes there, update this table too.
+ */
+export const PACKAGE_DAYS_LOCK: Record<string, Record<number, number>> = {
+  TPG101: { 8: 2, 12: 3, 16: 4, 20: 5 },
+  ACT102: { 12: 3, 16: 4, 20: 5, 60: 6 },
+};
+
+/** The exact day count a package locks Available Days to, or null if this
+ * program/sessionCount combination has no lock (Examination Preparation, or
+ * an unrecognized session count). */
+export function getRequiredDaysForPackage(programCode: string, sessionCount: number | null): number | null {
+  if (sessionCount == null) return null;
+  return PACKAGE_DAYS_LOCK[programCode]?.[sessionCount] ?? null;
+}

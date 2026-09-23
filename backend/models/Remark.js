@@ -4,11 +4,14 @@ const mongoose = require('mongoose');
  * Student Remarks — replaces the grading workflow. A remark is a tutor's session-based
  * observation, not a grade/ranking/average/pass-fail result.
  *
- * Versioning: a correction never overwrites a published remark. It creates a NEW
- * document (`correctionOf` -> the immediate predecessor, `rootRemarkId` -> the very
- * first version in the chain) and flips `isCurrentVersion` so exactly one document per
- * chain is ever the parent-visible one. The original and every prior correction stay in
- * place, queryable via `rootRemarkId` for admin audit history.
+ * Once a remark reaches `published`, it is fully immutable — there is no edit or
+ * correction path for anyone, including admins.
+ *
+ * `rootRemarkId` / `correctionOf` / `correctionReason` / `isCurrentVersion` are legacy
+ * versioning fields from a retired "Correct Published Remark" feature. New remarks never
+ * populate `correctionOf`/`rootRemarkId` and are always `isCurrentVersion: true`. The
+ * fields are kept, unmigrated, only so pre-existing corrected/superseded remarks keep
+ * reading back correctly as historical record.
  */
 const remarkSchema = new mongoose.Schema(
   {

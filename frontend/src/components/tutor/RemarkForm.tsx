@@ -28,7 +28,8 @@ import {
 
 // BeeBright Student Remarks Spec v2 — the single form component behind all three
 // templates (Toddler Observation Note Card / Academic Tutorial Remark / Examination
-// Preparedness Remark), plus editing a draft and correcting a published remark.
+// Preparedness Remark), plus editing a draft. A Published remark is immutable and has
+// no edit path here — the retired "Correct Published Remark" feature used to provide one.
 
 const PROMPT_SUGGESTIONS = [
   "The student independently…",
@@ -64,13 +65,13 @@ interface RemarkFormProps {
   studentId: string;
   studentLabel: string;
   /** The remark type (program) chosen in the "Choose Remark Type" step (Spec v3) —
-   * fixed for the lifetime of a create/edit/correct flow, threaded straight into every
+   * fixed for the lifetime of a create/edit flow, threaded straight into every
    * submitted payload rather than inferred from the student. */
   programCode: RemarkProgramCode;
   templateType: RemarkTemplateType;
-  /** Present when editing an existing draft (mode="edit") or correcting a published one (mode="correct"). */
+  /** Present when editing an existing draft (mode="edit"). */
   existingRemark?: RemarkItem | null;
-  mode: "create" | "edit" | "correct";
+  mode: "create" | "edit";
   onSaved: () => void;
   /** Dismiss with no server-side change — a plain close, or "Keep Editing". */
   onCancel?: () => void;
@@ -96,7 +97,6 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
   // enrollment wizard and the admin review queue) can render immediately with no round
   // trip — and so buildPayload doesn't need to re-read the file at submit time.
   const [attachmentPreview, setAttachmentPreview] = useState<{ dataUrl: string; fileName: string; fileSize: number } | null>(null);
-  const [correctionReason, setCorrectionReason] = useState("");
   const [submitting, setSubmitting] = useState<"draft" | "publish" | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
 
@@ -158,11 +158,6 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
   });
 
   const handleSubmit = async (action: "draft" | "publish") => {
-    if (mode === "correct" && !correctionReason.trim()) {
-      toast.error("A correction reason is required.");
-      return;
-    }
-
     // Activities and remark bullets are the only two fields that need an explicit "+"
     // (or Enter) to turn the typed text into a chip. Text still sitting in those inputs
     // when Save Draft/Publish is clicked used to be dropped silently, which is why they
@@ -180,11 +175,7 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
     setErrors([]);
     try {
       let res;
-      if (mode === "correct" && existingRemark) {
-        // Corrections always run full publish validation.
-        const payload = buildPayload("publish", submittedActivities, submittedBullets);
-        res = await remarkService.correct(existingRemark._id, { ...payload, correctionReason: correctionReason.trim() });
-      } else if (mode === "edit" && existingRemark) {
+      if (mode === "edit" && existingRemark) {
         const payload = buildPayload(action, submittedActivities, submittedBullets);
         res = await remarkService.update(existingRemark._id, payload);
       } else {
@@ -225,12 +216,6 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
   const isExistingDraft = mode === "edit" && Boolean(existingRemark);
 
   const handleCancelClick = () => {
-    // Correcting a published remark isn't a draft — there's nothing to delete, so
-    // Cancel here always just closes, same as before this feature.
-    if (mode === "correct") {
-      onCancel?.();
-      return;
-    }
     if (isExistingDraft || hasEnteredContent) {
       setConfirmDeleteOpen(true);
     } else {
@@ -271,13 +256,6 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
           {templateType === "toddler_observation" ? "Toddler Observation Note Card" : templateType === "academic_progress" ? "Academic Tutorial Remark" : "Examination Preparedness Remark"}
         </p>
       </div>
-
-      {mode === "correct" && (
-        <div className="space-y-1">
-          <Label htmlFor="correction-reason">Correction reason *</Label>
-          <Textarea id="correction-reason" value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} placeholder="Why is this remark being corrected?" className="min-h-[60px]" />
-        </div>
-      )}
 
       <div className="space-y-1">
         <Label htmlFor="remark-date">Date</Label>
@@ -441,15 +419,13 @@ export function RemarkForm({ studentId, studentLabel, programCode, templateType,
         {onCancel && (
           <Button type="button" variant="outline" onClick={handleCancelClick} disabled={Boolean(submitting)}>Cancel</Button>
         )}
-        {mode !== "correct" && (
-          <Button type="button" variant="outline" onClick={() => handleSubmit("draft")} disabled={Boolean(submitting)}>
-            {submitting === "draft" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-            Save Draft
-          </Button>
-        )}
+        <Button type="button" variant="outline" onClick={() => handleSubmit("draft")} disabled={Boolean(submitting)}>
+          {submitting === "draft" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+          Save Draft
+        </Button>
         <Button type="button" className="btn-glow" onClick={() => handleSubmit("publish")} disabled={Boolean(submitting)}>
           {submitting === "publish" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-          {mode === "correct" ? "Submit Correction" : "Publish"}
+          Publish
         </Button>
       </div>
 

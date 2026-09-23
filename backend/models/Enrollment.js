@@ -69,6 +69,10 @@ const enrollmentSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // Legacy field — the "Preferred Time Slot" (Morning/Afternoon/No Preference) radio
+  // group was removed from the enrollment wizard as redundant with preferredSlots
+  // (the precise hourly picker). No longer collected or written on new enrollments;
+  // kept, unmigrated, only so pre-existing enrollments keep their recorded value.
   preferredTime: {
     type: String,
     enum: ['morning', 'afternoon', 'no_preference', null],
