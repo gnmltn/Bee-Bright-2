@@ -13,11 +13,14 @@ import { toast } from "sonner";
 import {
   scheduleService,
   type AdminEnrollment,
+  type AdminSchedule,
   type WeeklyScheduleSubjectOption,
   type WeeklyScheduleTutorOption,
+  type PricingPackage,
 } from "@/services/api";
 import { StudentSearchSelect } from "./StudentSearchSelect";
 import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
+import { getRequiredDaysForPackage } from "@/constants/programs";
 
 // BeeBright Scheduling Spec, Section 1 — student-first 1-on-1 scheduling wizard.
 // Replaces the old slot-first "create a tutor slot, assign a child later" flow for
@@ -103,9 +106,35 @@ function preferredSlotLabel(enrollment: AdminEnrollment, programCode: string) {
   return `${formatSlotTime(slot.startTime)} – ${formatSlotTime(slot.endTime)}`;
 }
 
-function preferredDaysLabel(enrollment: AdminEnrollment) {
-  if (!enrollment.preferredDays || enrollment.preferredDays.length === 0) return "No preference selected";
-  return enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/");
+function preferredDaysLabel(enrollment: AdminEnrollment, programCode: string) {
+  const perProgram = enrollment.preferredDaysByProgram?.find((p) => p.programCode.toUpperCase() === programCode.toUpperCase());
+  const days = perProgram ? perProgram.days : enrollment.preferredDays; // legacy fallback
+  if (!days || days.length === 0) return "No preference selected";
+  return days.map((d) => d.slice(0, 3)).join("/");
+}
+
+// "Academic Tutorial – Premier (Pre-School / Elementary)" -> "Premier"
+// "Toddlers Playgroup – 16 Hours" -> "16 Hours"
+// "Exam Prep – Bright Package" -> "Bright"
+function shortPackageLabel(displayName: string): string {
+  const afterDash = displayName.split("–").pop()?.trim() || displayName;
+  return afterDash.replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+Package$/i, "").trim();
+}
+
+/** The Pricing catalog entry (has sessionCount) behind an enrollment's package for a
+ * given program — the Enrollment's own stored package snapshot doesn't carry sessionCount. */
+function matchedPricing(enrollment: AdminEnrollment, programCode: string, pricing: PricingPackage[]) {
+  const pkg = (enrollment.packages || []).find((p) => (p.programCode || "").toUpperCase() === programCode.toUpperCase());
+  if (!pkg) return null;
+  return pricing.find((p) => p.programCode === pkg.programCode && p.packageSlug === pkg.packageSlug) || null;
+}
+
+function packageLabel(enrollment: AdminEnrollment, programCode: string, pricing: PricingPackage[]) {
+  const priced = matchedPricing(enrollment, programCode, pricing);
+  if (!priced) return null;
+  const requiredDays = getRequiredDaysForPackage(priced.programCode, priced.sessionCount);
+  const short = shortPackageLabel(priced.displayName);
+  return requiredDays !== null ? `${short} (${requiredDays}x per week)` : short;
 }
 
 interface StudentSubjectOption {
@@ -119,10 +148,23 @@ interface OneOnOneSchedulingWizardProps {
   subjects: WeeklyScheduleSubjectOption[];
   enrollments: AdminEnrollment[];
   tutors: WeeklyScheduleTutorOption[];
+  pricing: PricingPackage[];
+  schedules: AdminSchedule[];
   onCreated: () => void;
 }
 
-export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCreated }: OneOnOneSchedulingWizardProps) {
+// Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #1 — once a student already has a
+// schedule generated for a program, they must stop appearing as selectable for that
+// same program (they've already been scheduled). Matches on the enrollment's linked
+// student User id — an enrollment with no linked student yet has never been
+// scheduled, so nothing to match against.
+function alreadyScheduled(enrollment: AdminEnrollment, subject: WeeklyScheduleSubjectOption, schedules: AdminSchedule[]): boolean {
+  const studentUserId = enrollment.student?._id;
+  if (!studentUserId) return false;
+  return schedules.some((s) => s.student?._id === studentUserId && (s.subject?._id === subject._id || (s.subject?.code || "").toUpperCase() === (subject.code || "").toUpperCase()));
+}
+
+export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricing, schedules, onCreated }: OneOnOneSchedulingWizardProps) {
   const oneOnOneSubjects = useMemo(
     () => subjects.filter((subject) => ONE_ON_ONE_CODES.has((subject.code || "").toUpperCase())),
     [subjects]
@@ -134,6 +176,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
       if (!isEnrollmentSchedulable(enrollment)) continue;
       const covered = enrollmentCoveredOneOnOneSubjects(enrollment, oneOnOneSubjects);
       for (const subject of covered) {
+        if (alreadyScheduled(enrollment, subject, schedules)) continue;
         options.push({
           key: `${enrollment._id}::${subject._id}`,
           enrollment,
@@ -143,7 +186,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
       }
     }
     return options;
-  }, [enrollments, oneOnOneSubjects]);
+  }, [enrollments, oneOnOneSubjects, schedules]);
 
   const [selectedKey, setSelectedKey] = useState("");
   // Bumped on reset to force StudentSearchSelect to remount and clear its own search text.
@@ -158,8 +201,19 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
 
   const selectedOption = studentOptions.find((option) => option.key === selectedKey) || null;
 
-  // Reset downstream steps whenever the student/program changes.
+  // The exact-count day lock (Admin_Popup_Package_and_DayLock_Fix.pdf) — null means no
+  // lock applies (e.g. Examination Preparation, or pricing hasn't loaded yet).
+  const requiredDays = selectedOption
+    ? getRequiredDaysForPackage(
+        selectedOption.subject.code || "",
+        matchedPricing(selectedOption.enrollment, selectedOption.subject.code || "", pricing)?.sessionCount ?? null
+      )
+    : null;
+
+  // Reset downstream steps whenever the student/program changes — including any day
+  // selection made for a previous student, since it may not fit this one's lock.
   useEffect(() => {
+    setSelectedDays(DEFAULT_DAYS);
     setSelectedTutorId("");
     setSlotsByDay(null);
     setError(null);
@@ -200,8 +254,10 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
     [selectedDays, selectedTime, slotsByDay]
   );
 
+  const dayCountMatchesLock = requiredDays === null || selectedDays.length === requiredDays;
+
   const allDaysAvailable =
-    Boolean(selectedTutorId) && Boolean(slotsByDay) && dayAvailability.length > 0 && dayAvailability.every((d) => d.available);
+    Boolean(selectedTutorId) && Boolean(slotsByDay) && dayAvailability.length > 0 && dayAvailability.every((d) => d.available) && dayCountMatchesLock;
 
   const toggleDay = (day: number) => {
     setSelectedDays((prev) => {
@@ -209,6 +265,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
         if (prev.length === 1) return prev; // at least one day required
         return prev.filter((value) => value !== day);
       }
+      if (requiredDays !== null && prev.length >= requiredDays) return prev; // locked at the package's sessions-per-week
       return [...prev, day].sort((a, b) => a - b);
     });
   };
@@ -286,7 +343,13 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
             <div className="flex items-center gap-1 text-foreground font-medium">
               <Info className="h-3.5 w-3.5" /> Enrollment details
             </div>
-            <p>Program: {selectedOption.subject.name}</p>
+            <p>
+              Program: {selectedOption.subject.name}
+              {(() => {
+                const label = packageLabel(selectedOption.enrollment, selectedOption.subject.code || "", pricing);
+                return label ? ` — Package: ${label}` : "";
+              })()}
+            </p>
             <p>
               Preferred start:{" "}
               {selectedOption.enrollment.preferredStartDate
@@ -298,7 +361,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
                 : "Any date"}
             </p>
             <p>Time Slot Availability: {preferredSlotLabel(selectedOption.enrollment, selectedOption.subject.code || "")}</p>
-            <p>Available Days: {preferredDaysLabel(selectedOption.enrollment)}</p>
+            <p>Available Days: {preferredDaysLabel(selectedOption.enrollment, selectedOption.subject.code || "")}</p>
             <p>
               Guardian: {personDisplayName(selectedOption.enrollment.parent) || "—"}
               {selectedOption.enrollment.parent?.email ? ` • ${selectedOption.enrollment.parent.email}` : ""}
@@ -310,20 +373,35 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, onCrea
 
       {/* Step 2: Choose Days + time */}
       <div className="space-y-1">
-        <Label>Step 2: Days &amp; time</Label>
+        <Label>
+          Step 2: Days &amp; time
+          {requiredDays !== null && (
+            <span className="text-muted-foreground font-normal"> (select exactly {requiredDays} day{requiredDays === 1 ? "" : "s"})</span>
+          )}
+        </Label>
         <div className="flex flex-wrap gap-1.5">
-          {DAY_OPTIONS.map((day) => (
-            <Button
-              key={day.value}
-              type="button"
-              size="sm"
-              variant={selectedDays.includes(day.value) ? "default" : "outline"}
-              onClick={() => toggleDay(day.value)}
-            >
-              {day.label}
-            </Button>
-          ))}
+          {DAY_OPTIONS.map((day) => {
+            const selected = selectedDays.includes(day.value);
+            const disabled = !selected && requiredDays !== null && selectedDays.length >= requiredDays;
+            return (
+              <Button
+                key={day.value}
+                type="button"
+                size="sm"
+                variant={selected ? "default" : "outline"}
+                disabled={disabled}
+                onClick={() => toggleDay(day.value)}
+              >
+                {day.label}
+              </Button>
+            );
+          })}
         </div>
+        {requiredDays !== null && (
+          <p className={`text-xs ${dayCountMatchesLock ? "text-emerald-600" : "text-muted-foreground"}`}>
+            {selectedDays.length} of {requiredDays} selected — this package requires exactly {requiredDays} day{requiredDays === 1 ? "" : "s"} per week.
+          </p>
+        )}
         <Select value={selectedTime} onValueChange={setSelectedTime}>
           <SelectTrigger className="mt-2 w-56">
             <SelectValue placeholder="Select time" />

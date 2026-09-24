@@ -5,6 +5,7 @@ const {
   verifyEnrollmentEmailCode,
   submitEnrollment,
   submitPaymentProof,
+  submitRemainingPaymentProof,
   getMyEnrollments,
   trackEnrollment,
   getEnrollmentAvailability,
@@ -19,6 +20,7 @@ const {
   updateEnrollmentStatus,
   verifyPayment,
   adminAddStudent,
+  adminWalkInEnroll,
 } = require('../controllers/enrollmentController');
 const { getAllPricing, createOrUpdatePricing } = require('../controllers/pricingController');
 const { protect, authorize, optionalProtect } = require('../middleware/auth');
@@ -40,6 +42,7 @@ router.post('/pricing', protect, authorize('admin'), createOrUpdatePricing);
 // ── Admin bulk/action routes (MUST come before /:id) ─────────────────────
 router.get('/admin/all', protect, authorize('admin'), getAllEnrollments);
 router.post('/admin/add-student', protect, authorize('admin'), adminAddStudent);
+router.post('/admin/walk-in', protect, authorize('admin'), adminWalkInEnroll);
 
 // ── Parent / Student named routes (MUST come before /:id) ────────────────
 router.get('/my-enrollments', protect, getMyEnrollments);
@@ -57,6 +60,7 @@ router.get('/', protect, authorize('admin'), getAllEnrollments);
 
 // ── Parameterized routes LAST (so they never shadow named routes above) ───
 router.post('/:enrollmentId/submit-proof', protect, submitPaymentProof);
+router.post('/:enrollmentId/submit-remaining-proof', protect, submitRemainingPaymentProof);
 router.put('/:id/status', protect, authorize('admin'), updateEnrollmentStatus);
 router.put('/:id/verify-payment', protect, authorize('admin'), adminVerifyPayment);
 router.put('/:id/approve', protect, authorize('admin'), adminApproveEnrollment);

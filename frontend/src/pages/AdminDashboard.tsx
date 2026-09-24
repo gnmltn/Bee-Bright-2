@@ -44,7 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord } from "@/services/api";
+import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage } from "@/services/api";
 import { adminEmailVerificationService } from "@/services/adminEmailVerification";
 import {
   AlertDialog,
@@ -85,34 +85,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { sanitizeName, sanitizePhoneInput } from "@/utils/validation";
 import { PROGRAM_LABELS } from "@/constants/programs";
-
-/** Program names by grade level — only the 3 active programs. Used to filter programs in Add Student. */
-const PROGRAMS_BY_GRADE: Record<string, string[]> = {
-  Toddler:            [PROGRAM_LABELS.TPG101],
-  "Pre-Kindergarten": [PROGRAM_LABELS.TPG101, PROGRAM_LABELS.ACT102],
-  Kindergarten:       [PROGRAM_LABELS.TPG101, PROGRAM_LABELS.ACT102],
-  "Grade 1":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 2":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 3":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 4":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 5":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 6":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 7":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 8":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 9":          [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-  "Grade 10":         [PROGRAM_LABELS.ACT102, PROGRAM_LABELS.EXP106],
-};
-
-/** Returns true if subject name matches any program name for the grade (case-insensitive, allows partial match). */
-function subjectMatchesGrade(subjectName: string, gradeLevel: string): boolean {
-  const programNames = PROGRAMS_BY_GRADE[gradeLevel];
-  if (!programNames?.length) return false;
-  const s = (subjectName || "").toLowerCase().trim();
-  return programNames.some((p) => {
-    const pn = p.toLowerCase().trim();
-    return s.includes(pn) || pn.includes(s) || s === pn;
-  });
-}
+import AdminAddStudentWizard from "@/components/admin/AdminAddStudentWizard";
 
 const AVAILABILITY_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const AVAILABILITY_TIME_SLOTS = [
@@ -377,17 +350,41 @@ const childNameFromEnrollment = (enrollment: AdminEnrollment) => {
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-const parentPreferenceSummary = (enrollment: AdminEnrollment) => {
+// 'blockchain' is legacy-only (MetaMask/Blockchain was removed as a selectable payment
+// method) — kept here only so old records still display a readable label instead of
+// falling through to "GCash".
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  gcash: "GCash",
+  maribank: "MariBank",
+  bdo: "BDO",
+  blockchain: "Blockchain (legacy)",
+};
+function paymentMethodLabel(method?: string | null): string {
+  return PAYMENT_METHOD_LABELS[method || ""] || "GCash";
+}
+
+// Available Days are stored per program now (a parent enrolled in more than one
+// program picks separate days for each) — resolves the slice for whichever program
+// this schedule/session actually belongs to, falling back to the legacy flat field
+// for pre-migration enrollments that predate preferredDaysByProgram.
+const preferredDaysForProgram = (enrollment: AdminEnrollment, programCode?: string): string[] | undefined => {
+  if (programCode) {
+    const perProgram = enrollment.preferredDaysByProgram?.find((p) => p.programCode.toUpperCase() === programCode.toUpperCase());
+    if (perProgram) return perProgram.days;
+  }
+  return enrollment.preferredDays;
+};
+
+const parentPreferenceSummary = (enrollment: AdminEnrollment, programCode?: string) => {
   const dateLabel = enrollment.preferredStartDate
     ? new Date(enrollment.preferredStartDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
     : "any start date";
-  const daysLabel = enrollment.preferredDays && enrollment.preferredDays.length > 0
-    ? enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/")
-    : "any day";
+  const days = preferredDaysForProgram(enrollment, programCode);
+  const daysLabel = days && days.length > 0 ? days.map((d) => d.slice(0, 3)).join("/") : "any day";
   return `${dateLabel}, ${daysLabel}`;
 };
 
-const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: string) => {
+const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: string, programCode?: string) => {
   if (enrollment.preferredStartDate && dateValue) {
     const preferred = new Date(enrollment.preferredStartDate);
     const scheduled = new Date(dateValue);
@@ -395,12 +392,13 @@ const matchesParentPreferenceClient = (enrollment: AdminEnrollment, dateValue?: 
       return { ok: false, reason: "Earlier than the parent preferred start date." };
     }
   }
-  if (enrollment.preferredDays && enrollment.preferredDays.length > 0 && dateValue) {
+  const preferredDays = preferredDaysForProgram(enrollment, programCode);
+  if (preferredDays && preferredDays.length > 0 && dateValue) {
     const scheduled = new Date(dateValue);
     if (!Number.isNaN(scheduled.getTime())) {
       const dayName = WEEKDAY_NAMES[scheduled.getUTCDay()];
-      if (!enrollment.preferredDays.includes(dayName)) {
-        const shortDays = enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/");
+      if (!preferredDays.includes(dayName)) {
+        const shortDays = preferredDays.map((d) => d.slice(0, 3)).join("/");
         return { ok: false, reason: `Outside the parent's preferred days (${shortDays}).` };
       }
     }
@@ -527,6 +525,10 @@ export default function AdminDashboard() {
   const [weeklyPlannerOptionsLoading, setWeeklyPlannerOptionsLoading] = useState(false);
   const [weeklyPlannerTutors, setWeeklyPlannerTutors] = useState<WeeklyScheduleTutorOption[]>([]);
   const [weeklyPlannerSubjects, setWeeklyPlannerSubjects] = useState<{ _id: string; name: string; code?: string }[]>([]);
+  // Feeds the scheduling wizards' package-name + sessions-per-week display and day-count
+  // lock (Admin_Popup_Package_and_DayLock_Fix.pdf) — sessionCount lives on Pricing, not
+  // on the Enrollment's own stored package snapshot.
+  const [pricingCatalog, setPricingCatalog] = useState<PricingPackage[]>([]);
   // BeeBright Scheduling Spec: Scheduling Tab layout fix — only one of the two
   // scheduling flows renders at a time, chosen here as the true first step.
   const [schedulingProgramType, setSchedulingProgramType] = useState<"one-on-one" | "playgroup" | null>(null);
@@ -563,25 +565,10 @@ export default function AdminDashboard() {
   const [adminAnnouncementForm, setAdminAnnouncementForm] = useState({ title: "", body: "", category: "suspension" as string, scheduledDate: "" });
   const [adminAnnouncementSubmitting, setAdminAnnouncementSubmitting] = useState(false);
   const [editingAdminAnnouncementId, setEditingAdminAnnouncementId] = useState<string | null>(null);
+  // Walk-in "Add Student" now opens AdminAddStudentWizard.tsx — a real 7-step
+  // parent-account + Enrollment/Payment flow matching the modern program/package
+  // model. addStudentOpen is the only piece of state this file still owns for it.
   const [addStudentOpen, setAddStudentOpen] = useState(false);
-  const [addStudentSubmitting, setAddStudentSubmitting] = useState(false);
-  const [addStudentPrograms, setAddStudentPrograms] = useState<{ _id: string; name: string; code?: string; price?: number }[]>([]);
-  const [addStudentForm, setAddStudentForm] = useState({
-    firstName: "",
-    middleName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-    password: "",
-    gradeLevel: "",
-    guardianName: "",
-    guardianPhone: "",
-    selectedSubjectIds: [] as string[],
-    paymentOption: "full" as "full" | "down",
-    paymentStatus: "paid" as string,
-    status: "active" as string,
-    enrollmentDate: new Date().toISOString().slice(0, 10),
-  });
 
   const managedUserRoles = useMemo(
     // 'student' role is no longer created — children are stored as studentSnapshot on Enrollment.
@@ -654,29 +641,6 @@ export default function AdminDashboard() {
       iconClassName: "bg-destructive/10 text-destructive",
     };
   }, [pendingUserAction]);
-  /** Programs applicable to selected grade level in Add Student form. */
-  const addStudentProgramsForGrade = useMemo(() => {
-    if (!addStudentForm.gradeLevel) return [];
-    return addStudentPrograms.filter((p) => subjectMatchesGrade(p.name, addStudentForm.gradeLevel));
-  }, [addStudentPrograms, addStudentForm.gradeLevel]);
-  /** Calculated total fee from selected programs (for Add Student, like enrollment). */
-  const addStudentCalculatedTotal = useMemo(() => {
-    return addStudentPrograms
-      .filter((p) => addStudentForm.selectedSubjectIds.includes(p._id))
-      .reduce((sum, p) => sum + (p.price ?? 0), 0);
-  }, [addStudentPrograms, addStudentForm.selectedSubjectIds]);
-
-  const GRADE_LEVELS = ["Toddler", "Pre-Kindergarten", "Kindergarten", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6", "Grade 7", "Grade 8", "Grade 9", "Grade 10"];
-  const PAYMENT_STATUS_OPTIONS = [
-    { value: "pending", label: "Pending" },
-    { value: "pending_verification", label: "Pending verification" },
-    { value: "paid", label: "Paid" },
-  ];
-  const ENROLLMENT_STATUS_OPTIONS = [
-    { value: "pending", label: "Pending" },
-    { value: "active", label: "Active" },
-  ];
-
   const [addAdminOpen, setAddAdminOpen] = useState(false);
   const [addAdminSubmitting, setAddAdminSubmitting] = useState(false);
   const [addAdminForm, setAddAdminForm] = useState({
@@ -949,28 +913,6 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
-    if (addStudentOpen) {
-      subjectService.getAllSubjects().then((res) => {
-        if (res.data?.success && Array.isArray(res.data.subjects)) {
-          setAddStudentPrograms(res.data.subjects);
-        }
-      }).catch(() => setAddStudentPrograms([]));
-    }
-  }, [addStudentOpen]);
-
-  /** When grade level changes in Add Student, clear selections that are no longer applicable. */
-  useEffect(() => {
-    if (!addStudentOpen || !addStudentForm.gradeLevel) return;
-    const allowedIds = addStudentPrograms
-      .filter((p) => subjectMatchesGrade(p.name, addStudentForm.gradeLevel))
-      .map((p) => p._id);
-    setAddStudentForm((f) => ({
-      ...f,
-      selectedSubjectIds: f.selectedSubjectIds.filter((id) => allowedIds.includes(id)),
-    }));
-  }, [addStudentOpen, addStudentForm.gradeLevel, addStudentPrograms]);
-
-  useEffect(() => {
     if (addTutorOpen) {
       subjectService.getAllSubjects().then((res) => {
         if (res.data?.success && Array.isArray(res.data.subjects)) {
@@ -1119,6 +1061,13 @@ export default function AdminDashboard() {
         setWeeklyPlannerSubjects([]);
       })
       .finally(() => setWeeklyPlannerOptionsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    pricingService
+      .getAll()
+      .then((res) => setPricingCatalog(res.data?.success ? res.data.pricing : []))
+      .catch(() => setPricingCatalog([]));
   }, []);
 
   const openSubstituteDialog = async () => {
@@ -2705,7 +2654,7 @@ export default function AdminDashboard() {
                                   <td className="p-4 font-mono text-sm text-foreground">{payment.referenceNumber ?? payment._id}</td>
                                   <td className="p-4 text-foreground">{studentName}</td>
                                   <td className="p-4 font-semibold text-foreground">₱{(payment.amount || 0).toLocaleString()}</td>
-                                  <td className="p-4 text-muted-foreground capitalize">{payment.paymentMethod === "blockchain" ? "Blockchain" : "GCash"}</td>
+                                  <td className="p-4 text-muted-foreground capitalize">{paymentMethodLabel(payment.paymentMethod)}</td>
                                   <td className="p-4 text-muted-foreground">{dateLabel}</td>
                                   <td className="p-4">
                                     <span className="text-xs px-2 py-1 rounded-full font-medium bg-warning/10 text-warning">Pending review</span>
@@ -2797,7 +2746,7 @@ export default function AdminDashboard() {
                                   <td className="p-4 font-mono text-sm text-foreground">{payment.referenceNumber ?? payment._id}</td>
                                   <td className="p-4 text-foreground">{studentName}</td>
                                   <td className="p-4 font-semibold text-foreground">₱{(payment.amount || 0).toLocaleString()}</td>
-                                  <td className="p-4 text-muted-foreground capitalize">{payment.paymentMethod === "blockchain" ? "Blockchain" : "GCash"}</td>
+                                  <td className="p-4 text-muted-foreground capitalize">{paymentMethodLabel(payment.paymentMethod)}</td>
                                   <td className="p-4 text-muted-foreground">{submittedLabel}</td>
                                   <td className="p-4 text-muted-foreground">
                                     <div>{reviewedLabel}</div>
@@ -2977,6 +2926,8 @@ export default function AdminDashboard() {
                       subjects={weeklyPlannerSubjects}
                       enrollments={enrollments}
                       tutors={weeklyPlannerTutors}
+                      pricing={pricingCatalog}
+                      schedules={schedules}
                       onCreated={fetchSchedules}
                     />
                   )}
@@ -2985,6 +2936,8 @@ export default function AdminDashboard() {
                       subjects={weeklyPlannerSubjects}
                       enrollments={enrollments}
                       tutors={weeklyPlannerTutors}
+                      pricing={pricingCatalog}
+                      schedules={schedules}
                       onCreated={fetchSchedules}
                     />
                   )}
@@ -3397,8 +3350,8 @@ export default function AdminDashboard() {
                           if (linkedStudentId && enrolledStudentIds.has(linkedStudentId)) return false;
                           return true;
                         });
-                        const matchingPreference = availableEnrollmentCandidates.filter((enrollmentItem) => matchesParentPreferenceClient(enrollmentItem, s.date).ok);
-                        const needsOverride = availableEnrollmentCandidates.filter((enrollmentItem) => !matchesParentPreferenceClient(enrollmentItem, s.date).ok);
+                        const matchingPreference = availableEnrollmentCandidates.filter((enrollmentItem) => matchesParentPreferenceClient(enrollmentItem, s.date, s.subject?.code).ok);
+                        const needsOverride = availableEnrollmentCandidates.filter((enrollmentItem) => !matchesParentPreferenceClient(enrollmentItem, s.date, s.subject?.code).ok);
                         const currentEnrollment = enrolledStudents.length;
                         const hasOpenSlot = currentEnrollment < maxCapacity;
                         return (
@@ -3550,7 +3503,7 @@ export default function AdminDashboard() {
                                               >
                                                 <span className="flex flex-col">
                                                   <span>{childNameFromEnrollment(candidate)}</span>
-                                                  <span className="text-[10px] text-muted-foreground font-normal">{parentPreferenceSummary(candidate)}</span>
+                                                  <span className="text-[10px] text-muted-foreground font-normal">{parentPreferenceSummary(candidate, s.subject?.code)}</span>
                                                 </span>
                                               </DropdownMenuCheckboxItem>
                                             );
@@ -3560,7 +3513,7 @@ export default function AdminDashboard() {
                                           )}
                                           {needsOverride.map((candidate) => {
                                             const checked = scheduleEnrollmentSelectedStudentIds.includes(candidate._id);
-                                            const mismatch = matchesParentPreferenceClient(candidate, s.date).reason;
+                                            const mismatch = matchesParentPreferenceClient(candidate, s.date, s.subject?.code).reason;
                                             return (
                                               <DropdownMenuCheckboxItem
                                                 key={candidate._id}
@@ -3576,7 +3529,7 @@ export default function AdminDashboard() {
                                               >
                                                 <span className="flex flex-col">
                                                   <span>{childNameFromEnrollment(candidate)}</span>
-                                                  <span className="text-[10px] text-muted-foreground font-normal">{mismatch || parentPreferenceSummary(candidate)}</span>
+                                                  <span className="text-[10px] text-muted-foreground font-normal">{mismatch || parentPreferenceSummary(candidate, s.subject?.code)}</span>
                                                 </span>
                                               </DropdownMenuCheckboxItem>
                                             );
@@ -5011,255 +4964,16 @@ export default function AdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* Add New Student (walk-in enrollment) dialog */}
-      <Dialog open={addStudentOpen} onOpenChange={setAddStudentOpen}>
-        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <GraduationCap className="h-5 w-5" />
-              Add New Student (Walk-in)
-            </DialogTitle>
-            <DialogDescription>
-              Create a student account and enrollment in one step. All fields with * are required. Use Gmail and Philippine mobile number.
-            </DialogDescription>
-          </DialogHeader>
-          <form
-            className="space-y-4 py-2"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!addStudentForm.firstName?.trim() || !addStudentForm.lastName?.trim() || !addStudentForm.email?.trim() || !addStudentForm.phone?.trim() || !addStudentForm.password || !addStudentForm.gradeLevel || !addStudentForm.guardianName?.trim()) {
-                toast.error("Please fill all required fields.");
-                return;
-              }
-              if (addStudentForm.selectedSubjectIds.length === 0) {
-                toast.error("Select at least one program.");
-                return;
-              }
-              const totalFeeNum = addStudentCalculatedTotal;
-              if (totalFeeNum < 0) {
-                toast.error("Invalid total fee from selected programs.");
-                return;
-              }
-              setAddStudentSubmitting(true);
-              try {
-                const res = await enrollmentService.adminAddStudent({
-                  firstName: addStudentForm.firstName.trim(),
-                  middleName: addStudentForm.middleName?.trim() || undefined,
-                  lastName: addStudentForm.lastName.trim(),
-                  email: addStudentForm.email.trim(),
-                  phone: addStudentForm.phone.trim(),
-                  password: addStudentForm.password,
-                  gradeLevel: addStudentForm.gradeLevel,
-                  guardianName: addStudentForm.guardianName.trim(),
-                  guardianPhone: addStudentForm.guardianPhone?.trim() || undefined,
-                  selectedSubjectIds: addStudentForm.selectedSubjectIds,
-                  paymentOption: addStudentForm.paymentOption,
-                  totalFee: totalFeeNum,
-                  paymentStatus: addStudentForm.paymentStatus,
-                  status: addStudentForm.status,
-                  enrollmentDate: addStudentForm.enrollmentDate || undefined,
-                });
-                if (res.data?.success) {
-                  toast.success(res.data?.message ?? "Student added successfully.");
-                  setAddStudentOpen(false);
-                  setAddStudentForm({
-                    firstName: "",
-                    middleName: "",
-                    lastName: "",
-                    email: "",
-                    phone: "",
-                    password: "",
-                    gradeLevel: "",
-                    guardianName: "",
-                    guardianPhone: "",
-                    selectedSubjectIds: [],
-                    paymentOption: "full",
-                    paymentStatus: "paid",
-                    status: "active",
-                    enrollmentDate: new Date().toISOString().slice(0, 10),
-                  });
-                  fetchEnrollments();
-                  fetchUsers();
-                  fetchDashboardStats();
-                  fetchAdminPayments();
-                } else {
-                  toast.error(res.data?.message || "Failed to add student.");
-                }
-              } catch (err: unknown) {
-                const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to add student.";
-                toast.error(msg);
-              } finally {
-                setAddStudentSubmitting(false);
-              }
-            }}
-          >
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="stu-firstName">First Name *</Label>
-                <Input id="stu-firstName" value={addStudentForm.firstName} onChange={(e) => setAddStudentForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))} placeholder="Juan" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="stu-middleName">Middle Name</Label>
-                <Input id="stu-middleName" value={addStudentForm.middleName} onChange={(e) => setAddStudentForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))} placeholder="Optional" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="stu-lastName">Last Name *</Label>
-              <Input id="stu-lastName" value={addStudentForm.lastName} onChange={(e) => setAddStudentForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))} placeholder="Dela Cruz" required />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="stu-email">Email (Gmail) *</Label>
-                <Input id="stu-email" type="email" value={addStudentForm.email} onChange={(e) => setAddStudentForm((f) => ({ ...f, email: e.target.value }))} placeholder="student@gmail.com" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="stu-phone">Phone (Philippine) *</Label>
-                <Input id="stu-phone" type="tel" value={addStudentForm.phone} onChange={(e) => setAddStudentForm((f) => ({ ...f, phone: sanitizePhoneInput(e.target.value) }))} placeholder="09XX XXX XXXX" required />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="stu-password">Password *</Label>
-              <PasswordInput
-                id="stu-password"
-                value={addStudentForm.password}
-                onChange={(e) => setAddStudentForm((f) => ({ ...f, password: e.target.value }))}
-                placeholder="Min 8 chars, 1 upper, 1 lower, 1 number, 1 special (@$!%*?&)"
-                required
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="stu-gradeLevel">Grade Level *</Label>
-                <Select value={addStudentForm.gradeLevel} onValueChange={(v) => setAddStudentForm((f) => ({ ...f, gradeLevel: v }))} required>
-                  <SelectTrigger id="stu-gradeLevel">
-                    <SelectValue placeholder="Select grade" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {GRADE_LEVELS.map((g) => (
-                      <SelectItem key={g} value={g}>{g}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="stu-enrollmentDate">Enrollment Date</Label>
-                <Input
-                  id="stu-enrollmentDate"
-                  type="date"
-                  value={addStudentForm.enrollmentDate}
-                  onChange={(e) => setAddStudentForm((f) => ({ ...f, enrollmentDate: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="stu-guardianName">Guardian Name *</Label>
-                <Input id="stu-guardianName" value={addStudentForm.guardianName} onChange={(e) => setAddStudentForm((f) => ({ ...f, guardianName: sanitizeName(e.target.value) }))} placeholder="Parent/Guardian" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="stu-guardianPhone">Guardian Phone</Label>
-                <Input id="stu-guardianPhone" type="tel" value={addStudentForm.guardianPhone} onChange={(e) => setAddStudentForm((f) => ({ ...f, guardianPhone: sanitizePhoneInput(e.target.value) }))} placeholder="09XX XXX XXXX" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Program(s) *</Label>
-              <p className="text-xs text-muted-foreground">
-                {addStudentForm.gradeLevel
-                  ? `Programs applicable to ${addStudentForm.gradeLevel}. Select one or more.`
-                  : "Select grade level first to see applicable programs."}
-              </p>
-              <div className="flex flex-wrap gap-2 border border-border rounded-lg p-3 bg-muted/20 max-h-32 overflow-y-auto">
-                {!addStudentForm.gradeLevel ? (
-                  <p className="text-sm text-muted-foreground">Select grade level above to see programs.</p>
-                ) : addStudentProgramsForGrade.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    {addStudentPrograms.length === 0 ? "Loading programs..." : "No programs match this grade level."}
-                  </p>
-                ) : (
-                  addStudentProgramsForGrade.map((prog) => (
-                    <div key={prog._id} className="flex items-center space-x-2">
-                      <Checkbox
-                        id={`prog-${prog._id}`}
-                        checked={addStudentForm.selectedSubjectIds.includes(prog._id)}
-                        onCheckedChange={(checked) => {
-                          setAddStudentForm((f) => ({
-                            ...f,
-                            selectedSubjectIds: checked ? [...f.selectedSubjectIds, prog._id] : f.selectedSubjectIds.filter((id) => id !== prog._id),
-                          }));
-                        }}
-                      />
-                      <label htmlFor={`prog-${prog._id}`} className="text-sm font-medium cursor-pointer">
-                        {prog.name} {prog.price != null ? `(₱${(prog.price as number).toLocaleString()})` : ""}
-                      </label>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div className="p-4 bg-muted rounded-lg">
-                <p className="text-sm text-muted-foreground">Total fee from selected programs</p>
-                <p className="text-xl font-bold text-foreground">
-                  ₱{addStudentCalculatedTotal.toLocaleString()}/month
-                </p>
-                {addStudentForm.paymentOption === "down" && addStudentCalculatedTotal > 0 && (
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Partial (50%): ₱{Math.ceil(addStudentCalculatedTotal * 0.5).toLocaleString()} now
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="stu-paymentOption">Payment Option</Label>
-                <Select value={addStudentForm.paymentOption} onValueChange={(v) => setAddStudentForm((f) => ({ ...f, paymentOption: v as "full" | "down" }))}>
-                  <SelectTrigger id="stu-paymentOption">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="full">Full payment</SelectItem>
-                    <SelectItem value="down">Partial payment</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="stu-paymentStatus">Payment Status</Label>
-                <Select value={addStudentForm.paymentStatus} onValueChange={(v) => setAddStudentForm((f) => ({ ...f, paymentStatus: v }))}>
-                  <SelectTrigger id="stu-paymentStatus">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PAYMENT_STATUS_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="stu-status">Enrollment Status</Label>
-                <Select value={addStudentForm.status} onValueChange={(v) => setAddStudentForm((f) => ({ ...f, status: v }))}>
-                  <SelectTrigger id="stu-status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ENROLLMENT_STATUS_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setAddStudentOpen(false)} disabled={addStudentSubmitting}>
-                Cancel
-              </Button>
-              <Button type="submit" className="btn-glow" disabled={addStudentSubmitting || addStudentForm.selectedSubjectIds.length === 0}>
-                {addStudentSubmitting ? "Saving..." : "Add Student"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <AdminAddStudentWizard
+        open={addStudentOpen}
+        onOpenChange={setAddStudentOpen}
+        onEnrolled={() => {
+          fetchEnrollments();
+          fetchUsers();
+          fetchDashboardStats();
+          fetchAdminPayments();
+        }}
+      />
 
       {/* View Enrollment / Proof of Payment modal */}
       <Dialog open={!!viewEnrollmentId} onOpenChange={(open) => !open && setViewEnrollmentId(null)}>
@@ -5276,7 +4990,9 @@ export default function AdminDashboard() {
             const parent = e.parent;
             const packages = e.packages || [];
             const preferredStart = e.preferredStartDate ? new Date(String(e.preferredStartDate)).toLocaleDateString('en-PH') : '—';
-            const preferredDaysLabel = e.preferredDays && e.preferredDays.length > 0 ? e.preferredDays.join(', ') : 'No preference selected';
+            const preferredDaysLabel = e.preferredDaysByProgram && e.preferredDaysByProgram.length > 0
+              ? e.preferredDaysByProgram.map((p) => `${p.programCode}: ${p.days.length > 0 ? p.days.join(', ') : 'no preference'}`).join(' · ')
+              : (e.preferredDays && e.preferredDays.length > 0 ? e.preferredDays.join(', ') : 'No preference selected');
             const preferredSlotsLabel = e.preferredSlots && e.preferredSlots.length > 0
               ? e.preferredSlots.map((s) => `${s.programCode}: ${s.startTime}–${s.endTime}`).join(', ')
               : 'No preference selected';

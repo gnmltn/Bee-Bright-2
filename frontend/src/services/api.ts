@@ -253,7 +253,7 @@ export interface AdminPaymentItem {
   amount: number;
   paymentType: 'full' | 'down' | 'remaining';
   status: 'pending' | 'submitted' | 'verified' | 'rejected';
-  paymentMethod?: 'gcash' | 'blockchain';
+  paymentMethod?: 'gcash' | 'maribank' | 'bdo' | 'blockchain';
   createdAt?: string;
   verifiedAt?: string;
   rejectionReason?: string;
@@ -320,8 +320,8 @@ export const enrollmentService = {
       guardianId?: { dataUrl: string; fileName: string };
     };
     preferredStartDate?: string;
-    /** Days the child is available — Mon to Sat. Empty = no preference. */
-    preferredDays?: string[];
+    /** Available Days, kept per program — Mon to Sat. Empty days[] = no preference. */
+    preferredDaysByProgram?: { programCode: string; days: string[] }[];
     /** Live-availability slot picked per enrolled program (Step 7). */
     preferredSlots?: { programCode: string; startTime: string; endTime: string }[];
     allergies?: string;
@@ -352,6 +352,13 @@ export const enrollmentService = {
     payerReference?: string;
     paymentMethod?: string;
   }) => api.post(`/enrollments/${enrollmentId}/submit-proof`, data),
+
+  /** Pay the remaining 50% balance — only succeeds once the down payment is verified. */
+  submitRemainingProof: (enrollmentId: string, data: {
+    proofDataUrl: string;
+    payerReference?: string;
+    paymentMethod?: string;
+  }) => api.post<{ success: boolean; message: string; amount?: number }>(`/enrollments/${enrollmentId}/submit-remaining-proof`, data),
 
   trackEnrollment: (enrollmentId: string, email: string) =>
     api.get('/enrollments/track', { params: { enrollmentId, email } }),
@@ -398,6 +405,25 @@ export const enrollmentService = {
   }) => api.post('/enrollments/admin/add-student', data),
   resubmitPayment: (paymentId: string, data: { proofDataUrl: string; payerReference?: string }) =>
     api.put(`/payments/${paymentId}/resubmit`, data),
+
+  /** Admin walk-in "Add Student" — pay-on-site, no proof upload; approved immediately. */
+  adminWalkInEnroll: (data: {
+    parentId: string;
+    packages: { programCode: string; packageSlug: string; displayName: string; price: number; paymentOption: 'down' }[];
+    studentFirstName: string;
+    studentLastName: string;
+    studentMiddleName?: string;
+    birthdate: string;
+    preferredStartDate?: string;
+    preferredDaysByProgram?: { programCode: string; days: string[] }[];
+    preferredSlots?: { programCode: string; startTime: string; endTime: string }[];
+    consentVersion: string;
+    consentItems: { name: string; accepted: boolean; version: string }[];
+    amountPaid: number;
+  }) => api.post<{
+    success: boolean; message: string; enrollmentId: string; enrollmentDbId: string;
+    paymentId: string; totalFee: number; amountDue: number; amountPaid: number;
+  }>('/enrollments/admin/walk-in', data),
 };
 
 export interface AdminEnrollment {
@@ -411,7 +437,11 @@ export interface AdminEnrollment {
   studentId?: string | null;
   packages?: { programCode?: string; packageSlug?: string; displayName?: string; price?: number; paymentOption?: string }[];
   preferredStartDate?: string | null;
-  /** Days the child is available — Mon to Sat values. Empty = no preference. */
+  /** Available Days per enrolled program — the authoritative field going forward.
+   * Days values: Mon to Sat. Empty days[] for a program = no preference. */
+  preferredDaysByProgram?: { programCode: string; days: string[] }[];
+  /** Legacy flat union of all programs' days — kept only for pre-migration
+   * enrollments that predate preferredDaysByProgram. */
   preferredDays?: string[];
   /** Live-availability slot picked per enrolled program (Step 7's hourly grid) — one
    * entry per programCode at most. Informational; never auto-assigns a tutor. */
@@ -1005,7 +1035,7 @@ export const auditLogService = {
 };
 
 export const announcementService = {
-  getForStudent: () => api.get<AnnouncementListResponse>('/announcements/student'),
+  getForStudent: (studentId?: string) => api.get<AnnouncementListResponse>('/announcements/student', { params: studentId ? { studentId } : {} }),
   getForTutor: () => api.get<AnnouncementListResponse>('/announcements/tutor'),
   getForAdmin: () => api.get<AnnouncementListResponse>('/announcements/admin'),
   getMyStudents: () => api.get<{ success: boolean; students: { _id: string; name: string; email?: string }[] }>('/announcements/my-students'),

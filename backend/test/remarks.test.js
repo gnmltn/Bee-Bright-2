@@ -325,14 +325,17 @@ test('createOrSaveRemark: publishing with an attachment goes to Pending Admin Re
   } finally { restore(); }
 });
 
-test('createOrSaveRemark: publishing with no attachment goes straight to Published', async () => {
+// Invoice_Display_DownPaymentBug_Receipt_RemarksPolicy.pdf F (2026-09-24) replaces
+// the attachment-triggered Option A gate entirely: every remark, with or without an
+// attachment, now goes to Pending Admin Review before publishing.
+test('createOrSaveRemark: publishing with no attachment still goes to Pending Admin Review (policy change)', async () => {
   const { restore } = stubModels();
   try {
     const res = mockRes();
     await createOrSaveRemark({ user: TUTOR_A, body: baseBody() }, res);
     assert.equal(res._status, 201, JSON.stringify(res._body));
-    assert.equal(res._body.remark.status, 'published');
-    assert.ok(res._body.remark.publishedAt);
+    assert.equal(res._body.remark.status, 'pending_admin_review');
+    assert.equal(res._body.remark.publishedAt, null);
   } finally { restore(); }
 });
 

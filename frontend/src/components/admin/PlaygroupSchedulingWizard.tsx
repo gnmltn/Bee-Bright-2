@@ -14,12 +14,15 @@ import { toast } from "sonner";
 import {
   scheduleService,
   type AdminEnrollment,
+  type AdminSchedule,
   type PlaygroupGroupOption,
   type WeeklyScheduleSubjectOption,
   type WeeklyScheduleTutorOption,
+  type PricingPackage,
 } from "@/services/api";
 import { StudentSearchSelect } from "./StudentSearchSelect";
 import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
+import { getRequiredDaysForPackage } from "@/constants/programs";
 
 // BeeBright Scheduling Spec, Section 2 — group-based Toddlers Playgroup scheduling.
 // Replaces the old slot-first panel: pick the student first, then days + a fixed time
@@ -78,6 +81,35 @@ function preferredSlotLabel(enrollment: AdminEnrollment) {
   return `${formatSlotTime(slot.startTime)} – ${formatSlotTime(slot.endTime)}`;
 }
 
+function preferredDaysLabel(enrollment: AdminEnrollment) {
+  const perProgram = enrollment.preferredDaysByProgram?.find((p) => p.programCode.toUpperCase() === PLAYGROUP_CODE);
+  const days = perProgram ? perProgram.days : enrollment.preferredDays; // legacy fallback
+  if (!days || days.length === 0) return "No preference selected";
+  return days.map((d) => d.slice(0, 3)).join("/");
+}
+
+// "Toddlers Playgroup – 16 Hours" -> "16 Hours"
+function shortPackageLabel(displayName: string): string {
+  const afterDash = displayName.split("–").pop()?.trim() || displayName;
+  return afterDash.replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+Package$/i, "").trim();
+}
+
+/** The Pricing catalog entry (has sessionCount) behind an enrollment's Playgroup package
+ * — the Enrollment's own stored package snapshot doesn't carry sessionCount. */
+function matchedPricing(enrollment: AdminEnrollment, pricing: PricingPackage[]) {
+  const pkg = (enrollment.packages || []).find((p) => (p.programCode || "").toUpperCase() === PLAYGROUP_CODE);
+  if (!pkg) return null;
+  return pricing.find((p) => p.programCode === pkg.programCode && p.packageSlug === pkg.packageSlug) || null;
+}
+
+function packageLabel(enrollment: AdminEnrollment, pricing: PricingPackage[]) {
+  const priced = matchedPricing(enrollment, pricing);
+  if (!priced) return null;
+  const requiredDays = getRequiredDaysForPackage(priced.programCode, priced.sessionCount);
+  const short = shortPackageLabel(priced.displayName);
+  return requiredDays !== null ? `${short} (${requiredDays}x per week)` : short;
+}
+
 interface StudentOption {
   key: string;
   enrollment: AdminEnrollment;
@@ -88,10 +120,25 @@ interface PlaygroupSchedulingWizardProps {
   subjects: WeeklyScheduleSubjectOption[];
   enrollments: AdminEnrollment[];
   tutors: WeeklyScheduleTutorOption[];
+  pricing: PricingPackage[];
+  schedules: AdminSchedule[];
   onCreated: () => void;
 }
 
-export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCreated }: PlaygroupSchedulingWizardProps) {
+// Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #1 — once a student already has a
+// Playgroup schedule (in the group `students[]` array, not the singular `student`
+// field used by 1-on-1), they must stop appearing as selectable here.
+function alreadyScheduled(enrollment: AdminEnrollment, schedules: AdminSchedule[]): boolean {
+  const studentUserId = enrollment.student?._id;
+  if (!studentUserId) return false;
+  return schedules.some(
+    (s) =>
+      ((s.subject?.code || "").toUpperCase() === PLAYGROUP_CODE) &&
+      ((s.students || []).some((st) => st._id === studentUserId) || s.student?._id === studentUserId)
+  );
+}
+
+export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, pricing, schedules, onCreated }: PlaygroupSchedulingWizardProps) {
   const playgroupSubject = useMemo(
     () => subjects.find((subject) => (subject.code || "").toUpperCase() === PLAYGROUP_CODE) || null,
     [subjects]
@@ -99,13 +146,13 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
 
   const studentOptions = useMemo<StudentOption[]>(() => {
     return enrollments
-      .filter((enrollment) => isEnrollmentSchedulable(enrollment) && enrollmentCoversPlaygroup(enrollment))
+      .filter((enrollment) => isEnrollmentSchedulable(enrollment) && enrollmentCoversPlaygroup(enrollment) && !alreadyScheduled(enrollment, schedules))
       .map((enrollment) => ({
         key: enrollment._id,
         enrollment,
         label: childNameFromEnrollment(enrollment),
       }));
-  }, [enrollments]);
+  }, [enrollments, schedules]);
 
   const [selectedKey, setSelectedKey] = useState("");
   // Bumped on reset to force StudentSearchSelect to remount and clear its own search text.
@@ -123,7 +170,16 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
 
   const selectedOption = studentOptions.find((option) => option.key === selectedKey) || null;
 
+  // The exact-count day lock (Admin_Popup_Package_and_DayLock_Fix.pdf) — null means no
+  // lock applies (pricing hasn't loaded yet, or the package/sessionCount isn't recognized).
+  const requiredDays = selectedOption
+    ? getRequiredDaysForPackage(PLAYGROUP_CODE, matchedPricing(selectedOption.enrollment, pricing)?.sessionCount ?? null)
+    : null;
+
+  // Reset downstream steps whenever the student changes — including any day selection
+  // made for a previous student, since it may not fit this one's lock.
   useEffect(() => {
+    setSelectedDays([]);
     setError(null);
   }, [selectedKey]);
 
@@ -157,8 +213,14 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
     };
   }, [selectedDays, selectedWindow]);
 
+  const dayCountMatchesLock = requiredDays === null || selectedDays.length === requiredDays;
+
   const toggleDay = (day: number) => {
-    setSelectedDays((prev) => (prev.includes(day) ? prev.filter((value) => value !== day) : [...prev, day].sort((a, b) => a - b)));
+    setSelectedDays((prev) => {
+      if (prev.includes(day)) return prev.filter((value) => value !== day);
+      if (requiredDays !== null && prev.length >= requiredDays) return prev; // locked at the package's sessions-per-week
+      return [...prev, day].sort((a, b) => a - b);
+    });
   };
 
   const toggleNewGroupTutor = (tutorId: string) => {
@@ -182,6 +244,7 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
     Boolean(selectedOption) &&
     Boolean(playgroupSubject) &&
     selectedDays.length > 0 &&
+    dayCountMatchesLock &&
     ((Boolean(selectedGroupId)) || (creatingNewGroup && newGroupTutorIds.length > 0));
 
   const handleGenerate = async () => {
@@ -252,7 +315,13 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
             <div className="flex items-center gap-1 text-foreground font-medium">
               <Info className="h-3.5 w-3.5" /> Enrollment details
             </div>
-            <p>Program: Toddlers Playgroup</p>
+            <p>
+              Program: Toddlers Playgroup
+              {(() => {
+                const label = packageLabel(selectedOption.enrollment, pricing);
+                return label ? ` — Package: ${label}` : "";
+              })()}
+            </p>
             <p>
               Preferred start:{" "}
               {selectedOption.enrollment.preferredStartDate
@@ -262,11 +331,9 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
                     year: "numeric",
                   })
                 : "Any date"}
-              {selectedOption.enrollment.preferredDays && selectedOption.enrollment.preferredDays.length > 0
-                ? ` • Preferred days: ${selectedOption.enrollment.preferredDays.map((d) => d.slice(0, 3)).join("/")}`
-                : ""}
             </p>
             <p>Time Slot Availability: {preferredSlotLabel(selectedOption.enrollment)}</p>
+            <p>Available Days: {preferredDaysLabel(selectedOption.enrollment)}</p>
             <p>
               Guardian: {personDisplayName(selectedOption.enrollment.parent) || "—"}
               {selectedOption.enrollment.parent?.email ? ` • ${selectedOption.enrollment.parent.email}` : ""}
@@ -278,20 +345,35 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, onCre
 
       {/* Step 2: Choose Days + fixed time window */}
       <div className="space-y-1">
-        <Label>Step 2: Days &amp; time window</Label>
+        <Label>
+          Step 2: Days &amp; time window
+          {requiredDays !== null && (
+            <span className="text-muted-foreground font-normal"> (select exactly {requiredDays} day{requiredDays === 1 ? "" : "s"})</span>
+          )}
+        </Label>
         <div className="flex flex-wrap gap-1.5">
-          {DAY_OPTIONS.map((day) => (
-            <Button
-              key={day.value}
-              type="button"
-              size="sm"
-              variant={selectedDays.includes(day.value) ? "default" : "outline"}
-              onClick={() => toggleDay(day.value)}
-            >
-              {day.label}
-            </Button>
-          ))}
+          {DAY_OPTIONS.map((day) => {
+            const selected = selectedDays.includes(day.value);
+            const disabled = !selected && requiredDays !== null && selectedDays.length >= requiredDays;
+            return (
+              <Button
+                key={day.value}
+                type="button"
+                size="sm"
+                variant={selected ? "default" : "outline"}
+                disabled={disabled}
+                onClick={() => toggleDay(day.value)}
+              >
+                {day.label}
+              </Button>
+            );
+          })}
         </div>
+        {requiredDays !== null && (
+          <p className={`text-xs ${dayCountMatchesLock ? "text-emerald-600" : "text-muted-foreground"}`}>
+            {selectedDays.length} of {requiredDays} selected — this package requires exactly {requiredDays} day{requiredDays === 1 ? "" : "s"} per week.
+          </p>
+        )}
         <Select
           value={`${selectedWindow.startTime}-${selectedWindow.endTime}`}
           onValueChange={(value) => {

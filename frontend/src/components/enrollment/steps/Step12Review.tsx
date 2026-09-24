@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { computeTotalFee, formatAge } from '../wizard-types';
+import { PROGRAM_LABELS } from '@/constants/programs';
 import { enrollmentService } from '@/services/api';
 import { EnrollmentAssessmentView } from '@/components/enrollment/EnrollmentAssessmentView';
 
@@ -13,11 +14,19 @@ interface Props {
   submitting: boolean; setSubmitting: (v: boolean) => void;
   onEnrolled: (enrollmentId: string) => void;
   toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast'];
+  /**
+   * True when the caller is an already-logged-in parent with a real persistent
+   * session (e.g. RenewProgramModal, or EnrollmentWizard's addChildMode) rather
+   * than a brand-new signup whose sessionStorage 'token' is only a short-lived,
+   * enrollment-scoped credential. Defaults to false (the original brand-new-
+   * enrollee behavior below, which clears that token after submission).
+   */
+  keepSessionToken?: boolean;
 }
 
 const METHOD_LABELS: Record<string, string> = { gcash: 'GCash', maribank: 'MariBank', bdo: 'BDO' };
 
-export default function Step12Review({ data, update, onBack, submitting, setSubmitting, onEnrolled, toast }: Props) {
+export default function Step12Review({ data, update, onBack, submitting, setSubmitting, onEnrolled, toast, keepSessionToken }: Props) {
   const amountDue = computeTotalFee(data.selectedPackages); // always 50% down
 
   const handleSubmit = async () => {
@@ -41,7 +50,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
           guardianId: data.docGuardianId ? { dataUrl: data.docGuardianId.dataUrl, fileName: data.docGuardianId.fileName } : undefined,
         },
         preferredStartDate: data.preferredStartDate || undefined,
-        preferredDays: (data.preferredDays ?? []).length > 0 ? data.preferredDays : undefined,
+        preferredDaysByProgram: data.preferredDaysByProgram.length > 0 ? data.preferredDaysByProgram : undefined,
         preferredSlots: (data.preferredSlots ?? []).length > 0
           ? data.preferredSlots.map((s) => ({ programCode: s.programCode, startTime: s.startTime, endTime: s.endTime }))
           : undefined,
@@ -82,8 +91,10 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
       }
 
       update({ submittedEnrollmentId: enrollmentId, submittedPaymentId: paymentId, submittedAmountDue: amountDue });
-      // Clear the enrollment-scoped token from sessionStorage — it was only needed for submission
-      try { window.sessionStorage.removeItem('token'); } catch { /* ignore */ }
+      if (!keepSessionToken) {
+        // Clear the enrollment-scoped token from sessionStorage — it was only needed for submission
+        try { window.sessionStorage.removeItem('token'); } catch { /* ignore */ }
+      }
       toast({ title: '🎉 Enrollment submitted!', description: `Your enrollment ID is ${enrollmentId}. Check your email for confirmation.` });
       onEnrolled(enrollmentId);
     } catch (err: unknown) {
@@ -153,7 +164,17 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
 
         <Section title="Schedule Preference">
           <Row label="Preferred Start" value={data.preferredStartDate ? new Date(data.preferredStartDate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'} />
-          <Row label="Available Days" value={(data.preferredDays ?? []).length > 0 ? data.preferredDays!.join(', ') : 'Any available weekday'} />
+          {data.preferredDaysByProgram.length > 0 ? (
+            data.preferredDaysByProgram.map((p) => (
+              <Row
+                key={p.programCode}
+                label={`Available Days — ${PROGRAM_LABELS[p.programCode] || p.programCode}`}
+                value={p.days.length > 0 ? p.days.join(', ') : 'Any available weekday'}
+              />
+            ))
+          ) : (
+            <Row label="Available Days" value="Any available weekday" />
+          )}
           {(data.preferredSlots ?? []).length > 0 && (
             <Row
               label="Preferred Slot"

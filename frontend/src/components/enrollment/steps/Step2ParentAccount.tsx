@@ -17,11 +17,18 @@ interface Props {
   onNext: () => void;
   onBack: () => void;
   toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast'];
+  /**
+   * True when the caller already has its own real session (e.g. an admin running
+   * the walk-in Add Student wizard) — skips clearing sessionStorage's shared
+   * 'token' key, which would otherwise silently log that caller out. Defaults to
+   * false (the original anonymous-parent-signup behavior below).
+   */
+  keepSessionToken?: boolean;
 }
 
 const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 
-export default function Step2ParentAccount({ data, update, onNext, onBack, toast }: Props) {
+export default function Step2ParentAccount({ data, update, onNext, onBack, toast, keepSessionToken }: Props) {
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [showConfirmPw, setShowConfirmPw] = useState(false);
@@ -77,7 +84,9 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
       });
       // Any previously-verified email/token is stale once we (re)register.
       update({ parentId: res.data.parentId, enrollmentToken: null });
-      try { window.sessionStorage.removeItem('token'); } catch { /* ignore */ }
+      if (!keepSessionToken) {
+        try { window.sessionStorage.removeItem('token'); } catch { /* ignore */ }
+      }
       toast({
         title: 'Verification code sent',
         description: `A 6-digit code was sent to ${res.data.verificationSentTo}`,

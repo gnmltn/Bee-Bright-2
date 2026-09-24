@@ -10,7 +10,7 @@ const {
   PLAYGROUP_MIN_CHILDREN,
   PLAYGROUP_MAX_CHILDREN,
 } = require('../utils/schedulingPolicy');
-const { matchesParentPreference } = require('../utils/schedulePreferences');
+const { matchesParentPreference, resolvePreferredDays } = require('../utils/schedulePreferences');
 
 // ─── Program policies ─────────────────────────────────────────────────────────
 test('program policies define one-on-one rules for ACT102 and EXP106', () => {
@@ -138,4 +138,28 @@ test('approved package enrollments match the program without selectedSubjects', 
     enrollmentCoversSubject({ packages: [{ programCode: 'TPG101' }], selectedSubjects: [] }, { _id: 'sub2', code: 'ACT102', name: 'Academic Tutorial' }),
     false
   );
+});
+
+// ─── Per-program Available Days resolution (Admin_Schedule_and_MultiProgram_Days_
+// Fixes.pdf #4b) ────────────────────────────────────────────────────────────────
+test('resolvePreferredDays: returns the matching program\'s own days out of a multi-program enrollment', () => {
+  const enrollment = {
+    preferredDaysByProgram: [
+      { programCode: 'ACT102', days: ['Monday', 'Wednesday', 'Friday'] },
+      { programCode: 'TPG101', days: ['Tuesday', 'Thursday'] },
+    ],
+    preferredDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], // legacy union
+  };
+  assert.deepEqual(resolvePreferredDays(enrollment, 'ACT102'), ['Monday', 'Wednesday', 'Friday']);
+  assert.deepEqual(resolvePreferredDays(enrollment, 'TPG101'), ['Tuesday', 'Thursday']);
+  assert.deepEqual(resolvePreferredDays(enrollment, 'act102'), ['Monday', 'Wednesday', 'Friday'], 'case-insensitive match');
+});
+
+test('resolvePreferredDays: falls back to the legacy flat field for a pre-migration enrollment or an unmatched program', () => {
+  const legacyEnrollment = { preferredDays: ['Monday', 'Wednesday'] };
+  assert.deepEqual(resolvePreferredDays(legacyEnrollment, 'ACT102'), ['Monday', 'Wednesday']);
+  assert.deepEqual(resolvePreferredDays(legacyEnrollment, undefined), ['Monday', 'Wednesday']);
+
+  const noMatch = { preferredDaysByProgram: [{ programCode: 'ACT102', days: ['Monday'] }], preferredDays: ['Tuesday'] };
+  assert.deepEqual(resolvePreferredDays(noMatch, 'EXP106'), ['Tuesday'], 'no per-program entry for EXP106 -> falls back to legacy flat field');
 });

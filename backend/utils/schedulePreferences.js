@@ -31,4 +31,24 @@ function matchesParentPreference({ preferredStartDate, preferredDays, date }) {
   return { ok: true };
 }
 
-module.exports = { matchesParentPreference };
+/**
+ * Available Days are stored per program (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf
+ * #4b) — a parent enrolled in more than one program picked a separate day pattern for
+ * each, so the flat legacy preferredDays field can't represent it correctly on its own.
+ * Resolves the slice for whichever program this scheduling operation is actually
+ * about, falling back to the legacy flat field for pre-migration enrollments.
+ * @param {{ preferredDaysByProgram?: {programCode: string, days: string[]}[], preferredDays?: string[] }} enrollment
+ * @param {string|undefined} programCode
+ * @returns {string[]|undefined}
+ */
+function resolvePreferredDays(enrollment, programCode) {
+  if (programCode && Array.isArray(enrollment?.preferredDaysByProgram)) {
+    const match = enrollment.preferredDaysByProgram.find(
+      (p) => String(p.programCode || '').toUpperCase() === String(programCode).toUpperCase()
+    );
+    if (match) return match.days;
+  }
+  return enrollment?.preferredDays;
+}
+
+module.exports = { matchesParentPreference, resolvePreferredDays };

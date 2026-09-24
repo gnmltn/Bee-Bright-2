@@ -84,8 +84,9 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     // 'seabank' renamed to 'maribank' (2026-09-22 rebrand) — existing rows are
     // migrated by scripts/migrate-seabank-to-maribank.js; 'blockchain' kept for
-    // unrelated legacy records.
-    enum: ['gcash', 'maribank', 'bdo', 'blockchain'],
+    // unrelated legacy records. 'cash' is the admin walk-in (pay-on-site) method —
+    // no proof upload, admin types the amount actually collected in person.
+    enum: ['gcash', 'maribank', 'bdo', 'blockchain', 'cash'],
     default: 'gcash'
   },
 

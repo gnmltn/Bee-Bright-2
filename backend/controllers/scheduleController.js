@@ -30,7 +30,7 @@ const {
   enrollmentCoversSubject,
   PLAYGROUP_MAX_CHILDREN,
 } = require('../utils/schedulingPolicy');
-const { matchesParentPreference } = require('../utils/schedulePreferences');
+const { matchesParentPreference, resolvePreferredDays } = require('../utils/schedulePreferences');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
 const { isRoomDoubleBooked } = require('../utils/weeklySchedulingUtils');
 
@@ -231,7 +231,7 @@ async function ensureStudentUserForEnrollment(enrollmentDoc) {
   return user;
 }
 
-async function findCompatibleOpenSlots({ subjectId, sessionType, enrollment, excludeScheduleId }) {
+async function findCompatibleOpenSlots({ subjectId, programCode, sessionType, enrollment, excludeScheduleId }) {
   const query = {
     subject: subjectId,
     date: { $gte: utcTodayStart() },
@@ -256,7 +256,7 @@ async function findCompatibleOpenSlots({ subjectId, sessionType, enrollment, exc
       }
       return matchesParentPreference({
         preferredStartDate: enrollment.preferredStartDate,
-        preferredDays: enrollment.preferredDays,
+        preferredDays: resolvePreferredDays(enrollment, programCode),
         date: row.date,
       }).ok;
     })
@@ -1412,12 +1412,13 @@ const enrollStudentInSession = async (req, res) => {
 
     const preferenceCheck = matchesParentPreference({
       preferredStartDate: enrollment.preferredStartDate,
-      preferredDays: enrollment.preferredDays,
+      preferredDays: resolvePreferredDays(enrollment, schedule.subject?.code),
       date: schedule.date,
     });
     if (!preferenceCheck.ok && !overridePreference) {
       const compatibleSlots = await findCompatibleOpenSlots({
         subjectId: schedule.subject._id,
+        programCode: schedule.subject?.code,
         sessionType,
         enrollment,
         excludeScheduleId: scheduleId,
@@ -1835,7 +1836,12 @@ const createMonthlySchedules = async (req, res) => {
     const studentUser = await ensureStudentUserForEnrollment(enrollment);
     const studentId = String(studentUser._id);
 
-    const officialEnrollmentDate = enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
+    // The parent's chosen Preferred Start Date is the real anchor for generated
+    // sessions (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #2) — the previous
+    // fallback chain here never actually included it, so generated schedules always
+    // landed in whatever week enrollment.startDate/paymentVerifiedAt/enrollmentDate
+    // happened to fall in (submission/approval time), ignoring what the parent picked.
+    const officialEnrollmentDate = enrollment.preferredStartDate || enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
     const subscriptionStart = new Date(officialEnrollmentDate);
     subscriptionStart.setUTCHours(0, 0, 0, 0);
     const subscriptionEnd = new Date(subscriptionStart);
@@ -2111,7 +2117,12 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       group = pendingNewGroup;
     }
 
-    const officialEnrollmentDate = enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
+    // The parent's chosen Preferred Start Date is the real anchor for generated
+    // sessions (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #2) — the previous
+    // fallback chain here never actually included it, so generated schedules always
+    // landed in whatever week enrollment.startDate/paymentVerifiedAt/enrollmentDate
+    // happened to fall in (submission/approval time), ignoring what the parent picked.
+    const officialEnrollmentDate = enrollment.preferredStartDate || enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
     const subscriptionStart = new Date(officialEnrollmentDate);
     subscriptionStart.setUTCHours(0, 0, 0, 0);
     const subscriptionEnd = new Date(subscriptionStart);
@@ -2370,8 +2381,8 @@ const getStudentClasses = async (req, res) => {
         { students: studentId }
       ]
     })
-      .populate('tutor', 'firstName lastName middleName email profileImage')
-      .populate('tutors', 'firstName lastName middleName email profileImage')
+      .populate('tutor', 'firstName lastName middleName email phone profileImage')
+      .populate('tutors', 'firstName lastName middleName email phone profileImage')
       .populate('student', 'firstName lastName middleName email profileImage')
       .populate('students', 'firstName lastName middleName email profileImage')
       .populate('subject', 'name code')

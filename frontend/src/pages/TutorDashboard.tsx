@@ -15,6 +15,7 @@ import {
   Pencil,
   Check,
   X,
+  Eye,
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -62,6 +63,7 @@ import {
 import { PROGRAM_CATEGORIES } from "@/constants/programs";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
 import { RemarkForm } from "@/components/tutor/RemarkForm";
+import { RemarkDetailDialog } from "@/components/tutor/RemarkDetailDialog";
 
 
 function formatTime12h(hhmm: string) {
@@ -513,6 +515,7 @@ export default function TutorDashboard() {
   const [remarkFormStudentId, setRemarkFormStudentId] = useState("");
   const [remarkFormMode, setRemarkFormMode] = useState<"create" | "edit">("create");
   const [remarkFormTarget, setRemarkFormTarget] = useState<RemarkItem | null>(null);
+  const [viewingRemark, setViewingRemark] = useState<RemarkItem | null>(null);
   const [remarkFilterStudentId, setRemarkFilterStudentId] = useState(ALL_STUDENTS_VALUE);
 
   // ─── Unique students this tutor teaches ──────────────────────────────────────
@@ -2273,6 +2276,10 @@ export default function TutorDashboard() {
                                 )}
                               </div>
                               <div className="flex gap-2">
+                                <Button type="button" size="sm" variant="outline" onClick={() => setViewingRemark(r)}>
+                                  <Eye className="h-3.5 w-3.5 mr-1.5" />
+                                  View
+                                </Button>
                                 {r.status === "draft" && (
                                   <Button type="button" size="sm" variant="outline" onClick={() => { setRemarkFormTarget(r); setRemarkFormMode("edit"); }}>
                                     Continue editing
@@ -2620,6 +2627,8 @@ export default function TutorDashboard() {
           )}
         </DialogContent>
       </Dialog>
+
+      <RemarkDetailDialog remark={viewingRemark} onClose={() => setViewingRemark(null)} />
     </DashboardLayout>
   );
 }

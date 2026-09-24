@@ -764,6 +764,10 @@ const verifyPayment = async (req, res) => {
     }
 
     let enrollment = payment.enrollment;
+    // Payment is always split 50/50 (down payment at enrollment, remaining balance
+    // later) — a 'remaining' payment must never be treated as "the whole enrollment
+    // just became fully paid and active" the way a down payment is.
+    const isRemainingBalance = payment.paymentType === 'remaining';
 
     if (verified) {
       if (!enrollment) {
@@ -781,19 +785,22 @@ const verifyPayment = async (req, res) => {
       payment.status = 'verified';
       payment.verifiedAt = new Date();
       payment.verifiedBy = adminId;
+      payment.amountPaid = payment.amountDue || payment.amount;
 
       // Update enrollment
       if (enrollment) {
-        enrollment.paymentStatus = 'paid';
+        enrollment.paymentStatus = isRemainingBalance ? 'paid' : 'partial';
         enrollment.status = 'active';
         await enrollment.save();
       }
 
-      await User.findByIdAndUpdate(payment.student, {
-        enrollmentStatus: 'active',
-        paymentStatus: 'verified',
-        isActive: true
-      });
+      if (!isRemainingBalance) {
+        await User.findByIdAndUpdate(payment.student, {
+          enrollmentStatus: 'active',
+          paymentStatus: 'verified',
+          isActive: true
+        });
+      }
 
       await payment.save();
 
@@ -818,18 +825,27 @@ const verifyPayment = async (req, res) => {
       payment.status = 'rejected';
       payment.rejectionReason = rejectionReason || 'Payment verification failed';
 
-      // Update enrollment
+      // Update enrollment — rejecting a remaining-balance payment only means the
+      // parent still owes it and can resubmit; it must never cancel an already-active
+      // enrollment or deactivate the parent's account the way a rejected down
+      // payment does.
       if (enrollment) {
-        enrollment.paymentStatus = 'failed';
-        enrollment.status = 'cancelled';
+        if (isRemainingBalance) {
+          enrollment.paymentStatus = 'partial';
+        } else {
+          enrollment.paymentStatus = 'failed';
+          enrollment.status = 'cancelled';
+        }
         await enrollment.save();
       }
 
-      await User.findByIdAndUpdate(payment.student, {
-        enrollmentStatus: 'payment_rejected',
-        paymentStatus: 'rejected',
-        isActive: false
-      });
+      if (!isRemainingBalance) {
+        await User.findByIdAndUpdate(payment.student, {
+          enrollmentStatus: 'payment_rejected',
+          paymentStatus: 'rejected',
+          isActive: false
+        });
+      }
 
       await payment.save();
 

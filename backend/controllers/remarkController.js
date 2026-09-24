@@ -229,12 +229,16 @@ const createOrSaveRemark = async (req, res) => {
       });
     }
 
-    const status = attachment ? 'pending_admin_review' : 'published';
+    // Every remark — with or without an attachment — goes to admin review before
+    // publishing, so admin can check the wording is appropriate. Invoice_Display_
+    // DownPaymentBug_Receipt_RemarksPolicy.pdf F replaces the earlier attachment-
+    // triggered gate (Spec v3.1 Option A) entirely; this is not additive to it.
+    const status = 'pending_admin_review';
     const remark = await Remark.create({
       ...doc,
       attachment: attachment || undefined,
       status,
-      publishedAt: status === 'published' ? new Date() : null,
+      publishedAt: null,
     });
 
     logAudit({
@@ -243,13 +247,13 @@ const createOrSaveRemark = async (req, res) => {
       action: 'Create Remark',
       module: 'Academic',
       status: 'SUCCESS',
-      description: status === 'published' ? 'Tutor published a remark' : 'Tutor submitted a remark for admin review',
+      description: 'Tutor submitted a remark for admin review',
       metadata: { remarkId: remark._id, studentId, status },
     }).catch(() => {});
 
     res.status(201).json({
       success: true,
-      message: status === 'published' ? 'Remark published.' : 'Remark submitted for admin review (includes an attachment).',
+      message: 'Remark submitted for admin review.',
       remark: await populateRemark(remark._id),
     });
   } catch (err) {
@@ -331,8 +335,10 @@ const updateDraftRemark = async (req, res) => {
     }
 
     remark.attachment = attachment || undefined;
-    remark.status = attachment ? 'pending_admin_review' : 'published';
-    remark.publishedAt = remark.status === 'published' ? new Date() : null;
+    // Every remark goes to admin review before publishing — see the identical
+    // note in createOrSaveRemark.
+    remark.status = 'pending_admin_review';
+    remark.publishedAt = null;
     await remark.save();
 
     logAudit({
@@ -341,13 +347,13 @@ const updateDraftRemark = async (req, res) => {
       action: 'Publish Remark',
       module: 'Academic',
       status: 'SUCCESS',
-      description: remark.status === 'published' ? 'Tutor published a draft remark' : 'Tutor submitted a draft remark for admin review',
+      description: 'Tutor submitted a draft remark for admin review',
       metadata: { remarkId: remark._id, studentId: remark.student, status: remark.status },
     }).catch(() => {});
 
     res.status(200).json({
       success: true,
-      message: remark.status === 'published' ? 'Remark published.' : 'Remark submitted for admin review (includes an attachment).',
+      message: 'Remark submitted for admin review.',
       remark: await populateRemark(remark._id),
     });
   } catch (err) {

@@ -3,6 +3,12 @@
  * Route: /enroll
  * Assessment is inserted after program selection only when the selected programs
  * have an active assessment template in the database (Academic Tutorial K / Grade 1).
+ *
+ * The "Renew / Add Program" flow for an EXISTING child (adding another program to a
+ * child already on file) does NOT use this page — per NewProgram_Modal_AgeCheck_
+ * PaymentBug_ContactTutor.pdf Section A, it renders as an in-dashboard modal instead
+ * (see components/enrollment/RenewProgramModal.tsx, launched from StudentDashboard.tsx's
+ * "My Child" tab). This page is only ever a brand-new child's full enrollment.
  */
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -294,7 +300,7 @@ export default function EnrollmentWizard() {
   }, [clearDraft, navigate]);
 
   const progressPct = Math.round(((step - 1) / Math.max(1, steps.length - 1)) * 100);
-  const stepProps = { data, update, onNext: goNext, onBack: goPrev, submitting, setSubmitting, onEnrolled, toast };
+  const stepProps = { data, update, onNext: goNext, onBack: goPrev, submitting, setSubmitting, onEnrolled, toast, keepSessionToken: addChildMode };
 
   return (
     <Layout>

@@ -292,3 +292,46 @@ test('createMonthlySchedules: enrollmentId resolves the enrollment and lazily cr
     assert.equal(insertedBatches[0][0].student, 'student-new-1');
   } finally { restore(); }
 });
+
+// Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #2 — generated sessions must anchor to
+// the parent's Preferred Start Date, not to enrollment.startDate/createdAt (submission
+// time). A Monday 5 weeks out, well past both "today" and startDate/createdAt (both
+// "now" in this fixture) — the bug would have generated the earliest session near today
+// instead of near preferredStartDate.
+test('createMonthlySchedules: anchors generated sessions to the enrollment\'s Preferred Start Date, not submission/creation time', async () => {
+  const now = new Date();
+  const preferredStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 35));
+  // Walk forward to the next Monday on/after preferredStartDate (daySlots below asks for Monday).
+  while (preferredStartDate.getUTCDay() !== MONDAY) {
+    preferredStartDate.setUTCDate(preferredStartDate.getUTCDate() + 1);
+  }
+
+  const enrollment = {
+    _id: 'enr-preferred-date',
+    student: 'student-1',
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    startDate: null,
+    paymentVerifiedAt: null,
+    preferredStartDate,
+    packages: [{ programCode: 'ACT102' }],
+    selectedSubjects: [],
+  };
+  const { restore, insertedBatches } = stubModels({ enrollment });
+  try {
+    const res = mockRes();
+    await createMonthlySchedules(baseReq(), res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.ok(insertedBatches[0].length > 0, 'expected at least one generated session');
+
+    const earliestDate = insertedBatches[0]
+      .map((s) => new Date(s.date))
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    assert.equal(
+      earliestDate.getTime(),
+      preferredStartDate.getTime(),
+      `earliest generated session must land on the parent's Preferred Start Date (${preferredStartDate.toISOString()}), not near "today"/createdAt (got ${earliestDate.toISOString()})`
+    );
+  } finally { restore(); }
+});

@@ -6,11 +6,18 @@ import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { parentAuthService } from '@/services/api';
 
-interface Props { data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void; toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast']; }
+interface Props {
+  data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void;
+  toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast'];
+  /** See Step2ParentAccount's identical prop — skips overwriting the shared
+   * sessionStorage 'token' key with the newly-verified parent's token, so an
+   * already-authenticated caller (e.g. admin walk-in) keeps its own session. */
+  keepSessionToken?: boolean;
+}
 
 const RESEND_COOLDOWN = 120; // seconds
 
-export default function Step3OtpVerify({ data, update, onNext, onBack, toast }: Props) {
+export default function Step3OtpVerify({ data, update, onNext, onBack, toast, keepSessionToken }: Props) {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
@@ -37,10 +44,12 @@ export default function Step3OtpVerify({ data, update, onNext, onBack, toast }: 
       const res = await parentAuthService.verifyOtp(data.parentEmail.trim().toLowerCase(), code.trim());
       const token = res.data.token;
       update({ enrollmentToken: token });
-      // Write the enrollment-scoped JWT to sessionStorage so the axios
-      // interceptor automatically sends it as Authorization: Bearer <token>
-      // when the wizard submits. It will be cleared after submission.
-      try { window.sessionStorage.setItem('token', token); } catch { /* ignore */ }
+      if (!keepSessionToken) {
+        // Write the enrollment-scoped JWT to sessionStorage so the axios
+        // interceptor automatically sends it as Authorization: Bearer <token>
+        // when the wizard submits. It will be cleared after submission.
+        try { window.sessionStorage.setItem('token', token); } catch { /* ignore */ }
+      }
       toast({ title: 'Email verified!', description: 'Your email has been verified. Continue to enrollment.' });
       onNext();
     } catch (err: unknown) {

@@ -281,15 +281,27 @@ const submitEnrollment = async (req, res) => {
     // ── Preferred schedule ──
     const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
 
-    // Validate and sanitise preferredDays — only Mon-Sat values accepted
+    // Available Days, kept per program (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf
+    // #4b) — a parent enrolled in more than one program picks a separate day pattern
+    // for each. Validate + sanitise: only Mon-Sat values, per program.
     const VALID_PREFERRED_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const preferredDays = Array.isArray(body.preferredDays)
-      ? body.preferredDays
-          .map((d) => String(d || '').trim())
-          .filter((d) => VALID_PREFERRED_DAYS.includes(d))
-          // Remove duplicates while preserving order
-          .filter((d, i, arr) => arr.indexOf(d) === i)
+    const preferredDaysByProgram = Array.isArray(body.preferredDaysByProgram)
+      ? body.preferredDaysByProgram
+          .filter((p) => p && typeof p.programCode === 'string')
+          .map((p) => ({
+            programCode: p.programCode.toUpperCase(),
+            days: Array.isArray(p.days)
+              ? p.days
+                  .map((d) => String(d || '').trim())
+                  .filter((d) => VALID_PREFERRED_DAYS.includes(d))
+                  .filter((d, i, arr) => arr.indexOf(d) === i)
+              : [],
+          }))
       : [];
+    // Legacy flat field, kept in sync as the union of every program's days — only for
+    // any old consumer that hasn't been updated to read preferredDaysByProgram.
+    const preferredDays = [...new Set(preferredDaysByProgram.flatMap((p) => p.days))]
+      .sort((a, b) => VALID_PREFERRED_DAYS.indexOf(a) - VALID_PREFERRED_DAYS.indexOf(b));
 
     // Informational only — Step 7's live-availability slot pick(s), one per
     // enrolled program. Never trusted for auto-assignment.
@@ -334,6 +346,7 @@ const submitEnrollment = async (req, res) => {
       packages: canonicalPackages,
       preferredStartDate,
       preferredDays,
+      preferredDaysByProgram,
       preferredSlots,
       healthInfo,
       requirementDocuments,
@@ -411,6 +424,191 @@ const submitEnrollment = async (req, res) => {
   }
 };
 
+// ── Admin walk-in Add Student  POST /api/enrollments/admin/walk-in ─────────
+// Payments_FullyPaid_NewProgramRefinements_AdminWalkIn.pdf Section E. Mirrors
+// submitEnrollment's package/age validation, but is admin-authenticated end to
+// end (the parent account created in step 1 is only ever referenced by id here,
+// never used to authorize the request) and settles the down payment immediately
+// as 'verified' — the admin physically collected it, so there is no proof-upload
+// or review-queue step, and the enrollment is approved right away.
+const adminWalkInEnroll = async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    const parentId = String(body.parentId || '');
+    if (!parentId) return res.status(400).json({ success: false, message: 'parentId is required (create the parent account first).' });
+    const parentUser = await User.findOne({ _id: parentId, role: { $in: ['parent', 'student'] } });
+    if (!parentUser) return res.status(404).json({ success: false, message: 'Parent account not found.' });
+
+    // ── Validate packages (same resolution as the parent-facing wizard) ──
+    const packages = Array.isArray(body.packages) ? body.packages : [];
+    if (packages.length === 0)
+      return res.status(400).json({ success: false, message: 'At least one program package must be selected.' });
+
+    const packageKeys = packages.map((item) => `${item.programCode}:${item.packageSlug}`);
+    const pricedPackages = await Pricing.find({
+      active: true,
+      $expr: { $in: [{ $concat: ['$programCode', ':', '$packageSlug'] }, packageKeys] },
+    }).lean();
+    const pricedByKey = new Map(pricedPackages.map((item) => [`${item.programCode}:${item.packageSlug}`, item]));
+    const canonicalPackages = packages.map((item) => {
+      const priced = pricedByKey.get(`${item.programCode}:${item.packageSlug}`);
+      if (!priced) throw Object.assign(new Error('One or more selected packages are no longer available.'), { statusCode: 400 });
+      return {
+        programCode: priced.programCode,
+        packageSlug: priced.packageSlug,
+        displayName: priced.displayName,
+        price: priced.priceFull,
+        paymentOption: 'down',
+      };
+    });
+
+    // ── Age gate — recomputed server-side, never trust the UI ──
+    const ageCheck = validateEnrollmentAge(body.birthdate);
+    if (!ageCheck.valid) return res.status(400).json({ success: false, message: ageCheck.reason });
+    const childAge = ageCheck.ageYears;
+    for (const item of canonicalPackages) {
+      const eligibility = checkProgramEligibility(item.programCode, childAge);
+      if (!eligibility.eligible) throw Object.assign(new Error(eligibility.reason), { statusCode: 400 });
+    }
+
+    // ── Student snapshot ──
+    const rawFirst = String(body.studentFirstName || '').trim();
+    const rawMiddle = String(body.studentMiddleName || '').trim();
+    const rawLast = String(body.studentLastName || '').trim();
+    for (const [val, label, required] of [
+      [rawFirst, 'Student first name', true],
+      [rawMiddle, 'Student middle name', false],
+      [rawLast, 'Student last name', true],
+    ]) {
+      const err = validateFullName(val, label, { minParts: 1, required });
+      if (err) return res.status(400).json({ success: false, message: err });
+    }
+    const snapshot = {
+      firstName: toTitleCase(rawFirst),
+      lastName: toTitleCase(rawLast),
+      middleName: rawMiddle ? toTitleCase(rawMiddle) : '',
+      birthdate: new Date(body.birthdate),
+      computedAge: childAge,
+    };
+
+    // ── Preferred schedule (optional at a walk-in — admin may not always ask) ──
+    const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
+    const VALID_PREFERRED_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const preferredDaysByProgram = Array.isArray(body.preferredDaysByProgram)
+      ? body.preferredDaysByProgram
+          .filter((p) => p && typeof p.programCode === 'string')
+          .map((p) => ({
+            programCode: p.programCode.toUpperCase(),
+            days: Array.isArray(p.days)
+              ? p.days.map((d) => String(d || '').trim()).filter((d) => VALID_PREFERRED_DAYS.includes(d)).filter((d, i, arr) => arr.indexOf(d) === i)
+              : [],
+          }))
+      : [];
+    const preferredDays = [...new Set(preferredDaysByProgram.flatMap((p) => p.days))]
+      .sort((a, b) => VALID_PREFERRED_DAYS.indexOf(a) - VALID_PREFERRED_DAYS.indexOf(b));
+    const preferredSlots = Array.isArray(body.preferredSlots)
+      ? body.preferredSlots
+          .filter((s) => s && typeof s.programCode === 'string' && typeof s.startTime === 'string' && typeof s.endTime === 'string')
+          .map((s) => ({ programCode: s.programCode.toUpperCase(), startTime: s.startTime, endTime: s.endTime }))
+      : [];
+
+    // ── Consent ──
+    const consentVersion = String(body.consentVersion || '1.0');
+    const consentItems = Array.isArray(body.consentItems) ? body.consentItems : [];
+    const allConsented = consentItems.length > 0 && consentItems.every((c) => c.accepted === true);
+    if (!allConsented)
+      return res.status(400).json({ success: false, message: 'All participation agreement items must be accepted.' });
+
+    // ── Amount actually collected on-site — admin-typed, based on the selected
+    // program(s); the standard 50%-down figure is what the UI defaults to, but
+    // the admin can adjust it to match what was genuinely handed over. ──
+    const { totalFee, amountDue } = computeAmounts(canonicalPackages, 'down');
+    const amountPaid = Number(body.amountPaid);
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0)
+      return res.status(400).json({ success: false, message: 'Enter the amount actually collected.' });
+
+    const enrollmentId = await generateEnrollmentId();
+    const now = new Date();
+
+    const enrollment = new Enrollment({
+      enrollmentId,
+      parent: parentUser._id,
+      studentSnapshot: snapshot,
+      packages: canonicalPackages,
+      preferredStartDate,
+      preferredDays,
+      preferredDaysByProgram,
+      preferredSlots,
+      paymentOption: 'down',
+      totalFee,
+      consentVersion,
+      consentAcceptedAt: now,
+      consentItems,
+      status: 'approved',
+      // Fully settled if the admin collected the whole package price on-site;
+      // otherwise this is the standard "50% down, remaining still owed" state —
+      // never claim 'paid' off less than the full amount.
+      paymentStatus: amountPaid >= totalFee ? 'paid' : 'partial',
+      approvedBy: req.user._id,
+      approvedAt: now,
+    });
+    pushStatusHistory(enrollment, 'submitted', req.user._id, 'admin', 'Walk-in enrollment (admin-assisted)');
+    pushStatusHistory(enrollment, 'approved', req.user._id, 'admin', 'Walk-in enrollment — payment collected on-site');
+    await enrollment.save();
+
+    const payment = new Payment({
+      parent: parentUser._id,
+      enrollment: enrollment._id,
+      amount: amountPaid,
+      amountDue,
+      amountPaid,
+      paymentType: amountPaid >= totalFee ? 'full' : 'down',
+      paymentMethod: 'cash',
+      status: 'verified',
+      verifiedAt: now,
+      verifiedBy: req.user._id,
+      notes: 'Walk-in — collected on-site by admin.',
+    });
+    await payment.save();
+
+    await User.findByIdAndUpdate(parentUser._id, {
+      $set: { isActive: true, enrollmentStatus: 'active', enrollmentDraft: false },
+      $unset: { draftExpiresAt: 1 },
+    });
+
+    const parentFull = await User.findById(parentUser._id).select('email firstName lastName').lean();
+    if (parentFull?.email) {
+      sendEnrollmentApprovedEmail(parentFull.email, {
+        parentName: `${parentFull.firstName} ${parentFull.lastName}`,
+        studentName: `${snapshot.firstName} ${snapshot.lastName}`,
+        enrollmentId: enrollment.enrollmentId,
+        studentId: enrollment.studentId,
+      }).catch(() => {});
+    }
+
+    logAudit({
+      req, userId: req.user._id, action: 'Admin Walk-In Enrollment', module: 'Enrollment',
+      description: `Walk-in enrollment ${enrollmentId} for ${snapshot.firstName} ${snapshot.lastName} — ₱${amountPaid} collected on-site`,
+      status: 'SUCCESS', metadata: { enrollmentId, amountPaid, totalFee },
+    }).catch(() => {});
+
+    return res.status(201).json({
+      success: true,
+      message: 'Walk-in enrollment created.',
+      enrollmentId,
+      enrollmentDbId: String(enrollment._id),
+      paymentId: String(payment._id),
+      totalFee,
+      amountDue,
+      amountPaid,
+    });
+  } catch (err) {
+    console.error('adminWalkInEnroll error:', err);
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Walk-in enrollment failed.' });
+  }
+};
+
 // ── Payment instruction helper ──────────────────────────────────────────
 async function getPaymentInstructionsForMethod(method) {
   const DEFAULTS = {
@@ -432,8 +630,36 @@ const submitPaymentProof = async (req, res) => {
     const enrollment = await Enrollment.findOne({ enrollmentId });
     if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
 
-    const payment = await Payment.findOne({ enrollment: enrollment._id }).sort({ createdAt: -1 });
-    if (!payment) return res.status(404).json({ success: false, message: 'Payment record not found.' });
+    // Explicitly excludes 'remaining' — this is the DOWN payment's proof-submission
+    // path only, kept separate from submitRemainingPaymentProof below even if a
+    // 'remaining' Payment already exists and would otherwise be the most recent one.
+    let payment = await Payment.findOne({ enrollment: enrollment._id, paymentType: { $ne: 'remaining' } }).sort({ createdAt: -1 });
+    if (!payment) {
+      // No down-payment record exists for this enrollment at all. Two real cases:
+      if (enrollment.paymentStatus === 'paid') {
+        // Already fully settled (e.g. an enrollment approved before the Payment
+        // model was wired up everywhere) — nothing to attach this proof to, and
+        // the generic "Payment record not found" message wrongly implies the
+        // parent did something wrong. Say what's actually true instead.
+        return res.status(409).json({ success: false, alreadyPaid: true,
+          message: 'This enrollment is already fully paid — no payment proof is needed.' });
+      }
+      // A genuinely missing down-payment record for an otherwise-normal enrollment
+      // (e.g. a gap from an older code path) permanently blocks the parent from
+      // ever paying. Self-heal by creating the down-payment record now, from the
+      // same 50%-down policy every enrollment is charged under.
+      const { amountDue } = computeAmounts(enrollment.packages || [], 'down');
+      payment = new Payment({
+        parent: enrollment.parent,
+        enrollment: enrollment._id,
+        amount: amountDue,
+        amountDue,
+        paymentType: 'down',
+        paymentMethod: VALID_PAYMENT_METHODS.includes(String(paymentMethod || '').toLowerCase()) ? paymentMethod.toLowerCase() : 'gcash',
+        status: 'pending',
+      });
+      await payment.save();
+    }
 
     const proofUrl = saveProofFromDataUrl(proofDataUrl, enrollment._id);
     if (!proofUrl) return res.status(400).json({ success: false, message: 'Payment proof is required.' });
@@ -470,6 +696,82 @@ const submitPaymentProof = async (req, res) => {
   }
 };
 
+// ── Pay the remaining 50% balance ────────────────────────────────────────
+// POST /api/enrollments/:enrollmentId/submit-remaining-proof
+// Only reachable once the down payment is actually verified — that's the parent's
+// signal the remaining balance is even owed yet. Creates its own Payment document
+// (paymentType: 'remaining') rather than reusing the down payment's, so both stay
+// independently auditable; a prior rejected remaining-payment attempt is reused
+// rather than creating a new one each resubmission.
+const submitRemainingPaymentProof = async (req, res) => {
+  try {
+    const { enrollmentId } = req.params;
+    const { proofDataUrl, payerReference, paymentMethod } = req.body || {};
+
+    const enrollment = await Enrollment.findOne({ enrollmentId });
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    const downPayment = await Payment.findOne({ enrollment: enrollment._id, paymentType: { $ne: 'remaining' } }).sort({ createdAt: -1 });
+    if (!downPayment || downPayment.status !== 'verified') {
+      return res.status(400).json({ success: false, message: 'The down payment must be verified before the remaining balance can be paid.' });
+    }
+
+    const amountPaidSoFar = downPayment.amountPaid ?? downPayment.amountDue ?? downPayment.amount ?? 0;
+    const remainingAmount = Math.max(0, Math.round((enrollment.totalFee || 0) - amountPaidSoFar));
+    if (remainingAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'No remaining balance is due.' });
+    }
+
+    let remainingPayment = await Payment.findOne({ enrollment: enrollment._id, paymentType: 'remaining' }).sort({ createdAt: -1 });
+    if (!remainingPayment || remainingPayment.status === 'verified') {
+      remainingPayment = new Payment({
+        parent: enrollment.parent,
+        enrollment: enrollment._id,
+        amount: remainingAmount,
+        amountDue: remainingAmount,
+        paymentType: 'remaining',
+        paymentMethod: 'gcash',
+        status: 'pending',
+      });
+    }
+
+    const proofUrl = saveProofFromDataUrl(proofDataUrl, enrollment._id);
+    if (!proofUrl) return res.status(400).json({ success: false, message: 'Payment proof is required.' });
+
+    remainingPayment.proofUrl = proofUrl;
+    remainingPayment.payerReference = String(payerReference || '').trim() || null;
+    if (paymentMethod && VALID_PAYMENT_METHODS.includes(paymentMethod)) remainingPayment.paymentMethod = paymentMethod;
+    remainingPayment.status = 'submitted';
+    remainingPayment.submittedAt = new Date();
+    remainingPayment.rejectionReason = null;
+    remainingPayment.resubmissionCount = remainingPayment.isNew ? 0 : (remainingPayment.resubmissionCount || 0) + 1;
+    await remainingPayment.save();
+
+    // The enrollment itself stays 'active'/'approved' throughout — only the
+    // payment-tracking field reflects "remaining balance submitted, awaiting review."
+    enrollment.paymentStatus = 'pending_verification';
+    await enrollment.save();
+
+    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    if (parentUser?.email) {
+      const { sendEmail } = require('../utils/emailService');
+      sendEmail({
+        to: parentUser.email,
+        subject: `Bee Bright — Remaining Balance Proof Received (${enrollment.enrollmentId})`,
+        html: `<p>Hi ${parentUser.firstName}, we received your proof of payment for the remaining balance on enrollment ${enrollment.enrollmentId}. Our team will verify it within 1–2 business days.</p>`,
+      }, 'remaining proof received notification').catch(() => {});
+    }
+
+    logAudit({ req, action: 'Submit Remaining Payment Proof', module: 'Payment',
+      description: `Remaining-balance proof submitted for ${enrollmentId}`, status: 'SUCCESS',
+      metadata: { enrollmentId, paymentId: remainingPayment._id, amount: remainingAmount } }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Payment proof submitted. We will verify it shortly.', amount: remainingAmount });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Failed to submit proof.' });
+  }
+};
+
 // ── Parent: get my enrollments  GET /api/enrollments/my-enrollments ───────
 const getMyEnrollments = async (req, res) => {
   try {
@@ -484,7 +786,7 @@ const getMyEnrollments = async (req, res) => {
       enrollments.map(async (e) => {
         const payments = await Payment.find({ enrollment: e._id })
           .sort({ createdAt: -1 })
-          .select('status paymentMethod amountDue amountPaid proofUrl submittedAt verifiedAt referenceNumber resubmissionCount')
+          .select('status paymentType amount paymentMethod amountDue amountPaid proofUrl submittedAt verifiedAt rejectionReason referenceNumber resubmissionCount')
           .lean();
         return { ...e, payments };
       })
@@ -676,22 +978,40 @@ const adminVerifyPayment = async (req, res) => {
       : await Payment.findOne({ enrollment: enrollment._id }).sort({ createdAt: -1 });
     if (!payment) return res.status(404).json({ success: false, message: 'Payment not found.' });
 
+    // Payment is always split 50/50 (down payment at enrollment, remaining balance
+    // later) — a 'remaining' payment is verified/rejected against an enrollment that's
+    // already approved and active, so it must never re-run the down-payment-era status
+    // transitions (pending_approval / submitted) or flip the enrollment back to pending.
+    const isRemainingBalance = payment.paymentType === 'remaining';
+
     if (verified) {
       payment.status = 'verified';
       payment.verifiedAt = new Date();
       payment.verifiedBy = req.user._id;
       payment.amountPaid = payment.amountDue || payment.amount;
       payment.notes = note || null;
-      enrollment.paymentStatus = 'verified';
-      enrollment.verifiedBy = req.user._id;
-      enrollment.paymentVerifiedAt = new Date();
-      pushStatusHistory(enrollment, 'pending_approval', req.user._id, req.user.role, note || 'Payment verified');
+
+      if (isRemainingBalance) {
+        enrollment.paymentStatus = 'paid';
+      } else {
+        enrollment.paymentStatus = 'partial';
+        enrollment.verifiedBy = req.user._id;
+        enrollment.paymentVerifiedAt = new Date();
+        pushStatusHistory(enrollment, 'pending_approval', req.user._id, req.user.role, note || 'Payment verified');
+      }
     } else {
       payment.status = 'rejected';
       payment.rejectionReason = note || 'Payment rejected by admin';
-      enrollment.paymentStatus = 'pending';
-      enrollment.allowResubmission = true;
-      pushStatusHistory(enrollment, 'submitted', req.user._id, req.user.role, `Payment rejected: ${note || ''}`);
+
+      if (isRemainingBalance) {
+        // The down payment already went through — this only reverts to "still owes
+        // the remaining balance," never back to the whole enrollment being unpaid.
+        enrollment.paymentStatus = 'partial';
+      } else {
+        enrollment.paymentStatus = 'pending';
+        enrollment.allowResubmission = true;
+        pushStatusHistory(enrollment, 'submitted', req.user._id, req.user.role, `Payment rejected: ${note || ''}`);
+      }
     }
 
     await Promise.all([payment.save(), enrollment.save()]);
@@ -744,7 +1064,10 @@ const adminApproveEnrollment = async (req, res) => {
     enrollment.studentId = studentId;
     enrollment.approvedBy = req.user._id;
     enrollment.approvedAt = now;
-    enrollment.paymentStatus = 'paid';
+    // Approval only ever happens once the DOWN payment (50%) is verified — the
+    // remaining 50% is still owed at this point, so this is not "fully paid" yet.
+    // See Parent_Payments_50Percent_Display_and_Payment_Methods.pdf.
+    enrollment.paymentStatus = 'partial';
     pushStatusHistory(enrollment, 'approved', req.user._id, req.user.role, 'Enrollment approved');
     await enrollment.save();
 
@@ -967,6 +1290,7 @@ module.exports = {
   verifyEnrollmentEmailCode,
   submitEnrollment,
   submitPaymentProof,
+  submitRemainingPaymentProof,
   getMyEnrollments,
   trackEnrollment,
   getEnrollmentAvailability,
@@ -981,5 +1305,6 @@ module.exports = {
   updateEnrollmentStatus,
   verifyPayment,
   adminAddStudent,
+  adminWalkInEnroll,
   getPaymentInstructions,
 };

@@ -19,9 +19,11 @@ function personName(person?: { firstName?: string; middleName?: string; lastName
   return [person.firstName, person.middleName, person.lastName].filter(Boolean).join(" ");
 }
 
-// BeeBright Student Remarks Spec v2, Section D — admin approval gate for any remark
-// that includes an attachment. Self-contained (not grown inline into AdminDashboard.tsx),
-// mounted from a thin tab there, matching the OneOnOneSchedulingWizard.tsx precedent.
+// Every remark — with or without an attachment — goes through this admin approval
+// gate before publishing (Invoice_Display_DownPaymentBug_Receipt_RemarksPolicy.pdf F,
+// 2026-09-24, replacing the earlier attachment-only gate). Self-contained (not grown
+// inline into AdminDashboard.tsx), mounted from a thin tab there, matching the
+// OneOnOneSchedulingWizard.tsx precedent.
 export function RemarksReviewQueue() {
   const [remarks, setRemarks] = useState<RemarkItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -118,7 +120,7 @@ export function RemarksReviewQueue() {
       <div className="flex items-center justify-between">
         <div>
           <h4 className="font-semibold text-foreground">Pending Admin Review</h4>
-          <p className="text-xs text-muted-foreground">Remarks with an attachment must be approved before a parent can see them.</p>
+          <p className="text-xs text-muted-foreground">Every remark must be approved before a parent can see it.</p>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}

@@ -4,6 +4,7 @@ const User = require('../models/User');
 const Schedule = require('../models/Schedule');
 const { sendAnnouncementEmail } = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
+const { parentOwnsStudent } = require('../utils/parentChildAccess');
 
 const TUTOR_CATEGORIES = ['sick_leave', 'exam', 'quiz', 'materials', 'reschedule', 'reminder', 'general'];
 const ADMIN_CATEGORIES = ['suspension', 'maintenance', 'holiday', 'general'];
@@ -136,17 +137,32 @@ const createAnnouncement = async (req, res) => {
 // @access  Private (student)
 const getForStudent = async (req, res) => {
   try {
-    const studentId = req.user.id;
-    const studentObjId = mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : null;
-    if (!studentObjId) {
-      return res.status(400).json({ success: false, message: 'Invalid student id' });
+    // A parent account's own id never matches Announcement.targetStudentIds (those
+    // are keyed by the CHILD's own studentUserId) — a parent must pass ?studentId=
+    // for the currently-selected child so student-specific announcements resolve
+    // correctly (ChildSelector_AddChildModal_TutorRemarksView.pdf A). No studentId
+    // yet (e.g. that child has no linked User until their first class) still shows
+    // targetType:'all' announcements, same "nothing else yet" pattern used elsewhere.
+    let studentObjId = null;
+    if (req.user.role === 'parent') {
+      const queryStudentId = String(req.query.studentId || '');
+      if (queryStudentId) {
+        if (!mongoose.Types.ObjectId.isValid(queryStudentId) || !(await parentOwnsStudent(req.user._id, queryStudentId))) {
+          return res.status(403).json({ success: false, message: 'Select one of your own children.' });
+        }
+        studentObjId = new mongoose.Types.ObjectId(queryStudentId);
+      }
+    } else {
+      studentObjId = mongoose.Types.ObjectId.isValid(req.user.id) ? new mongoose.Types.ObjectId(req.user.id) : null;
+      if (!studentObjId) {
+        return res.status(400).json({ success: false, message: 'Invalid student id' });
+      }
     }
+    const orConditions = [{ targetType: 'all' }];
+    if (studentObjId) orConditions.push({ targetStudentIds: studentObjId });
     const list = await Announcement.find({
       status: 'approved',
-      $or: [
-        { targetType: 'all' },
-        { targetStudentIds: studentObjId }
-      ]
+      $or: orConditions
     })
       .sort({ approvedAt: -1, createdAt: -1 })
       .populate('author', 'firstName lastName')

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { CalendarDays, Loader2, CheckCircle2 } from 'lucide-react';
+import { CalendarDays, Loader2, CheckCircle2, ChevronLeft, Pencil } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { enrollmentService } from '@/services/api';
@@ -36,45 +37,36 @@ const DAY_SHORT: Record<string, string> = {
   Saturday: 'Sat',
 };
 
+function daysForProgram(data: WizardData, programCode: string): string[] {
+  return data.preferredDaysByProgram.find((p) => p.programCode === programCode)?.days ?? [];
+}
+
 export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Which program's Available Days section is the active/editable one, when a parent
+  // enrolled in more than one program — each gets its own separate section, revealed
+  // in sequence (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #4b), not all at once.
+  const [activeDayStepIndex, setActiveDayStepIndex] = useState(0);
 
   const today = new Date().toISOString().split('T')[0];
   const maxDate = new Date();
   maxDate.setMonth(maxDate.getMonth() + 6);
   const maxDateStr = maxDate.toISOString().split('T')[0];
 
-  const toggleDay = (day: string) => {
-    const current = data.preferredDays ?? [];
-    const next = current.includes(day)
-      ? current.filter((d) => d !== day)
-      : [...current, day];
-    update({ preferredDays: next });
-    setErrors((prev) => ({ ...prev, preferredStartDate: '', preferredDays: '' }));
+  const setDaysForProgram = (programCode: string, days: string[]) => {
+    const rest = data.preferredDaysByProgram.filter((p) => p.programCode !== programCode);
+    update({ preferredDaysByProgram: [...rest, { programCode, days }] });
+    setErrors((prev) => ({ ...prev, [`days:${programCode}`]: '' }));
   };
 
-  const selectedDays = data.preferredDays ?? [];
-
-  // ── Available Days lock (Toddlers Playgroup / Academic Tutorial only) ──────
-  // Not Examination Preparation — that program keeps its free up-to-6-days pick.
-  // A parent may select packages from more than one locked program at once; the
-  // shared Available Days list then has to satisfy all of them, so the larger
-  // required count wins (it's a superset of the smaller program's need).
-  const requiredDaysCounts = data.selectedPackages
-    .map((p) => getRequiredDaysForPackage(p.programCode, p.sessionCount))
-    .filter((n): n is number => n !== null);
-  const requiredDays = requiredDaysCounts.length > 0 ? Math.max(...requiredDaysCounts) : null;
-
-  const validate = (): boolean => {
-    const errs: Record<string, string> = {};
-    if (!data.preferredStartDate) {
-      errs.preferredStartDate = 'Please choose a preferred start date.';
+  const toggleDayForProgram = (programCode: string, requiredDays: number | null, day: string) => {
+    const current = daysForProgram(data, programCode);
+    if (current.includes(day)) {
+      setDaysForProgram(programCode, current.filter((d) => d !== day));
+      return;
     }
-    if (requiredDays !== null && selectedDays.length !== requiredDays) {
-      errs.preferredDays = `This package requires selecting exactly ${requiredDays} day${requiredDays === 1 ? '' : 's'}.`;
-    }
-    setErrors(errs);
-    return Object.keys(errs).length === 0;
+    if (requiredDays !== null && current.length >= requiredDays) return; // locked at the package's sessions-per-week
+    setDaysForProgram(programCode, [...current, day]);
   };
 
   // ── Live tutor-capacity availability, per enrolled program ──────────────
@@ -88,6 +80,40 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
     )
   );
   const programCodesKey = selectedProgramCodes.join(',');
+
+  // Each program's own exact-count lock (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf
+  // #4a) — independent per program now that each gets its own section, no more need to
+  // reconcile conflicting counts across programs into a single shared list.
+  const requiredDaysForCode = (programCode: string): number | null => {
+    const counts = data.selectedPackages
+      .filter((p) => p.programCode === programCode)
+      .map((p) => getRequiredDaysForPackage(p.programCode, p.sessionCount))
+      .filter((n): n is number => n !== null);
+    return counts.length > 0 ? Math.max(...counts) : null;
+  };
+
+  const programDaysSatisfied = (programCode: string): boolean => {
+    const required = requiredDaysForCode(programCode);
+    if (required === null) return true; // e.g. Examination Preparation — no lock, always fine
+    return daysForProgram(data, programCode).length === required;
+  };
+
+  const validate = (): boolean => {
+    const errs: Record<string, string> = {};
+    if (!data.preferredStartDate) {
+      errs.preferredStartDate = 'Please choose a preferred start date.';
+    }
+    const firstUnmetIndex = selectedProgramCodes.findIndex((code) => !programDaysSatisfied(code));
+    if (firstUnmetIndex !== -1) {
+      const code = selectedProgramCodes[firstUnmetIndex];
+      const required = requiredDaysForCode(code);
+      errs[`days:${code}`] = `This package requires selecting exactly ${required} day${required === 1 ? '' : 's'}.`;
+      // Jump the parent straight to whichever program's Available Days still needs attention.
+      setActiveDayStepIndex(firstUnmetIndex);
+    }
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
 
   const [availability, setAvailability] = useState<Record<string, AvailabilityResponse>>({});
   const [loadingAvailability, setLoadingAvailability] = useState<Record<string, boolean>>({});
@@ -134,6 +160,8 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
     if (slot.available === slot.total) return { text: 'Available', disabled: false };
     return { text: `Available Slots: ${slot.available}`, disabled: false };
   };
+
+  const isMultiProgram = selectedProgramCodes.length > 1;
 
   return (
     <div className="space-y-6">
@@ -248,64 +276,137 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
         </div>
       )}
 
-      {/* ── Available Days ── */}
-      <div className="space-y-2">
-        <Label className="font-semibold">
-          Available Days{' '}
-          <span className="text-muted-foreground font-normal">
-            {requiredDays !== null
-              ? `(select exactly ${requiredDays} day${requiredDays === 1 ? '' : 's'})`
-              : '(optional — select all that apply)'}
-          </span>
-        </Label>
-        <p className="text-xs text-muted-foreground">
-          {requiredDays !== null
-            ? `Your selected package meets ${requiredDays} time${requiredDays === 1 ? '' : 's'} a week — pick exactly ${requiredDays} day${requiredDays === 1 ? '' : 's'} your child can attend.`
-            : 'Tap the days your child can attend. Leave all unselected if any weekday is fine.'}
-          {' '}Sessions are scheduled Monday through Saturday.
-        </p>
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-1">
-          {WEEKDAYS.map((day) => {
-            const selected = selectedDays.includes(day);
+      {/* ── Available Days — one section per enrolled program ── */}
+      <div className="space-y-3">
+        <Label className="font-semibold">Available Days</Label>
+        {selectedProgramCodes.map((code, index) => {
+          const required = requiredDaysForCode(code);
+          const days = daysForProgram(data, code);
+          const satisfied = programDaysSatisfied(code);
+          const isActive = !isMultiProgram || index === activeDayStepIndex;
+          const isPast = isMultiProgram && index < activeDayStepIndex;
+          const isFuture = isMultiProgram && index > activeDayStepIndex;
+          const isLast = index === selectedProgramCodes.length - 1;
+
+          if (isFuture) return null; // "a new section appears" — not shown until reached
+
+          // Completed section, collapsed to a compact summary the parent can reopen.
+          if (isPast) {
             return (
               <button
-                key={day}
+                key={code}
                 type="button"
-                aria-pressed={selected}
-                onClick={() => toggleDay(day)}
-                className={`py-2.5 rounded-xl text-sm font-semibold border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  selected
-                    ? 'border-amber-500 bg-amber-500 text-white shadow-sm'
-                    : 'border-border bg-card text-foreground hover:border-amber-400'
-                }`}
+                onClick={() => setActiveDayStepIndex(index)}
+                className="w-full flex items-center justify-between gap-3 rounded-xl border-2 border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20 p-3 text-left hover:border-emerald-400 transition-colors"
               >
-                {DAY_SHORT[day]}
+                <div className="flex items-center gap-2 min-w-0">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground truncate">{PROGRAM_LABELS[code]}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {days.length > 0 ? days.map((d) => DAY_SHORT[d]).join(', ') : 'No days selected'}
+                    </p>
+                  </div>
+                </div>
+                <span className="flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 flex-shrink-0">
+                  <Pencil className="h-3 w-3" /> Edit
+                </span>
               </button>
             );
-          })}
-        </div>
-        {errors.preferredDays && (
-          <p className="text-xs text-destructive">{errors.preferredDays}</p>
-        )}
-        {requiredDays !== null ? (
-          <p className={`text-xs mt-1 ${selectedDays.length === requiredDays ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>
-            {selectedDays.length} of {requiredDays} selected
-            {selectedDays.length > 0 ? `: ${selectedDays.join(', ')}` : ''}
-          </p>
-        ) : (
-          <>
-            {selectedDays.length > 0 && (
-              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                Selected: {selectedDays.join(', ')}
+          }
+
+          return (
+            <div key={code} className={`rounded-xl border-2 p-4 space-y-2 ${isActive ? 'border-amber-400' : 'border-border'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-foreground">
+                  {PROGRAM_LABELS[code]}
+                  {isMultiProgram && (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      Program {index + 1} of {selectedProgramCodes.length}
+                    </span>
+                  )}
+                </p>
+                <span className="text-xs text-muted-foreground font-normal">
+                  {required !== null ? `select exactly ${required} day${required === 1 ? '' : 's'}` : 'optional — select all that apply'}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {required !== null
+                  ? `This package meets ${required} time${required === 1 ? '' : 's'} a week — pick exactly ${required} day${required === 1 ? '' : 's'} your child can attend.`
+                  : 'Tap the days your child can attend. Leave all unselected if any weekday is fine.'}
+                {' '}Sessions are scheduled Monday through Saturday.
               </p>
-            )}
-            {selectedDays.length === 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                No days selected — any available weekday is acceptable.
-              </p>
-            )}
-          </>
-        )}
+
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-1">
+                {WEEKDAYS.map((day) => {
+                  const selected = days.includes(day);
+                  const disabled = !selected && required !== null && days.length >= required;
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      aria-pressed={selected}
+                      disabled={disabled}
+                      onClick={() => toggleDayForProgram(code, required, day)}
+                      className={`py-2.5 rounded-xl text-sm font-semibold border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        selected
+                          ? 'border-amber-500 bg-amber-500 text-white shadow-sm'
+                          : disabled
+                            ? 'border-border bg-muted text-muted-foreground cursor-not-allowed opacity-60'
+                            : 'border-border bg-card text-foreground hover:border-amber-400'
+                      }`}
+                    >
+                      {DAY_SHORT[day]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {errors[`days:${code}`] && (
+                <p className="text-xs text-destructive">{errors[`days:${code}`]}</p>
+              )}
+              {required !== null ? (
+                <p className={`text-xs mt-1 ${satisfied ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'}`}>
+                  {days.length} of {required} selected{days.length > 0 ? `: ${days.join(', ')}` : ''}
+                </p>
+              ) : days.length > 0 ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">Selected: {days.join(', ')}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-1">No days selected — any available weekday is acceptable.</p>
+              )}
+
+              {isMultiProgram && (
+                <div className="flex items-center justify-between pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={index === 0}
+                    onClick={() => setActiveDayStepIndex((i) => Math.max(0, i - 1))}
+                    className="text-muted-foreground"
+                  >
+                    <ChevronLeft className="h-4 w-4 mr-1" /> Previous Program
+                  </Button>
+                  {!isLast && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        if (!satisfied) {
+                          setErrors((prev) => ({ ...prev, [`days:${code}`]: required !== null ? `This package requires selecting exactly ${required} day${required === 1 ? '' : 's'}.` : '' }));
+                          return;
+                        }
+                        setActiveDayStepIndex((i) => Math.min(selectedProgramCodes.length - 1, i + 1));
+                      }}
+                    >
+                      Next Program
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 rounded-lg text-xs text-blue-800 dark:text-blue-300">

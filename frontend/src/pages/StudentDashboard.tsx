@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { formatAge } from "@/components/enrollment/wizard-types";
 import { checkProgramEligibility } from "@/components/enrollment/wizard-types";
+import { PROGRAM_LABELS } from "@/constants/programs";
 import DocUploadField from "@/components/enrollment/DocUploadField";
 import {
   validateFullName, validateBirthdate, birthdateMin, birthdateMax, toTitleCase, computeAgeYears,
@@ -16,7 +17,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Video,
-  MessageSquare,
   FileText,
   Loader2,
   Download,
@@ -38,9 +38,12 @@ import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, assessmentService, scheduleService, gradeService, remarkService, announcementService, auditLogService, paymentService, uploadsBaseUrl, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { enrollmentService, assessmentService, scheduleService, gradeService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
+import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
+import { ContactTutorPanel } from "@/components/dashboard/ContactTutorPanel";
+import { useActiveChildId } from "@/hooks/useActiveChildId";
 
 function formatTime12h(hhmm: string) {
   if (!hhmm) return "";
@@ -145,23 +148,32 @@ export default function StudentDashboard() {
 
   // Parent Dashboard reframe (Final Implementation Prompt Section 2): a parent
   // account can have multiple children; track which one is currently selected.
-  const [activeChildId, setActiveChildId] = useState<string>("");
+  // Persisted (not plain useState) so the Payments page — a separate route —
+  // shows the same child's invoices when navigated to. See useActiveChildId.
+  const [activeChildId, setActiveChildId] = useActiveChildId();
 
   const [enrollments, setEnrollments] = useState<{
     _id: string;
     enrollmentId?: string;
     status?: string;
-    studentSnapshot?: { firstName?: string; lastName?: string; birthdate?: string };
+    studentSnapshot?: { firstName?: string; middleName?: string; lastName?: string; birthdate?: string };
     studentId?: string;
     /** The child's actual User._id, once one has been created (see backend
      *  ensureStudentUserForEnrollment) — needed to fetch a parent's child's
      *  own schedule/grades/materials. Absent until the child's first class. */
     student?: string;
     selectedSubjects?: { _id: string; name: string }[];
-    packages?: { displayName?: string }[];
+    packages?: { displayName?: string; programCode?: string }[];
     preEnrollmentAssessment?: PreEnrollmentAssessment | null;
     rejectionReason?: string | null;
     allowResubmission?: boolean;
+    healthInfo?: {
+      allergies?: string;
+      medications?: string;
+      specialNeeds?: boolean;
+      specialNeedsDetails?: string;
+      emergencyContact?: string;
+    };
   }[]>([]);
   const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
   const [schedules, setSchedules] = useState<{
@@ -172,8 +184,8 @@ export default function StudentDashboard() {
     attendanceStatus?: 'unmarked' | 'present' | 'absent';
     sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
     subject?: { name: string };
-    tutor?: { firstName?: string; lastName?: string; middleName?: string; email?: string };
-    tutors?: Array<{ firstName?: string; lastName?: string; middleName?: string; email?: string }>;
+    tutor?: { _id?: string; firstName?: string; lastName?: string; middleName?: string; email?: string; phone?: string };
+    tutors?: Array<{ _id?: string; firstName?: string; lastName?: string; middleName?: string; email?: string; phone?: string }>;
   }[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(true);
   const [progressGrades, setProgressGrades] = useState<GradeItem[]>([]);
@@ -191,6 +203,8 @@ export default function StudentDashboard() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [weekStart, setWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
   const [isAddChildOpen, setIsAddChildOpen] = useState(false);
+  const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
+  const [renewChildInfo, setRenewChildInfo] = useState<RenewChildInfo | null>(null);
   const [isAddingChild, setIsAddingChild] = useState(false);
   const [addChildStep, setAddChildStep] = useState(1);
   const [expandedPrograms, setExpandedPrograms] = useState<string[]>([]);
@@ -203,7 +217,7 @@ export default function StudentDashboard() {
   const [paymentReference, setPaymentReference] = useState("");
   const [hasAllergies, setHasAllergies] = useState<"yes" | "no" | "">("");
   const [hasMedicalConditions, setHasMedicalConditions] = useState<"yes" | "no" | "">("");
-  const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
+  const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", assessmentApplicable: false, assessmentRemarks: "" });
   const [newChildConsent, setNewChildConsent] = useState(false);
   type ChildDoc = { dataUrl: string; fileName: string; fileSize: number } | null;
   const [childDocs, setChildDocs] = useState<{ birthCert: ChildDoc; photo: ChildDoc; guardianId: ChildDoc }>({ birthCert: null, photo: null, guardianId: null });
@@ -219,8 +233,8 @@ export default function StudentDashboard() {
   });
   const [scheduleWeekStart, setScheduleWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
 
-  useEffect(() => {
-    enrollmentService
+  const fetchEnrollments = () => {
+    return enrollmentService
       .getMyEnrollments()
       .then((res) => {
         if (res.data?.success && Array.isArray(res.data.enrollments)) {
@@ -231,6 +245,10 @@ export default function StudentDashboard() {
       })
       .catch(() => setEnrollments([]))
       .finally(() => setEnrollmentsLoading(false));
+  };
+
+  useEffect(() => {
+    fetchEnrollments();
   }, []);
 
   // Every enrollment record is one child. A parent may have several; a student
@@ -247,9 +265,16 @@ export default function StudentDashboard() {
   );
 
   // Default to the first (most recent) child once the list loads; keep the
-  // current selection if it's still valid.
+  // current selection if it's still valid. Critically, do nothing while
+  // enrollments are still being fetched — on every remount (e.g. navigating
+  // back from Payments/Settings), `children` starts empty for a moment before
+  // the fetch resolves, and treating that as "genuinely zero children" was
+  // wiping the persisted selection (sessionStorage, via useActiveChildId)
+  // before it ever got a chance to be validated against the real list. See
+  // ChildSelector_AddChildModal_TutorRemarksView.pdf A.
   useEffect(() => {
     if (!isParent) return;
+    if (enrollmentsLoading) return;
     if (children.length === 0) {
       if (activeChildId) setActiveChildId("");
       return;
@@ -257,7 +282,7 @@ export default function StudentDashboard() {
     if (!children.some((c) => c.key === activeChildId)) {
       setActiveChildId(children[0].key);
     }
-  }, [isParent, children, activeChildId]);
+  }, [isParent, children, activeChildId, enrollmentsLoading]);
 
   const activeChild = isParent ? children.find((c) => c.key === activeChildId) : undefined;
   // For a parent, the child's real User._id (needed by the schedule/grades/
@@ -368,9 +393,10 @@ export default function StudentDashboard() {
   }, [isParent, activeChildUserId, readyToFetchChildData]);
 
   const fetchAnnouncements = () => {
+    if (isParent && !readyToFetchChildData) return;
     setAnnouncementsLoading(true);
     announcementService
-      .getForStudent()
+      .getForStudent(isParent ? activeChildUserId ?? undefined : undefined)
       .then((res) => {
         if (res.data?.success && Array.isArray(res.data.announcements)) {
           setAnnouncements(res.data.announcements);
@@ -382,12 +408,17 @@ export default function StudentDashboard() {
       .finally(() => setAnnouncementsLoading(false));
   };
 
+  // Re-fetch whenever the active child changes — student-specific announcements
+  // (targetStudentIds) must reflect whichever child is currently selected, not the
+  // parent's own account. See ChildSelector_AddChildModal_TutorRemarksView.pdf A.
   useEffect(() => {
     fetchAnnouncements();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
 
   useEffect(() => {
     if (location.hash === "#announcements") fetchAnnouncements();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash]);
 
   const fetchActivity = () => {
@@ -408,29 +439,6 @@ export default function StudentDashboard() {
   useEffect(() => {
     if (location.hash === "#activity") fetchActivity();
   }, [location.hash]);
-
-  // A parent may have several children (one Enrollment record each) — scope to
-  // just the currently-selected child so this doesn't mix subjects across kids.
-  // A student account only ever has its own single (implicit) record, so
-  // `enrollments` there is already scoped correctly with no filter needed.
-  const enrolledSubjectsList = useMemo(() => {
-    const list: { _id: string; name: string }[] = [];
-    const seen = new Set<string>();
-    const scopedEnrollments = isParent
-      ? enrollments.filter((en) => en._id === activeChildId)
-      : enrollments;
-    for (const en of scopedEnrollments) {
-      if (en.status !== "active") continue;
-      for (const s of en.selectedSubjects || []) {
-        const id = (s._id || s).toString();
-        if (!seen.has(id)) {
-          seen.add(id);
-          list.push({ _id: id, name: s.name });
-        }
-      }
-    }
-    return list;
-  }, [enrollments, isParent, activeChildId]);
 
   const childEntries = useMemo(() => {
     const map = new Map<string, {
@@ -845,6 +853,49 @@ export default function StudentDashboard() {
     setIsAddChildOpen(true);
   };
 
+  // "Renew / Add Program" — an EXISTING child enrolling in another program.
+  // Skips straight to Programs & Packages -> Schedule -> Billing -> Review by
+  // reusing the same enrollment wizard components, pre-filled with the child's
+  // already-known info so it's never re-collected.
+  const handleRenewChild = (child: (typeof childEntries)[number]) => {
+    const latest = child.enrollments[0];
+    const snap = latest?.studentSnapshot;
+    const health = latest?.healthInfo;
+
+    // Block re-enrolling in a program the child already has an active/approved
+    // enrollment for (unfinished sessions) — a DIFFERENT program is unaffected.
+    // Payments_FullyPaid_NewProgramRefinements_AdminWalkIn.pdf D.
+    const blockedPrograms: Record<string, string> = {};
+    for (const enrollment of child.enrollments) {
+      if (enrollment.status !== 'approved' && enrollment.status !== 'active') continue;
+      for (const pkg of enrollment.packages || []) {
+        if (pkg.programCode && !blockedPrograms[pkg.programCode]) {
+          blockedPrograms[pkg.programCode] = `Already enrolled in ${PROGRAM_LABELS[pkg.programCode] || pkg.programCode} with unfinished sessions. Ask an admin to clear the existing schedule first.`;
+        }
+      }
+    }
+
+    setRenewChildInfo({
+      studentFirstName: snap?.firstName || '',
+      studentMiddleName: snap?.middleName || '',
+      studentLastName: snap?.lastName || '',
+      birthdate: snap?.birthdate ? snap.birthdate.slice(0, 10) : '',
+      allergies: health?.allergies || '',
+      medications: health?.medications || '',
+      specialNeeds: health?.specialNeeds || false,
+      specialNeedsDetails: health?.specialNeedsDetails || '',
+      emergencyContact: health?.emergencyContact || '',
+      blockedPrograms,
+    });
+    setIsRenewModalOpen(true);
+  };
+
+  const handleRenewEnrolled = (enrollmentId: string) => {
+    toast.success("Enrollment submitted", { description: `Your new enrollment ID is ${enrollmentId}. Check your email for confirmation.` });
+    setRenewChildInfo(null);
+    fetchEnrollments();
+  };
+
   const statusBadgeClass = (status: string) => {
     if (status === "approved" || status === "active") return "bg-emerald-100 text-emerald-700";
     if (status === "rejected" || status === "cancelled") return "bg-red-100 text-red-700";
@@ -888,17 +939,23 @@ export default function StudentDashboard() {
         medications: hasMedicalConditions === "no" ? "None" : newChild.medications.trim(),
         specialNeeds: newChild.specialNeeds,
         specialNeedsDetails: newChild.specialNeedsDetails.trim(),
-        emergencyContact: newChild.emergencyContact.trim(),
+        // No separate Emergency Contact step — the parent's own registered phone
+        // already serves this purpose (ChildSelector_AddChildModal_TutorRemarksView.pdf B2).
+        emergencyContact: user?.phone || "",
         consentVersion: "1.0",
         consentItems: [{ name: "participation_agreement", accepted: true, version: "1.0" }],
         assessment: newChild.assessmentApplicable && assessmentTemplateId ? { applicable: true, templateId: assessmentTemplateId, ratings: assessmentRatings, infoValues: assessmentInfo, remarks: newChild.assessmentRemarks.trim() } : { applicable: false, skipReason: "Not applicable" },
       });
-      if (paymentProofFile && submission?.data?.paymentId) {
+      if (paymentProofFile && submission?.data?.enrollmentId) {
         const proofDataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(paymentProofFile); });
-        await paymentService.submitPaymentProof(submission.data.paymentId, { proofDataUrl, payerReference: paymentReference.trim(), paymentMethod: newChild.paymentMethod });
+        // Wizard-created Payment docs are parent-keyed (student: null) — the legacy
+        // student-keyed paymentService.submitPaymentProof never matches them and
+        // fails with "Payment record not found." Use the enrollment-keyed endpoint
+        // instead, same as Step12Review.tsx's working submission flow.
+        await enrollmentService.submitPaymentProof(submission.data.enrollmentId, { proofDataUrl, payerReference: paymentReference.trim(), paymentMethod: newChild.paymentMethod });
       }
       toast.success("Child added", { description: "The enrollment was submitted for admin review." });
-      setNewChild({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", emergencyContact: "", assessmentApplicable: false, assessmentRemarks: "" });
+      setNewChild({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", assessmentApplicable: false, assessmentRemarks: "" });
       setNewChildConsent(false);
       setHasAllergies("");
       setHasMedicalConditions("");
@@ -947,7 +1004,7 @@ export default function StudentDashboard() {
       1: true,
       2: Boolean(newChild.packageKey),
       3: true,
-      4: Boolean(hasAllergies && hasMedicalConditions && newChild.emergencyContact.trim() && (hasAllergies === "no" || newChild.allergies.trim()) && (hasMedicalConditions === "no" || newChild.medications.trim())),
+      4: Boolean(hasAllergies && hasMedicalConditions && (hasAllergies === "no" || newChild.allergies.trim()) && (hasMedicalConditions === "no" || newChild.medications.trim())),
       7: Boolean(newChild.paymentMethod && paymentProofFile),
       8: newChildConsent,
     };
@@ -983,16 +1040,7 @@ export default function StudentDashboard() {
 
   const handleQuickAction = (action: string) => {
     switch (action) {
-      case "Contact Tutor": {
-        const tutorEmail = schedules.find((s) => s.tutor?.email)?.tutor?.email;
-        if (tutorEmail) {
-          window.location.href = `mailto:${tutorEmail}`;
-        } else {
-          toast.info("No tutor email available. Check your schedule for tutor contact.", { description: "Your tutor's email will appear once sessions are assigned." });
-        }
-        break;
-      }
-      case "View Grades":
+      case "Progress":
         navigate("/student-dashboard#progress", { replace: true });
         break;
       default:
@@ -1091,9 +1139,9 @@ export default function StudentDashboard() {
 
               <div className="bg-card rounded-xl p-4 border border-border space-y-2">
                 <h4 className="font-semibold text-sm text-foreground mb-3">Quick Actions</h4>
+                <ContactTutorPanel schedules={schedules} />
                 {[
-                  { label: "Contact Tutor", icon: MessageSquare },
-                  { label: "View Grades", icon: Award },
+                  { label: "Progress", icon: Award },
                 ].map((action) => (
                   <button
                     key={action.label}
@@ -1117,8 +1165,7 @@ export default function StudentDashboard() {
               transition={{ delay: 0.1 }}
               className="self-start lg:col-span-3 space-y-6"
             >
-              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard title="Enrolled Subjects" value={enrollmentsLoading ? "—" : enrolledSubjectsList.length} icon={BookOpen} variant="primary" />
+              <div className="grid sm:grid-cols-3 gap-4">
                 <StatCard title="Classes This Week" value={schedulesLoading ? "—" : uniqueSchedules.filter((s) => {
                   const d = new Date(s.date).getTime();
                   const weekStart = new Date();
@@ -1247,7 +1294,7 @@ export default function StudentDashboard() {
                                   <p className="text-sm text-muted-foreground">Age: {formatAge(child.birthdate)}</p>
                                 )}
                               </div>
-                              <div className="flex flex-wrap gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
                                 {child.statuses.length > 0 ? child.statuses.map((status) => (
                                   <span key={`${child.childName}-${status}`} className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(status)}`}>
                                     {status}
@@ -1257,6 +1304,9 @@ export default function StudentDashboard() {
                                     Pending
                                   </span>
                                 )}
+                                <Button type="button" size="sm" variant="outline" onClick={() => handleRenewChild(child)}>
+                                  Renew / Add Program
+                                </Button>
                               </div>
                             </div>
 
@@ -1859,6 +1909,9 @@ export default function StudentDashboard() {
                   onChange={(event) => { setNewChild((current) => ({ ...current, birthdate: event.target.value })); setChildErrors((p) => ({ ...p, birthdate: "" })); }}
                   required />
                 {childErrors.birthdate && <p className="text-xs text-destructive">{childErrors.birthdate}</p>}
+                {!childErrors.birthdate && newChild.birthdate && (
+                  <p className="text-xs text-muted-foreground">Age: <span className="font-medium text-foreground">{formatAge(newChild.birthdate)}</span></p>
+                )}
               </div>
             </div>
 
@@ -1880,9 +1933,9 @@ export default function StudentDashboard() {
               {childErrors.docs && <p className="text-xs text-destructive">{childErrors.docs}</p>}
             </div>
             </div>}
-            {addChildStep === 2 && <div className="space-y-2"><Label>Choose a program package</Label><p className="text-xs text-muted-foreground">Enter the birthdate first. Programs outside the child&apos;s age range are disabled.</p><div className="max-h-64 space-y-2 overflow-y-auto">{["TPG101", "ACT102", "EXP106"].map((programCode) => { const items = pricing.filter((item) => item.programCode === programCode); if (!items.length) return null; const eligibleItems = items.filter(isPackageEligible); const expanded = expandedPrograms.includes(programCode); const programName = programCode === "TPG101" ? "Toddlers Playgroup" : programCode === "ACT102" ? "Academic Tutorial" : "Examination Preparation"; return <div key={programCode} className="rounded-lg border border-border"><button type="button" disabled={eligibleItems.length === 0} onClick={() => setExpandedPrograms((current) => current.includes(programCode) ? current.filter((code) => code !== programCode) : [...current, programCode])} className={`flex w-full items-center justify-between p-3 text-left ${eligibleItems.length === 0 ? "cursor-not-allowed opacity-50" : "hover:bg-muted/50"}`}><span><span className="block text-sm font-semibold">{programName}</span><span className="text-xs text-muted-foreground">{eligibleItems.length === 0 ? (childAge === null ? "Enter birthdate to check eligibility" : "Not available for this age") : `${items.length} package${items.length === 1 ? "" : "s"}`}</span></span><span className="text-muted-foreground">{expanded ? "−" : "+"}</span></button>{expanded && eligibleItems.length > 0 && <div className="space-y-2 border-t border-border p-2">{eligibleItems.map((item) => <button type="button" key={`${item.programCode}:${item.packageSlug}`} onClick={() => setNewChild((current) => ({ ...current, packageKey: `${item.programCode}:${item.packageSlug}` }))} className={`w-full rounded-lg border p-3 text-left ${newChild.packageKey === `${item.programCode}:${item.packageSlug}` ? "border-primary bg-primary/5" : "border-border"}`}><span className="block text-sm font-medium">{item.displayName}</span><span className="text-xs text-muted-foreground">{item.durationDesc || "Package"} - PHP {item.priceFull.toLocaleString()}</span></button>)}</div>}</div>; })}</div></div>}
+            {addChildStep === 2 && <div className="space-y-2"><Label>Choose a program package</Label><p className="text-xs text-muted-foreground">Enter the birthdate first. Programs outside the child&apos;s age range are disabled.</p><div className="max-h-64 space-y-2 overflow-y-auto">{["TPG101", "ACT102", "EXP106"].map((programCode) => { const items = pricing.filter((item) => item.programCode === programCode); if (!items.length) return null; const eligibleItems = items.filter(isPackageEligible); const expanded = expandedPrograms.includes(programCode); const programName = programCode === "TPG101" ? "Toddlers Playgroup" : programCode === "ACT102" ? "Academic Tutorial" : "Examination Preparation"; return <div key={programCode} className="rounded-lg border border-border"><button type="button" disabled={eligibleItems.length === 0} onClick={() => setExpandedPrograms((current) => current.includes(programCode) ? current.filter((code) => code !== programCode) : [...current, programCode])} className={`flex w-full items-center justify-between p-3 text-left ${eligibleItems.length === 0 ? "cursor-not-allowed opacity-50" : "hover:bg-muted/50"}`}><span><span className="block text-sm font-semibold">{programName}</span><span className="text-xs text-muted-foreground">{eligibleItems.length === 0 ? (childAge === null ? "Enter birthdate to check eligibility" : "Not available for this age") : `${items.length} package${items.length === 1 ? "" : "s"}`}</span></span><span className="text-muted-foreground">{expanded ? "−" : "+"}</span></button>{expanded && eligibleItems.length > 0 && <div className="space-y-2 border-t border-border p-2">{eligibleItems.map((item) => { const down = item.priceDown ?? Math.ceil(item.priceFull * 0.5); return <button type="button" key={`${item.programCode}:${item.packageSlug}`} onClick={() => setNewChild((current) => ({ ...current, packageKey: `${item.programCode}:${item.packageSlug}` }))} className={`w-full rounded-lg border p-3 text-left ${newChild.packageKey === `${item.programCode}:${item.packageSlug}` ? "border-primary bg-primary/5" : "border-border"}`}><span className="block text-sm font-medium">{item.displayName}</span><span className="text-xs text-muted-foreground block">{item.durationDesc || "Package"}</span><span className="text-xs text-muted-foreground">Full price: PHP {item.priceFull.toLocaleString()}</span><span className="text-xs font-semibold text-primary block">50% down: PHP {down.toLocaleString()}</span></button>; })}</div>}</div>; })}</div></div>}
             {addChildStep === 3 && <div className="space-y-2"><Label htmlFor="child-start-date">Preferred start date <span className="font-normal text-muted-foreground">(optional)</span></Label><Input id="child-start-date" type="date" value={newChild.preferredStartDate} onChange={(event) => setNewChild((current) => ({ ...current, preferredStartDate: event.target.value }))} /></div>}
-            {addChildStep === 4 && <div className="space-y-4"><div className="space-y-2"><Label>Does the child have allergies?</Label><div className="flex gap-2"><Button type="button" variant={hasAllergies === "yes" ? "default" : "outline"} onClick={() => setHasAllergies("yes")}>Yes</Button><Button type="button" variant={hasAllergies === "no" ? "default" : "outline"} onClick={() => { setHasAllergies("no"); setNewChild((current) => ({ ...current, allergies: "" })); }}>No</Button></div>{hasAllergies === "yes" && <Input aria-label="Allergy details" value={newChild.allergies} onChange={(event) => setNewChild((current) => ({ ...current, allergies: event.target.value }))} placeholder="List allergies" required />}</div><div className="space-y-2"><Label>Does the child have medical conditions or take medication?</Label><div className="flex gap-2"><Button type="button" variant={hasMedicalConditions === "yes" ? "default" : "outline"} onClick={() => setHasMedicalConditions("yes")}>Yes</Button><Button type="button" variant={hasMedicalConditions === "no" ? "default" : "outline"} onClick={() => { setHasMedicalConditions("no"); setNewChild((current) => ({ ...current, medications: "" })); }}>No</Button></div>{hasMedicalConditions === "yes" && <Input aria-label="Medical condition details" value={newChild.medications} onChange={(event) => setNewChild((current) => ({ ...current, medications: event.target.value }))} placeholder="List conditions or medications" required />}</div><div className="space-y-2"><Label htmlFor="child-emergency">Emergency contact</Label><Input id="child-emergency" value={newChild.emergencyContact} onChange={(event) => setNewChild((current) => ({ ...current, emergencyContact: event.target.value }))} required /></div></div>}
+            {addChildStep === 4 && <div className="space-y-4"><div className="space-y-2"><Label>Does the child have allergies?</Label><div className="flex gap-2"><Button type="button" variant={hasAllergies === "yes" ? "default" : "outline"} onClick={() => setHasAllergies("yes")}>Yes</Button><Button type="button" variant={hasAllergies === "no" ? "default" : "outline"} onClick={() => { setHasAllergies("no"); setNewChild((current) => ({ ...current, allergies: "" })); }}>No</Button></div>{hasAllergies === "yes" && <Input aria-label="Allergy details" value={newChild.allergies} onChange={(event) => setNewChild((current) => ({ ...current, allergies: event.target.value }))} placeholder="List allergies" required />}</div><div className="space-y-2"><Label>Does the child have medical conditions or take medication?</Label><div className="flex gap-2"><Button type="button" variant={hasMedicalConditions === "yes" ? "default" : "outline"} onClick={() => setHasMedicalConditions("yes")}>Yes</Button><Button type="button" variant={hasMedicalConditions === "no" ? "default" : "outline"} onClick={() => { setHasMedicalConditions("no"); setNewChild((current) => ({ ...current, medications: "" })); }}>No</Button></div>{hasMedicalConditions === "yes" && <Input aria-label="Medical condition details" value={newChild.medications} onChange={(event) => setNewChild((current) => ({ ...current, medications: event.target.value }))} placeholder="List conditions or medications" required />}</div></div>}
             {addChildStep === 5 && <div className="space-y-3"><Label className="flex items-center gap-3"><Checkbox checked={newChild.specialNeeds} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, specialNeeds: checked === true }))} /> Does the child have special learning or medical needs?</Label>{newChild.specialNeeds && <Input value={newChild.specialNeedsDetails} onChange={(event) => setNewChild((current) => ({ ...current, specialNeedsDetails: event.target.value }))} placeholder="Please provide details" />}</div>}
             {addChildStep === 6 && <div className="max-h-72 space-y-3 overflow-y-auto"><p className="text-sm text-muted-foreground">Complete the assessment when it applies to the child. If it does not apply, leave this unchecked.</p><Label className="flex items-center gap-3"><Checkbox checked={newChild.assessmentApplicable} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, assessmentApplicable: checked === true }))} /> Assessment is applicable</Label>{newChild.assessmentApplicable && assessmentTemplates.length > 0 && <><Label htmlFor="assessment-template">Assessment form</Label><select id="assessment-template" value={assessmentTemplateId} onChange={(event) => { setAssessmentTemplateId(event.target.value); setAssessmentRatings({}); setAssessmentInfo({}); }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select assessment form</option>{assessmentTemplates.map((template) => <option key={template._id} value={template._id}>{template.title}</option>)}</select>{activeAssessmentTemplate && <><p className="font-medium">{activeAssessmentTemplate.title}</p>{(activeAssessmentTemplate.infoFields || []).map((field) => <div key={field.key} className="space-y-1"><Label htmlFor={`assessment-info-${field.key}`}>{field.label}</Label><Input id={`assessment-info-${field.key}`} value={assessmentInfo[field.key] || ""} onChange={(event) => setAssessmentInfo((current) => ({ ...current, [field.key]: event.target.value }))} /></div>)}{(activeAssessmentTemplate.sections || []).map((section) => <div key={section.title} className="space-y-2"><p className="text-sm font-semibold">{section.title}</p>{(section.items || []).map((item) => <div key={item.key} className="space-y-1"><Label htmlFor={`assessment-rating-${item.key}`}>{item.label}</Label><select id={`assessment-rating-${item.key}`} value={assessmentRatings[item.key] || ""} onChange={(event) => setAssessmentRatings((current) => ({ ...current, [item.key]: event.target.value }))} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select rating</option>{(activeAssessmentTemplate.ratingScale || []).map((rating) => <option key={rating.value} value={rating.value}>{rating.label}</option>)}</select></div>)}</div>)}<Input value={newChild.assessmentRemarks} onChange={(event) => setNewChild((current) => ({ ...current, assessmentRemarks: event.target.value }))} placeholder="Assessment remarks" /></>}</>}{newChild.assessmentApplicable && assessmentTemplates.length === 0 && <p className="text-sm text-muted-foreground">No assessment is configured for this program.</p>}</div>}
             {addChildStep === 7 && <div className="space-y-3"><Label>Billing and payment method</Label>{(() => { const selected = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey); const down = selected?.priceDown ?? Math.ceil((selected?.priceFull || 0) * 0.5); return <div className="rounded-lg bg-muted p-3 text-sm"><p className="font-medium">{selected?.displayName || "Select a package first"}</p><p>Full price: PHP {(selected?.priceFull || 0).toLocaleString()}</p><p className="font-semibold text-primary">Amount due now (50%): PHP {down.toLocaleString()}</p></div>; })()}<Label htmlFor="child-payment-method">Payment method</Label><select id="child-payment-method" value={newChild.paymentMethod} onChange={(event) => setNewChild((current) => ({ ...current, paymentMethod: event.target.value }))} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" required><option value="gcash">GCash</option><option value="maribank">MariBank</option><option value="bdo">BDO</option></select><Label htmlFor="child-payment-proof">Payment proof</Label><Input id="child-payment-proof" type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => setPaymentProofFile(event.target.files?.[0] || null)} required /><Input aria-label="Payment reference" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Payment reference number (optional)" /><p className="text-xs text-muted-foreground">Upload a screenshot or PDF showing the 50% payment.</p></div>}
@@ -1920,6 +1973,12 @@ export default function StudentDashboard() {
           )}
         </DialogContent>
       </Dialog>
+      <RenewProgramModal
+        open={isRenewModalOpen}
+        onOpenChange={setIsRenewModalOpen}
+        child={renewChildInfo}
+        onEnrolled={handleRenewEnrolled}
+      />
     </DashboardLayout>
   );
 }

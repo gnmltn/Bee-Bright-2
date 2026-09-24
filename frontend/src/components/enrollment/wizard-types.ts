@@ -58,11 +58,15 @@ export interface WizardData {
   // ── Step 7 – Preferred schedule ───────────────────────────────────────
   preferredStartDate: string;
   /**
-   * Days of the week the child is available.
-   * Values: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday'
-   * Empty array = no preference (any weekday).
+   * Available Days, kept PER PROGRAM — a parent enrolled in more than one program
+   * picks a separate day pattern for each (Admin_Schedule_and_MultiProgram_Days_
+   * Fixes.pdf #4b), since each program has its own sessions-per-week and schedule.
+   * Values: 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday'.
+   * Empty days array for a program = no preference (any weekday) — only
+   * Examination Preparation allows that; Playgroup/Academic Tutorial packages lock
+   * the count (see constants/programs.ts getRequiredDaysForPackage).
    */
-  preferredDays: string[];
+  preferredDaysByProgram: { programCode: string; days: string[] }[];
   /**
    * Live-availability slot picked per enrolled program (Step 7's hourly/2-hour
    * grid). Informational only — never auto-assigns a tutor; the admin still
@@ -136,7 +140,7 @@ export const INITIAL_WIZARD_DATA: WizardData = {
   selectedPackages: [], paymentOption: 'down' as const,
 
   // Step 7
-  preferredStartDate: '', preferredDays: [], preferredSlots: [],
+  preferredStartDate: '', preferredDaysByProgram: [], preferredSlots: [],
 
   // Step 8
   guardianName: '', guardianPhone: '', guardianEmail: '',

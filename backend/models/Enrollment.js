@@ -78,12 +78,31 @@ const enrollmentSchema = new mongoose.Schema({
     enum: ['morning', 'afternoon', 'no_preference', null],
     default: null
   },
-  // Days of the week the child is available for sessions.
+  // Legacy field — a single flat day list couldn't represent a parent enrolled in more
+  // than one program picking different days for each. Superseded by
+  // preferredDaysByProgram below; kept in sync as the union of all programs' days
+  // (see enrollmentController.js submitEnrollment) purely for any old consumer that
+  // hasn't been updated to the per-program field, and for pre-migration records.
   // Values match Mon-Sat: 'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'
   // Empty array = no preference (any weekday is acceptable).
   preferredDays: {
     type: [String],
     enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+    default: [],
+  },
+  // Available Days, kept PER PROGRAM (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf
+  // #4b) — the authoritative field going forward. Each enrolled program gets its own
+  // day pattern, since each has its own sessions-per-week and its own schedule.
+  preferredDaysByProgram: {
+    type: [{
+      programCode: { type: String },
+      days: {
+        type: [String],
+        enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+        default: [],
+      },
+      _id: false,
+    }],
     default: [],
   },
   // Informational only — the parent's pick from Step 7's live availability view

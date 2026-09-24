@@ -19,9 +19,18 @@ interface Props {
   onNext: () => void;
   onBack: () => void;
   toast: ReturnType<typeof import('@/hooks/use-toast').useToast>['toast'];
+  /**
+   * "Renew / Add Program" flow only — program codes the child already has an
+   * active/approved enrollment for with unfinished (still scheduled) sessions,
+   * mapped to the reason to display. Blocks re-enrolling in the SAME program
+   * until an admin clears those sessions; a different program is unaffected.
+   * Age eligibility (e.g. Toddlers Playgroup, 2-4) still applies independently
+   * on top of this. See Payments_FullyPaid_NewProgramRefinements_AdminWalkIn.pdf D.
+   */
+  blockedPrograms?: Record<string, string>;
 }
 
-export default function Step6Programs({ data, update, onNext, onBack, toast }: Props) {
+export default function Step6Programs({ data, update, onNext, onBack, toast, blockedPrograms }: Props) {
   const [pricing, setPricing] = useState<PricingPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -71,12 +80,13 @@ export default function Step6Programs({ data, update, onNext, onBack, toast }: P
   const allCodes = Array.from(new Set(pricing.map((p) => p.programCode)));
   for (const code of allCodes) {
     const { eligible, reason } = checkProgramEligibility(code, ageYears);
-    if (eligible) {
+    const blockedReason = blockedPrograms?.[code];
+    if (eligible && !blockedReason) {
       eligiblePrograms[code] = pricing.filter((p) => p.programCode === code);
     } else {
       ineligiblePrograms[code] = {
         pkgs: pricing.filter((p) => p.programCode === code),
-        reason: reason || 'Age requirement not met.',
+        reason: !eligible ? (reason || 'Age requirement not met.') : blockedReason!,
       };
     }
   }
@@ -253,8 +263,11 @@ export default function Step6Programs({ data, update, onNext, onBack, toast }: P
                               )}
                             </div>
 
-                            {/* Price — 50% down amount only, no strikethrough */}
+                            {/* Full price + the 50% down payment actually due now — shown
+                                together for every program (Admin_Schedule_and_MultiProgram_
+                                Days_Fixes.pdf #3), never just the down amount alone. */}
                             <div className="text-right flex-shrink-0">
+                              <p className="text-xs text-muted-foreground">₱{pkg.priceFull.toLocaleString()} total</p>
                               <p className="font-bold text-amber-600 text-sm">
                                 ₱{priceDown.toLocaleString()}
                               </p>
@@ -269,28 +282,31 @@ export default function Step6Programs({ data, update, onNext, onBack, toast }: P
             );
           })}
 
-          {/* ── Ineligible programs — shown disabled with reason ── */}
-          {Object.entries(ineligiblePrograms).map(([code, { reason }]) => (
-            <div
-              key={code}
-              className="border-2 border-border rounded-xl overflow-hidden opacity-50 cursor-not-allowed"
-              title={reason}
-              aria-disabled="true"
-            >
-              <div className="w-full flex items-center justify-between p-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold text-foreground">{PROGRAM_LABELS[code] || code}</p>
-                    <Badge variant="outline" className="text-xs border-destructive/50 text-destructive">
-                      Not eligible
-                    </Badge>
+          {/* ── Ineligible/blocked programs — shown disabled with reason ── */}
+          {Object.entries(ineligiblePrograms).map(([code, { reason }]) => {
+            const isSessionBlock = Boolean(blockedPrograms?.[code]) && checkProgramEligibility(code, ageYears).eligible;
+            return (
+              <div
+                key={code}
+                className="border-2 border-border rounded-xl overflow-hidden opacity-50 cursor-not-allowed"
+                title={reason}
+                aria-disabled="true"
+              >
+                <div className="w-full flex items-center justify-between p-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold text-foreground">{PROGRAM_LABELS[code] || code}</p>
+                      <Badge variant="outline" className="text-xs border-destructive/50 text-destructive">
+                        {isSessionBlock ? 'Ongoing sessions' : 'Not eligible'}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-destructive mt-0.5">{reason}</p>
                   </div>
-                  <p className="text-xs text-destructive mt-0.5">{reason}</p>
+                  <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0 ml-2" />
                 </div>
-                <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0 ml-2" />
               </div>
-            </div>
-          ))}
+            );
+          })}
 
         </div>
       )}
