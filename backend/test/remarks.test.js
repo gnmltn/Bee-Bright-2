@@ -747,32 +747,22 @@ test('updateDraftRemark: re-saving a draft without choosing a new file keeps the
   } finally { restore(); }
 });
 
-// ─── listPendingReview: consent surfaced to the admin (Spec v3.1) ─────────────
-// Consent is no longer checked anywhere on the tutor side — it becomes information the
-// admin sees here, together with the attachment itself, to decide Approve or Reject.
+// ─── listPendingReview: no consent data (consent feature removed 2026-09-24) ─────
+// The admin's approve/reject is the only gate; the queue carries no consent flag.
 
-test('listPendingReview: includes studentHasMediaConsent per remark, and never leaks the raw consents array', async () => {
+test('listPendingReview: returns pending remarks with no consent flag or raw consents array', async () => {
   const { restore, store } = stubModels();
   try {
     await store.create({
       student: { _id: 'student-1', firstName: 'Ana', lastName: 'Cruz', consents: [{ name: 'media_consent', version: '1.0', acceptedAt: new Date() }] },
       tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review',
     });
-    await store.create({
-      student: { _id: 'student-2', firstName: 'Ben', lastName: 'Dizon', consents: [] },
-      tutor: TUTOR_A.id, programCode: 'ACT102', templateType: 'academic_progress', status: 'pending_admin_review',
-    });
 
     const res = mockRes();
     await listPendingReview({ user: ADMIN }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
-
-    const withConsent = res._body.remarks.find((r) => r.student._id === 'student-1');
-    const withoutConsent = res._body.remarks.find((r) => r.student._id === 'student-2');
-    assert.equal(withConsent.studentHasMediaConsent, true);
-    assert.equal(withoutConsent.studentHasMediaConsent, false);
-    assert.equal(withConsent.student.consents, undefined, 'the raw consents array must not be sent to the client');
-    assert.equal(withoutConsent.student.consents, undefined);
+    assert.equal(res._body.remarks.length, 1);
+    assert.equal(res._body.remarks[0].studentHasMediaConsent, undefined);
   } finally { restore(); }
 });
 

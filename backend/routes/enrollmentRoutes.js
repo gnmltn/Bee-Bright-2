@@ -21,6 +21,7 @@ const {
   verifyPayment,
   adminAddStudent,
   adminWalkInEnroll,
+  setChildProfilePhoto,
 } = require('../controllers/enrollmentController');
 const { getAllPricing, createOrUpdatePricing } = require('../controllers/pricingController');
 const { protect, authorize, optionalProtect } = require('../middleware/auth');
@@ -46,6 +47,7 @@ router.post('/admin/walk-in', protect, authorize('admin'), adminWalkInEnroll);
 
 // ── Parent / Student named routes (MUST come before /:id) ────────────────
 router.get('/my-enrollments', protect, getMyEnrollments);
+router.put('/child-photo', protect, setChildProfilePhoto);
 router.get('/tutor/assessments', protect, authorize('tutor'), getTutorAssessments);
 router.get('/student/:studentId', protect, getEnrollmentByStudent);
 

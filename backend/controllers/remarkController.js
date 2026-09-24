@@ -183,11 +183,9 @@ const createOrSaveRemark = async (req, res) => {
     // Resolve the attachment BEFORE the draft/publish split. Save Draft used to return
     // early here, which silently dropped a file the tutor had chosen on a brand-new
     // remark — an attachment has to be storable from the very first save, not only when
-    // publishing. Media consent is deliberately NOT checked here (Spec v3.1): a tutor is
-    // never blocked from attaching a file or publishing because of missing consent —
-    // consent is admin-facing information used at the Pending Admin Review step instead
-    // (see listPendingReview / reviewRemark below). Only file validity (type/size) can
-    // reject an attachment now.
+    // publishing. There is no consent step: the admin's approve/reject at Pending Admin
+    // Review (reviewRemark below) is the sole gate. Only file validity (type/size) can
+    // reject an attachment.
     let attachment = null;
     const attachmentErrors = [];
     if (attachmentDataUrl) {
@@ -295,8 +293,7 @@ const updateDraftRemark = async (req, res) => {
 
     // Resolved before the draft/publish split for the same reason as in
     // createOrSaveRemark: Save Draft used to return early and drop the chosen file.
-    // No new file in the payload means "keep whatever is already attached". Consent is
-    // not checked here — see the note in createOrSaveRemark.
+    // No new file in the payload means "keep whatever is already attached".
     let attachment = remark.attachment?.path ? remark.attachment : null;
     const attachmentErrors = [];
     if (attachmentDataUrl) {
@@ -476,23 +473,11 @@ const listMyChildProgress = async (req, res) => {
 const listPendingReview = async (req, res) => {
   try {
     const remarks = await Remark.find({ status: 'pending_admin_review' })
-      .populate('student', 'firstName lastName middleName consents')
+      .populate('student', 'firstName lastName middleName')
       .populate('tutor', 'firstName lastName')
       .sort({ createdAt: 1 })
       .lean();
-    // Spec v3.1 — consent is no longer checked before a tutor can attach/publish; it's
-    // now information the admin uses here, together with the attachment content itself,
-    // to decide Approve or Reject. Compute the boolean and strip the raw consents array
-    // back off the populated student before sending.
-    const withConsent = remarks.map((r) => {
-      const hasConsent = Boolean(r.student?.consents?.some((c) => c.name === 'media_consent'));
-      if (r.student) {
-        const { consents, ...studentRest } = r.student;
-        return { ...r, student: studentRest, studentHasMediaConsent: hasConsent };
-      }
-      return { ...r, studentHasMediaConsent: hasConsent };
-    });
-    res.status(200).json({ success: true, remarks: withConsent });
+    res.status(200).json({ success: true, remarks });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to load the review queue' });
   }

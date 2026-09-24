@@ -83,7 +83,7 @@ async function sendEnrollmentConfirmationEmail(to, { parentName, studentName, en
               We've received the enrollment application for <strong>${studentName}</strong>.
             </p>
             <div style="background:#fff;border:1px solid #fde68a;border-radius:8px;padding:20px;margin:20px 0;">
-              <p style="margin:0 0 8px;"><strong>Enrollment ID:</strong> ${enrollmentId}</p>
+              <p style="margin:0 0 8px;"><strong>Student ID:</strong> ${enrollmentId}</p>
               <p style="margin:0 0 8px;"><strong>Amount Due:</strong> ₱${Number(amountDue).toLocaleString()}</p>
               <p style="margin:0;"><strong>Payment Method:</strong> ${methodLabel}</p>
             </div>

@@ -59,6 +59,7 @@ import {
   type RemarkProgramCode,
   type AnnouncementItem,
   type AuditLogItem,
+  type TutorStudentCard,
 } from "@/services/api";
 import { PROGRAM_CATEGORIES } from "@/constants/programs";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
@@ -293,6 +294,18 @@ export default function TutorDashboard() {
     fetchSessions();
   }, []);
 
+  const [studentCards, setStudentCards] = useState<TutorStudentCard[]>([]);
+  const [studentCardsLoading, setStudentCardsLoading] = useState(false);
+  useEffect(() => {
+    if (location.hash !== "#students") return;
+    setStudentCardsLoading(true);
+    scheduleService
+      .getMyStudentCards()
+      .then((res) => setStudentCards(res.data?.success && Array.isArray(res.data.students) ? res.data.students : []))
+      .catch(() => setStudentCards([]))
+      .finally(() => setStudentCardsLoading(false));
+  }, [location.hash]);
+
   const fetchAnnouncements = () => {
     setAnnouncementsLoading(true);
     announcementService
@@ -340,7 +353,7 @@ export default function TutorDashboard() {
   };
 
   useEffect(() => {
-    if (!location.hash || location.hash === "#students" || location.hash === "#announcements") {
+    if (!location.hash || location.hash === "#students" || location.hash === "#assessments" || location.hash === "#announcements") {
       fetchAnnouncements();
     }
   }, [location.hash]);
@@ -1222,16 +1235,240 @@ export default function TutorDashboard() {
   // ─── Tab routing ──────────────────────────────────────────────────────────────
   const hashToTab: Record<string, string> = {
     "#students": "students",
+    "#assessments": "overview",
     "#attendance": "attendance",
     "#schedule": "schedule",
     "#remarks": "remarks",
     "#announcements": "announcements",
     "#activity": "activity",
   };
-  const activeTab = hashToTab[location.hash] || "students";
+  const activeTab = hashToTab[location.hash] || "overview";
   const handleTabChange = (value: string) => {
     navigate(`/tutor-dashboard#${value}`, { replace: true });
   };
+
+  // The teaching summary page (stats, upcoming sessions, assigned students, calendar). "My Students"
+  // shows the student cards in the top slot; Overview / Assessment show the announcements preview.
+  const studentCardsSection = (
+                  <div className="space-y-3">
+                    <div>
+                      <h3 className="font-display font-bold text-lg text-foreground">My Students</h3>
+                      <p className="text-sm text-muted-foreground">Students assigned to you, and the program(s) you handle for each.</p>
+                    </div>
+                  {studentCardsLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : studentCards.length === 0 ? (
+                    <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
+                      No assigned students yet. Admin will assign schedules.
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="my-students-cards">
+                      {studentCards.map((card) => (
+                        <div key={card.studentId || card.studentUserId} className="bg-card rounded-xl border border-border p-5 space-y-1.5" data-testid="student-card">
+                          <p className="font-display font-bold text-lg text-foreground">{card.name}</p>
+                          <p className="text-sm text-foreground">
+                            <span className="text-muted-foreground">Programs: </span>
+                            {card.programs.length ? card.programs.join("; ") : "—"}
+                          </p>
+                          <p className="text-sm text-foreground">
+                            <span className="text-muted-foreground">Student ID: </span>
+                            <span className="font-mono">{card.studentId || "—"}</span>
+                          </p>
+                          {card.schedule && (
+                            <p className="text-sm text-foreground">
+                              <span className="text-muted-foreground">Schedule: </span>
+                              {card.schedule}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  </div>
+  );
+  const announcementsPreview = (
+    <>
+                  {/* Announcements preview — Overview / Assessment */}
+                  <div className="bg-card rounded-xl border border-border overflow-hidden">
+                    <div className="p-4 border-b border-border flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-display font-bold text-lg text-foreground">Announcements Preview</h3>
+                        <p className="text-sm text-muted-foreground">Recent updates below your teaching summary cards.</p>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => handleTabChange("announcements")}>View All <ChevronRight className="h-4 w-4 ml-1" /></Button>
+                    </div>
+                    <div className="divide-y divide-border">
+                      {announcementsLoading ? (
+                        <div className="flex items-center justify-center py-10">
+                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : overviewAnnouncements.length === 0 ? (
+                        <p className="p-6 text-center text-muted-foreground">No announcements yet.</p>
+                      ) : (
+                        overviewAnnouncements.map((announcement) => (
+                          <div
+                            key={announcement._id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => openAnnouncementDetails(announcement)}
+                            onKeyDown={(event) => handleAnnouncementKeyDown(event, announcement)}
+                            className="p-4 flex items-start justify-between gap-4 cursor-pointer transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">{announcementCategoryLabel(announcement.category)}</span>
+                                <span className="text-xs text-muted-foreground capitalize">{announcement.status}</span>
+                              </div>
+                              <p className="font-semibold text-foreground">{announcement.title}</p>
+                              <p className="text-sm text-muted-foreground">{summarizeAnnouncement(announcement.body)}</p>
+                            </div>
+                            {announcement.scheduledDate ? (
+                              <span className="shrink-0 text-xs text-muted-foreground">{new Date(announcement.scheduledDate).toLocaleDateString("en-US", { dateStyle: "medium" })}</span>
+                            ) : null}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+    </>
+  );
+  const renderTeachingPage = (topSection: React.ReactNode) => (
+    <>
+                  {/* Stats — ONLY on this tab (students = overview) */}
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <StatCard
+                      title="Assigned Students"
+                      value={sessionsLoading ? "—" : assignedStudents.length}
+                      icon={Users}
+                      variant="primary"
+                    />
+                    <StatCard
+                      title="Classes Today"
+                      value={sessionsLoading ? "—" : todaySchedule.length}
+                      icon={Calendar}
+                      variant="info"
+                    />
+                    <StatCard
+                      title="Total Sessions"
+                      value={sessionsLoading ? "—" : sessions.length}
+                      icon={BookOpen}
+                      variant="success"
+                    />
+                    <StatCard
+                      title="Employment"
+                      value={(user as { employmentType?: string })?.employmentType === "part-time" ? "Part-time" : "Full-time"}
+                      icon={FileText}
+                      variant="warning"
+                    />
+                  </div>
+
+                  {topSection}
+
+                  <div className="bg-card rounded-xl border border-border overflow-hidden">
+                    <div className="p-4 border-b border-border flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-display font-bold text-lg text-foreground">Upcoming Sessions</h3>
+                        <p className="text-sm text-muted-foreground">Your next classes are listed here for quick tracking.</p>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => handleTabChange("schedule")}>View All <ChevronRight className="h-4 w-4 ml-1" /></Button>
+                    </div>
+                    <div className="divide-y divide-border">
+                      {sessionsLoading ? (
+                        <div className="flex items-center justify-center py-10">
+                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : upcomingOverviewSessions.length === 0 ? (
+                        <p className="p-6 text-center text-muted-foreground">No upcoming sessions yet. Assigned classes will appear here.</p>
+                      ) : (
+                        upcomingOverviewSessions.map((session) => (
+                          <div key={session._id} className="p-4 flex items-center justify-between gap-4 hover:bg-muted/40 transition-colors">
+                            <div className="min-w-0">
+                              <p className="font-semibold text-foreground">{session.subject}</p>
+                              <p className="text-sm text-muted-foreground">{session.isPlaygroup ? "Children" : "Student"}: {session.student}</p>
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="text-sm font-medium text-foreground">{session.time}</p>
+                              <p className="text-xs text-muted-foreground">{session.date}</p>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+                    <div className="bg-card rounded-xl border border-border overflow-hidden h-full">
+                      <div className="p-4 border-b border-border flex items-center justify-between">
+                        <h3 className="font-display font-bold text-lg text-foreground">
+                          Assigned Students
+                        </h3>
+                        <span className="text-sm text-muted-foreground">
+                          {sessionsLoading ? "..." : `${assignedStudents.length} students`}
+                        </span>
+                      </div>
+                      <div className="divide-y divide-border">
+                        {sessionsLoading ? (
+                          <div className="flex items-center justify-center py-12">
+                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                          </div>
+                        ) : assignedStudents.length === 0 ? (
+                          <p className="p-6 text-center text-muted-foreground">
+                            No assigned students yet. Admin will assign schedules.
+                          </p>
+                        ) : (
+                          assignedStudents.map((student, index) => (
+                            <div key={index} className="p-4 hover:bg-muted/50 transition-colors">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-4">
+                                  <UserAvatar
+                                    src={
+                                      student.profileImage
+                                        ? `${uploadsBaseUrl}/uploads/${student.profileImage}`
+                                        : null
+                                    }
+                                    fallback={student.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                                    size={10}
+                                  />
+                                  <div>
+                                    <p className="font-semibold text-foreground">{student.name}</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      {student.grade} • {student.subject}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="hidden md:flex items-center gap-2">
+                                  {student.email && (
+                                    <a
+                                      href={`mailto:${student.email}`}
+                                      className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted transition-colors"
+                                      title={`Email ${student.name}`}
+                                    >
+                                      <Mail className="h-4 w-4" />
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="ml-14 mt-1">
+                                <p className="text-xs text-muted-foreground">{student.schedule}</p>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="h-full">
+                      {renderScheduleGridCard(
+                        "My Calendar Schedule",
+                        "Your assigned teaching dates and times, shown here for quick reference just like the student overview.",
+                        "No sessions scheduled yet. Your calendar will appear here once classes are assigned."
+                      )}
+                    </div>
+                  </div>
+    </>
+  );
 
   // ─────────────────────────────────────────────────────────────────────────────
   return (
@@ -1368,177 +1605,12 @@ export default function TutorDashboard() {
                 </TabsContent>
                 {/* ══ STUDENTS TAB — stats live here (the "overview") ══ */}
                 <TabsContent value="students" className="space-y-6">
-                  {/* Stats — ONLY on this tab (students = overview) */}
-                  <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <StatCard
-                      title="Assigned Students"
-                      value={sessionsLoading ? "—" : assignedStudents.length}
-                      icon={Users}
-                      variant="primary"
-                    />
-                    <StatCard
-                      title="Classes Today"
-                      value={sessionsLoading ? "—" : todaySchedule.length}
-                      icon={Calendar}
-                      variant="info"
-                    />
-                    <StatCard
-                      title="Total Sessions"
-                      value={sessionsLoading ? "—" : sessions.length}
-                      icon={BookOpen}
-                      variant="success"
-                    />
-                    <StatCard
-                      title="Employment"
-                      value={(user as { employmentType?: string })?.employmentType === "part-time" ? "Part-time" : "Full-time"}
-                      icon={FileText}
-                      variant="warning"
-                    />
-                  </div>
+                  {renderTeachingPage(studentCardsSection)}
+                </TabsContent>
 
-                  <div className="bg-card rounded-xl border border-border overflow-hidden">
-                    <div className="p-4 border-b border-border flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="font-display font-bold text-lg text-foreground">Announcements Preview</h3>
-                        <p className="text-sm text-muted-foreground">Recent updates below your teaching summary cards.</p>
-                      </div>
-                      <Button variant="ghost" size="sm" onClick={() => handleTabChange("announcements")}>View All <ChevronRight className="h-4 w-4 ml-1" /></Button>
-                    </div>
-                    <div className="divide-y divide-border">
-                      {announcementsLoading ? (
-                        <div className="flex items-center justify-center py-10">
-                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : overviewAnnouncements.length === 0 ? (
-                        <p className="p-6 text-center text-muted-foreground">No announcements yet.</p>
-                      ) : (
-                        overviewAnnouncements.map((announcement) => (
-                          <div
-                            key={announcement._id}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => openAnnouncementDetails(announcement)}
-                            onKeyDown={(event) => handleAnnouncementKeyDown(event, announcement)}
-                            className="p-4 flex items-start justify-between gap-4 cursor-pointer transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <div className="min-w-0 space-y-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">{announcementCategoryLabel(announcement.category)}</span>
-                                <span className="text-xs text-muted-foreground capitalize">{announcement.status}</span>
-                              </div>
-                              <p className="font-semibold text-foreground">{announcement.title}</p>
-                              <p className="text-sm text-muted-foreground">{summarizeAnnouncement(announcement.body)}</p>
-                            </div>
-                            {announcement.scheduledDate ? (
-                              <span className="shrink-0 text-xs text-muted-foreground">{new Date(announcement.scheduledDate).toLocaleDateString("en-US", { dateStyle: "medium" })}</span>
-                            ) : null}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-card rounded-xl border border-border overflow-hidden">
-                    <div className="p-4 border-b border-border flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="font-display font-bold text-lg text-foreground">Upcoming Sessions</h3>
-                        <p className="text-sm text-muted-foreground">Your next classes are listed here for quick tracking.</p>
-                      </div>
-                      <Button variant="ghost" size="sm" onClick={() => handleTabChange("schedule")}>View All <ChevronRight className="h-4 w-4 ml-1" /></Button>
-                    </div>
-                    <div className="divide-y divide-border">
-                      {sessionsLoading ? (
-                        <div className="flex items-center justify-center py-10">
-                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : upcomingOverviewSessions.length === 0 ? (
-                        <p className="p-6 text-center text-muted-foreground">No upcoming sessions yet. Assigned classes will appear here.</p>
-                      ) : (
-                        upcomingOverviewSessions.map((session) => (
-                          <div key={session._id} className="p-4 flex items-center justify-between gap-4 hover:bg-muted/40 transition-colors">
-                            <div className="min-w-0">
-                              <p className="font-semibold text-foreground">{session.subject}</p>
-                              <p className="text-sm text-muted-foreground">{session.isPlaygroup ? "Children" : "Student"}: {session.student}</p>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <p className="text-sm font-medium text-foreground">{session.time}</p>
-                              <p className="text-xs text-muted-foreground">{session.date}</p>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
-                    <div className="bg-card rounded-xl border border-border overflow-hidden h-full">
-                      <div className="p-4 border-b border-border flex items-center justify-between">
-                        <h3 className="font-display font-bold text-lg text-foreground">
-                          Assigned Students
-                        </h3>
-                        <span className="text-sm text-muted-foreground">
-                          {sessionsLoading ? "..." : `${assignedStudents.length} students`}
-                        </span>
-                      </div>
-                      <div className="divide-y divide-border">
-                        {sessionsLoading ? (
-                          <div className="flex items-center justify-center py-12">
-                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                          </div>
-                        ) : assignedStudents.length === 0 ? (
-                          <p className="p-6 text-center text-muted-foreground">
-                            No assigned students yet. Admin will assign schedules.
-                          </p>
-                        ) : (
-                          assignedStudents.map((student, index) => (
-                            <div key={index} className="p-4 hover:bg-muted/50 transition-colors">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-4">
-                                  <UserAvatar
-                                    src={
-                                      student.profileImage
-                                        ? `${uploadsBaseUrl}/uploads/${student.profileImage}`
-                                        : null
-                                    }
-                                    fallback={student.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                                    size={10}
-                                  />
-                                  <div>
-                                    <p className="font-semibold text-foreground">{student.name}</p>
-                                    <p className="text-sm text-muted-foreground">
-                                      {student.grade} • {student.subject}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="hidden md:flex items-center gap-2">
-                                  {student.email && (
-                                    <a
-                                      href={`mailto:${student.email}`}
-                                      className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted transition-colors"
-                                      title={`Email ${student.name}`}
-                                    >
-                                      <Mail className="h-4 w-4" />
-                                    </a>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="ml-14 mt-1">
-                                <p className="text-xs text-muted-foreground">{student.schedule}</p>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="h-full">
-                      {renderScheduleGridCard(
-                        "My Calendar Schedule",
-                        "Your assigned teaching dates and times, shown here for quick reference just like the student overview.",
-                        "No sessions scheduled yet. Your calendar will appear here once classes are assigned."
-                      )}
-                    </div>
-                  </div>
+                {/* ══ OVERVIEW / ASSESSMENT — same teaching summary, with the announcements preview ══ */}
+                <TabsContent value="overview" className="space-y-6">
+                  {renderTeachingPage(announcementsPreview)}
                 </TabsContent>
 
                 {/* ══ SCHEDULE TAB ══ */}

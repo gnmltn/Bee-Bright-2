@@ -9,6 +9,7 @@ const { getGcashPublicDetails } = require('../utils/gcashDetails');
 const { logAudit } = require('../utils/auditService');
 const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { validateName, validatePhoneNoLetters } = require('../utils/validation');
+const { listOutstandingBalances } = require('../utils/remainingBalance');
 
 const generateEnrollmentReference = () =>
   `BRGHT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -874,7 +875,44 @@ const verifyPayment = async (req, res) => {
   }
 };
 
+// @desc    Parents who still owe the remaining 50% (one row per parent)
+// @route   GET /api/payments/admin/pending-balances
+// @access  Private (Admin)
+const getPendingBalances = async (req, res) => {
+  try {
+    const outstanding = await listOutstandingBalances();
+    const byParent = new Map();
+    for (const { enrollment, remaining } of outstanding) {
+      const parent = enrollment.parent;
+      const key = String(parent?._id || 'unknown');
+      if (!byParent.has(key)) {
+        byParent.set(key, {
+          parentId: parent?._id ? String(parent._id) : null,
+          parentName: [parent?.firstName, parent?.lastName].filter(Boolean).join(' ').trim() || '—',
+          parentEmail: parent?.email || '',
+          remaining: 0,
+          children: [],
+        });
+      }
+      const row = byParent.get(key);
+      row.remaining += remaining;
+      const child = [enrollment.studentSnapshot?.firstName, enrollment.studentSnapshot?.lastName].filter(Boolean).join(' ').trim();
+      if (child && !row.children.includes(child)) row.children.push(child);
+    }
+    const items = [...byParent.values()].sort((a, b) => b.remaining - a.remaining);
+    res.status(200).json({
+      success: true,
+      totalUnpaid: items.reduce((sum, r) => sum + r.remaining, 0),
+      count: items.length,
+      items,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load pending balances' });
+  }
+};
+
 module.exports = {
+  getPendingBalances,
   getGcashInfo,
   initiateStudentPayment,
   submitPaymentProof,

@@ -84,6 +84,14 @@ passwordExpiresAt: { type: Date, default: () => getPasswordExpiresAt({ passwordC
     acceptedAt: { type: Date },
     ip: { type: String }
   }],
+  // Sidebar red-badge bookkeeping: when this user last opened each badge-carrying
+  // section (key = section id, e.g. 'schedule'). "New" = created/approved after that
+  // time. See controllers/notificationController.js.
+  navSeen: {
+    type: Map,
+    of: Date,
+    default: {},
+  },
   // Student ID generated on enrollment approval (S-YYYYMMDD-XXXX)
   studentId: {
     type: String,

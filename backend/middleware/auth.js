@@ -58,7 +58,11 @@ const protect = async (req, res, next) => {
       });
     }
 
-    if (nowMs - lastActivityMs > ACTIVITY_WRITE_THROTTLE_MS) {
+    // Background polls (sidebar badge counts) send X-BB-Passive so an idle open tab
+    // doesn't count as user activity and keep the session alive past its inactivity
+    // limit. The expiry check above still applies to them.
+    const isPassivePoll = req.headers['x-bb-passive'] === '1';
+    if (!isPassivePoll && nowMs - lastActivityMs > ACTIVITY_WRITE_THROTTLE_MS) {
       User.findByIdAndUpdate(req.user._id, { lastActivityAt: new Date(nowMs) }).catch(() => {});
       req.user.lastActivityAt = new Date(nowMs);
     }

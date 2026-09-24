@@ -53,8 +53,8 @@ const remarkSchema = new mongoose.Schema(
       studyGoal: { type: String, trim: true, default: '', maxlength: 500 },
     },
 
-    // Optional attachment (worksheet photo, approved photo) — gated by media consent,
-    // and by admin approval before it (or the remark) becomes visible to the parent.
+    // Optional attachment (worksheet photo, approved photo). Like every remark, it only
+    // becomes visible to the parent once an admin approves the remark.
     // Stored under backend/private-uploads/remarks/, never the public /uploads mount —
     // only servable through the protected GET /api/remarks/:id/attachment route.
     attachment: {

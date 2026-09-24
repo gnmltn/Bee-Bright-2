@@ -243,6 +243,9 @@ export const paymentService = {
       params: status === 'all' ? {} : { status },
     }),
   getPendingPayments: () => api.get('/payments/admin/payments/pending'),
+  /** Admin: parents who still owe the remaining 50% (one row per parent) + the grand total. */
+  getPendingBalances: () =>
+    api.get<{ success: boolean; totalUnpaid: number; count: number; items: PendingBalanceItem[] }>('/payments/admin/pending-balances'),
   verifyPayment: (paymentId: string, verified: boolean, rejectionReason?: string) =>
     api.put(`/payments/admin/payments/${paymentId}/verify`, { verified, rejectionReason }),
 };
@@ -295,6 +298,9 @@ export const enrollmentService = {
    */
   getServerInstanceId: () =>
     api.get<{ success: boolean; instanceId?: string }>('/health'),
+  /** Parent sets the profile picture of one of their children (key = the child's permanent Student ID). */
+  setChildPhoto: (childKey: string, image: string) =>
+    api.put<{ success: boolean; message?: string; studentProfileImage?: string }>('/enrollments/child-photo', { childKey, image }),
   getPricing: () => api.get<{ success: boolean; pricing: {
     programCode: string; packageSlug: string; displayName: string;
     durationDesc?: string; priceFull: number; priceDown?: number | null;
@@ -342,7 +348,7 @@ export const enrollmentService = {
       assessedBy?: string;
     };
   }) => api.post<{
-    success: boolean; enrollmentId: string; enrollmentDbId: string;
+    success: boolean; enrollmentId: string; permanentStudentId?: string; enrollmentDbId: string;
     paymentId: string; amountDue: number; totalFee: number;
     paymentMethod: string; instructions: Record<string, string>;
   }>('/enrollments/submit', data),
@@ -435,6 +441,8 @@ export interface AdminEnrollment {
   studentSnapshot?: { firstName?: string; lastName?: string; middleName?: string; birthdate?: string; computedAge?: number } | null;
   // Generated on approval and stored on the Enrollment, not on a User
   studentId?: string | null;
+  /** The child's permanent Student ID (their first enrollment's BB- ID) — the only ID admins should see. */
+  permanentStudentId?: string | null;
   packages?: { programCode?: string; packageSlug?: string; displayName?: string; price?: number; paymentOption?: string }[];
   preferredStartDate?: string | null;
   /** Available Days per enrolled program — the authoritative field going forward.
@@ -484,6 +492,9 @@ export interface AdminEnrollment {
 export const userService = {
   /** Admin: get all users from database */
   getAllUsers: () => api.get('/users'),
+  /** Admin: every parent's children (name + permanent Student ID), keyed by parent user id. */
+  getParentChildren: () =>
+    api.get<{ success: boolean; children: Record<string, { name: string; studentId: string }[]> }>('/users/parent-children'),
   /** Admin: create tutor with employment type and availability. */
   createTutor: (data: {
     firstName: string;
@@ -507,8 +518,19 @@ export const userService = {
     password: string;
     phone: string;
   }) => api.post('/users/admins', data),
-  /** Admin: record media/attachment consent for a student who has none on file (Student Remarks feature). */
-  grantMediaConsent: (studentId: string) => api.post<{ success: boolean; message: string }>(`/users/${studentId}/media-consent`),
+};
+
+// Sidebar red count badges (parent / tutor / admin). Polled in the background, so both
+// calls are flagged passive — they must not extend the session's inactivity timer.
+export const notificationService = {
+  /** `childKey` scopes a parent's counts to the selected child (their permanent Student ID). */
+  getBadges: (childKey?: string) =>
+    api.get<{ success: boolean; badges: Record<string, number> }>('/notifications/badges', {
+      headers: { 'X-BB-Passive': '1' },
+      params: childKey ? { childKey } : {},
+    }),
+  markSeen: (section: string, childKey?: string) =>
+    api.post<{ success: boolean }>('/notifications/seen', { section, ...(childKey ? { childKey } : {}) }),
 };
 
 // Dashboard Service (Admin)
@@ -721,6 +743,8 @@ export const scheduleService = {
     api.post(`/schedules/${scheduleId}/enroll-student`, data),
   removeStudent: (scheduleId: string, studentId: string) => api.post(`/schedules/${scheduleId}/remove-student`, { studentId }),
   getMySessions: () => api.get('/schedules/my-sessions'),
+  /** Tutor "My Students" cards — one per student, with the programs this tutor handles. */
+  getMyStudentCards: () => api.get<{ success: boolean; students: TutorStudentCard[] }>('/schedules/my-students'),
   /** studentId is required only for a parent viewing a specific child's classes. */
   getMyClasses: (studentId?: string) => api.get('/schedules/student/my-classes', { params: studentId ? { studentId } : {} }),
   markAttendance: (scheduleId: string, status: 'present' | 'absent') =>
@@ -823,7 +847,26 @@ export const escalationService = {
 
 // Base URL for static uploaded files (profile images, remark attachments, etc.)
 const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5001/api';
-export const uploadsBaseUrl = apiBase.replace(/\/api\/?$/, '');
+export type PendingBalanceItem = {
+  parentId: string | null;
+  parentName: string;
+  parentEmail: string;
+  /** Sum of the remaining 50% across this parent's enrollments. */
+  remaining: number;
+  children: string[];
+};
+
+export type TutorStudentCard = {
+  studentUserId: string;
+  name: string;
+  programs: string[];
+  /** The child's permanent Student ID (BB-…), when known. */
+  studentId: string | null;
+  /** e.g. "Mon/Tue/Wed, 9:00–10:00 AM"; empty when nothing is scheduled. */
+  schedule: string;
+};
+
+export const uploadsBaseUrl =apiBase.replace(/\/api\/?$/, '');
 
 // Grades (tutor: add/list; student: my progress)
 export interface GradeItem {
@@ -896,11 +939,6 @@ export interface RemarkItem {
   parentSupportSuggestion?: string;
   examInfo?: RemarkExamInfo;
   attachment?: RemarkAttachmentMeta | null;
-  /** Only present on GET /remarks/pending-review — whether the student's guardian has
-   * recorded attachment/media consent. Admin-facing only (Spec v3.1): the tutor is never
-   * gated on this, it's information used at the review step alongside the attachment
-   * itself. */
-  studentHasMediaConsent?: boolean;
   status: RemarkStatus;
   publishedAt?: string | null;
   /** Legacy fields from the retired "Correct Published Remark" feature. New remarks

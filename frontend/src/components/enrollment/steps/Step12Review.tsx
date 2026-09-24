@@ -44,6 +44,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         studentLastName: data.studentLastName,
         studentMiddleName: data.studentMiddleName || undefined,
         birthdate: data.birthdate,
+        renewalOfEnrollmentId: data.renewalOfEnrollmentId || undefined,
         requirementDocuments: {
           birthCertificate: data.docBirthCertificate ? { dataUrl: data.docBirthCertificate.dataUrl, fileName: data.docBirthCertificate.fileName } : undefined,
           studentPhoto: data.docStudentPhoto ? { dataUrl: data.docStudentPhoto.dataUrl, fileName: data.docStudentPhoto.fileName } : undefined,
@@ -74,7 +75,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
       };
 
       const res = await enrollmentService.submitWizard(payload);
-      const { enrollmentId, paymentId } = res.data;
+      const { enrollmentId, paymentId, permanentStudentId } = res.data;
 
       // Upload proof
       if (data.proofDataUrl) {
@@ -95,7 +96,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         // Clear the enrollment-scoped token from sessionStorage — it was only needed for submission
         try { window.sessionStorage.removeItem('token'); } catch { /* ignore */ }
       }
-      toast({ title: '🎉 Enrollment submitted!', description: `Your enrollment ID is ${enrollmentId}. Check your email for confirmation.` });
+      toast({ title: '🎉 Enrollment submitted!', description: `Your Student ID is ${permanentStudentId || enrollmentId}. Check your email for confirmation.` });
       onEnrolled(enrollmentId);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Submission failed. Please try again.';

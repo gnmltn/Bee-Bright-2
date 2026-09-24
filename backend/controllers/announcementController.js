@@ -167,7 +167,13 @@ const getForStudent = async (req, res) => {
       .sort({ approvedAt: -1, createdAt: -1 })
       .populate('author', 'firstName lastName')
       .lean();
-    res.status(200).json({ success: true, announcements: list });
+    // Parents/students always see "Bee Bright Admin" for center announcements — never
+    // the individual Admin / Super Admin account that posted it. Tutor-authored ones
+    // keep the tutor's own name.
+    const announcements = list.map((a) => (
+      a.authorRole === 'admin' ? { ...a, author: { firstName: 'Bee Bright', lastName: 'Admin' } } : a
+    ));
+    res.status(200).json({ success: true, announcements });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message || 'Failed to load announcements' });
   }

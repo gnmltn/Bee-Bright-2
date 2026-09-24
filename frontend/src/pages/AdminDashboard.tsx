@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { Fragment, useEffect, useState, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -35,6 +35,8 @@ import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment
 import { OneOnOneSchedulingWizard } from "@/components/admin/OneOnOneSchedulingWizard";
 import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulingWizard";
 import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
+import { notifyBadgesChanged } from "@/lib/navBadges";
+import { displayStudentId } from "@/lib/children";
 import { RemarksReviewHistory } from "@/components/admin/RemarksReviewHistory";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -44,7 +46,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage } from "@/services/api";
+import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage, type PendingBalanceItem } from "@/services/api";
 import { adminEmailVerificationService } from "@/services/adminEmailVerification";
 import {
   AlertDialog,
@@ -467,6 +469,14 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
+  // Parents who still owe the remaining 50% (Payments tab: "Total Unpaid" + "Pending Payments").
+  const [pendingBalances, setPendingBalances] = useState<PendingBalanceItem[]>([]);
+  const [totalUnpaid, setTotalUnpaid] = useState(0);
+  // Parent/Guardian rows in the Users table expand to show that parent's children.
+  const [parentChildren, setParentChildren] = useState<Record<string, { name: string; studentId: string }[]>>({});
+  const [expandedParentIds, setExpandedParentIds] = useState<string[]>([]);
+  const toggleParentRow = (id: string) =>
+    setExpandedParentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
@@ -963,6 +973,10 @@ export default function AdminDashboard() {
         toast.error("Failed to load users");
       })
       .finally(() => setUsersLoading(false));
+    userService
+      .getParentChildren()
+      .then((res) => setParentChildren(res.data?.success && res.data.children ? res.data.children : {}))
+      .catch(() => setParentChildren({}));
   };
 
   useEffect(() => {
@@ -1373,6 +1387,16 @@ export default function AdminDashboard() {
       })
       .catch(() => setAdminPayments([]))
       .finally(() => setPaymentsLoading(false));
+    // The remaining-50% balances move whenever a payment is verified, so refresh with it.
+    paymentService
+      .getPendingBalances()
+      .then((res) => {
+        if (res.data?.success) {
+          setPendingBalances(res.data.items || []);
+          setTotalUnpaid(res.data.totalUnpaid || 0);
+        }
+      })
+      .catch(() => { setPendingBalances([]); setTotalUnpaid(0); });
   };
   useEffect(() => {
     fetchAdminPayments();
@@ -1407,7 +1431,7 @@ export default function AdminDashboard() {
       const res = await enrollmentService.approveEnrollment(enrollmentId);
       if (res.data?.success) {
         toast.success("Enrollment approved. Student account activated.");
-        fetchEnrollments(); fetchUsers(); fetchDashboardStats();
+        fetchEnrollments(); fetchUsers(); fetchDashboardStats(); notifyBadgesChanged();
         setViewEnrollmentId(null);
       } else {
         toast.error(res.data?.message || "Failed to approve enrollment");
@@ -1432,7 +1456,7 @@ export default function AdminDashboard() {
       const res = await enrollmentService.rejectEnrollment(rejectEnrollmentId, rejectReason, rejectAllowResubmit);
       if (res.data?.success) {
         toast.success("Enrollment rejected and parent notified.");
-        fetchEnrollments(); fetchUsers(); fetchDashboardStats();
+        fetchEnrollments(); fetchUsers(); fetchDashboardStats(); notifyBadgesChanged();
         setRejectEnrollmentId(null); setViewEnrollmentId(null);
       } else { toast.error(res.data?.message || "Failed to reject"); }
     } catch (err: unknown) {
@@ -1458,7 +1482,7 @@ export default function AdminDashboard() {
         toast.success(verified ? "Payment verified." : "Payment rejected.");
         setVerifyPaymentDialogOpen(false);
         setViewEnrollmentId((prev) => { if (prev) handleViewEnrollment(prev); return prev; });
-        fetchEnrollments(); fetchAdminPayments(); fetchDashboardStats();
+        fetchEnrollments(); fetchAdminPayments(); fetchDashboardStats(); notifyBadgesChanged();
       } else { toast.error(res.data?.message || "Action failed"); }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Action failed";
@@ -1493,6 +1517,7 @@ export default function AdminDashboard() {
         toast.success(verified ? "Payment verified." : "Payment rejected.");
         fetchAdminPayments();
         fetchEnrollments();
+        notifyBadgesChanged();
         fetchUsers();
         fetchDashboardStats();
       } else {
@@ -1598,22 +1623,6 @@ export default function AdminDashboard() {
 
   const handleArchiveUser = (adminUser: AdminUser) => {
     setPendingUserAction({ type: "archive", user: adminUser });
-  };
-
-  // Student Remarks feature: record media/attachment consent for a student enrolled
-  // before this feature existed (User.consents[] has no wizard-driven entry for them yet).
-  const handleGrantMediaConsent = async (studentId: string, studentName: string) => {
-    try {
-      const res = await userService.grantMediaConsent(studentId);
-      if (res.data?.success) {
-        toast.success(res.data.message || `Media consent recorded for ${studentName}.`);
-      } else {
-        toast.error(res.data?.message || "Failed to record media consent.");
-      }
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to record media consent.";
-      toast.error(msg);
-    }
   };
 
   const handleUnarchiveUser = (adminUser: AdminUser, closeDetails = false) => {
@@ -1754,6 +1763,7 @@ export default function AdminDashboard() {
       if (res.data?.success) {
         toast.success("Approved. Students have been notified by email.");
         fetchAnnouncements();
+        notifyBadgesChanged();
       } else {
         const message = (res.data as { message?: string } | undefined)?.message;
         toast.error(message || "Failed to approve.");
@@ -1770,6 +1780,7 @@ export default function AdminDashboard() {
       if (res.data?.success) {
         toast.success("Rejected.");
         fetchAnnouncements();
+        notifyBadgesChanged();
       } else {
         const message = (res.data as { message?: string } | undefined)?.message;
         toast.error(message || "Failed to reject.");
@@ -2495,7 +2506,8 @@ export default function AdminDashboard() {
                           if (!enrollmentSearch.trim()) return true;
                           const q = enrollmentSearch.toLowerCase();
                           const snap = e.studentSnapshot;
-                          const eid = String(e.enrollmentId || '').toLowerCase();
+                          // Search by the permanent Student ID (what is shown) or the per-enrollment id it grew from.
+                          const eid = `${displayStudentId({ permanentStudentId: e.permanentStudentId || undefined, studentId: e.studentId || undefined, enrollmentId: e.enrollmentId })} ${e.enrollmentId || ''}`.toLowerCase();
                           const studentName = snap
                             ? `${snap.firstName || ''} ${snap.lastName || ''}`.toLowerCase()
                             : '';
@@ -2515,7 +2527,8 @@ export default function AdminDashboard() {
                           const programsLabel = packages.length > 0
                             ? packages.map((p) => p.displayName || '').join(', ')
                             : enrollment.selectedSubjects?.map((s) => s.name).join(', ') || '—';
-                          const enrollmentId = String(enrollment.enrollmentId || enrollment._id);
+                          // Permanent Student ID: constant across every renewal / added program of the same student.
+                          const enrollmentId = String(displayStudentId({ permanentStudentId: enrollment.permanentStudentId || undefined, studentId: enrollment.studentId || undefined, enrollmentId: enrollment.enrollmentId }) || enrollment._id);
                           const latestPayment = enrollment.latestPayment;
                           const payMethod = latestPayment?.paymentMethod || '';
                           const payStatus = latestPayment?.status || enrollment.paymentStatus || 'pending';
@@ -2579,10 +2592,15 @@ export default function AdminDashboard() {
 
             {/* Payments Tab - from database */}
             <TabsContent value="payments" className="space-y-6">
-              <div className="grid sm:grid-cols-4 gap-4">
+              <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="bg-card rounded-xl p-4 border border-border">
                   <p className="text-sm text-muted-foreground">Total Collected (this month)</p>
                   <p className="text-2xl font-bold text-success">₱{resolvedDashboardStats.monthlyRevenue.toLocaleString()}</p>
+                </div>
+                <div className="bg-card rounded-xl p-4 border border-border" data-testid="total-unpaid-card">
+                  <p className="text-sm text-muted-foreground">Total Unpaid</p>
+                  <p className="text-2xl font-bold text-destructive">₱{totalUnpaid.toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground mt-1">Remaining 50% owed by {pendingBalances.length} parent(s)</p>
                 </div>
                 <div className="bg-card rounded-xl p-4 border border-border">
                   <p className="text-sm text-muted-foreground">Pending Verification</p>
@@ -2684,6 +2702,53 @@ export default function AdminDashboard() {
                       </table>
                     </div>
                   </div>
+
+                  <div className="bg-card rounded-xl border border-border overflow-hidden mt-6" data-testid="pending-payments-section">
+                    <div className="p-4 border-b border-border flex items-center justify-between">
+                      <div>
+                        <h3 className="font-display font-bold text-lg text-foreground">Pending Payments</h3>
+                        <p className="text-sm text-muted-foreground">Parents who still owe the remaining 50% after enrollment.</p>
+                      </div>
+                      <span className="text-sm text-muted-foreground">{paymentsLoading ? "Loading..." : `${pendingBalances.length} parent(s)`}</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-muted">
+                          <tr>
+                            <th className="text-left p-4 text-sm font-semibold text-foreground">Parent</th>
+                            <th className="text-left p-4 text-sm font-semibold text-foreground">Account / Email</th>
+                            <th className="text-left p-4 text-sm font-semibold text-foreground">Remaining Amount Owed</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {paymentsLoading ? (
+                            <tr>
+                              <td colSpan={3} className="p-8 text-center">
+                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mx-auto" />
+                              </td>
+                            </tr>
+                          ) : pendingBalances.length === 0 ? (
+                            <tr>
+                              <td colSpan={3} className="p-8 text-center text-muted-foreground">No parents have an outstanding balance.</td>
+                            </tr>
+                          ) : (
+                            pendingBalances.map((row) => (
+                              <tr key={row.parentId || row.parentEmail} className="hover:bg-muted/50 transition-colors">
+                                <td className="p-4">
+                                  <p className="font-medium text-foreground">{row.parentName}</p>
+                                  {row.children.length > 0 && (
+                                    <p className="text-xs text-muted-foreground">{row.children.join(", ")}</p>
+                                  )}
+                                </td>
+                                <td className="p-4 text-muted-foreground">{row.parentEmail || "—"}</td>
+                                <td className="p-4 font-semibold text-foreground">₱{row.remaining.toLocaleString()}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="history" className="mt-0">
@@ -2703,7 +2768,7 @@ export default function AdminDashboard() {
                             <th className="text-left p-4 text-sm font-semibold text-foreground">Submitted</th>
                             <th className="text-left p-4 text-sm font-semibold text-foreground">Reviewed</th>
                             <th className="text-left p-4 text-sm font-semibold text-foreground">Status</th>
-                            <th className="text-left p-4 text-sm font-semibold text-foreground">Proof / Notes</th>
+                            <th className="text-left p-4 text-sm font-semibold text-foreground">View Proof</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
@@ -2767,9 +2832,7 @@ export default function AdminDashboard() {
                                         <p className="max-w-[240px] break-all text-xs">TX: {payment.blockchainPayment.transactionHash}</p>
                                       ) : payment.gcashDetails?.transactionId ? (
                                         <p className="max-w-[240px] break-all text-xs">GCash ID: {payment.gcashDetails.transactionId}</p>
-                                      ) : (
-                                        <p className="text-xs">No proof uploaded.</p>
-                                      )}
+                                      ) : null}
                                     </div>
                                   </td>
                                 </tr>
@@ -3679,28 +3742,6 @@ export default function AdminDashboard() {
 
             {/* Users Tab */}
             <TabsContent value="users" className="space-y-6">
-              {/* User Summary */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div className="bg-card rounded-xl p-4 border border-border flex items-center gap-4">
-                  <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <GraduationCap className="h-6 w-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-foreground">{usersLoading ? "—" : activeUsers.filter(u => u.role === "student").length}</p>
-                    <p className="text-sm text-muted-foreground">Students</p>
-                  </div>
-                </div>
-                <div className="bg-card rounded-xl p-4 border border-border flex items-center gap-4">
-                  <div className="h-12 w-12 rounded-lg bg-info/10 flex items-center justify-center">
-                    <BookOpen className="h-6 w-6 text-info" />
-                  </div>
-                  <div>
-                    <p className="text-2xl font-bold text-foreground">{usersLoading ? "—" : activeUsers.filter(u => u.role === "tutor").length}</p>
-                    <p className="text-sm text-muted-foreground">Tutors</p>
-                  </div>
-                </div>
-              </div>
-
               <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="p-4 border-b border-border flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
@@ -3786,10 +3827,34 @@ export default function AdminDashboard() {
                           const initials = name !== "—" ? name.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—";
                           const status = u.isArchived ? "archived" : u.isActive ? "active" : "inactive";
                           const userImg = u.profileImage ? `${uploadsBaseUrl}/uploads/${u.profileImage}` : null;
+                          const isParentRow = u.role === "parent";
+                          const isExpanded = isParentRow && expandedParentIds.includes(u._id);
+                          const kids = parentChildren[u._id] || [];
                           return (
-                            <tr key={u._id} className="hover:bg-muted/50 transition-colors">
+                            <Fragment key={u._id}>
+                            <tr
+                              className={`hover:bg-muted/50 transition-colors ${isParentRow ? "cursor-pointer" : ""}`}
+                              {...(isParentRow
+                                ? {
+                                    role: "button",
+                                    tabIndex: 0,
+                                    "aria-expanded": isExpanded,
+                                    "data-testid": "parent-row",
+                                    onClick: () => toggleParentRow(u._id),
+                                    onKeyDown: (e: React.KeyboardEvent) => {
+                                      if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                                        e.preventDefault();
+                                        toggleParentRow(u._id);
+                                      }
+                                    },
+                                  }
+                                : {})}
+                            >
                               <td className="p-4">
                                 <div className="flex items-center gap-3">
+                                  {isParentRow && (
+                                    <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                                  )}
                                   <UserAvatar src={userImg} fallback={initials} size={8} />
                                   <span className="font-medium text-foreground">{name}</span>
                                 </div>
@@ -3820,7 +3885,7 @@ export default function AdminDashboard() {
                                   )}
                                 </div>
                               </td>
-                              <td className="p-4">
+                              <td className="p-4" onClick={(e) => e.stopPropagation()}>
                                 <div className="flex gap-1">
                                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast.info(`Emailing ${name}...`)}>
                                     <Mail className="h-4 w-4" />
@@ -3828,17 +3893,6 @@ export default function AdminDashboard() {
                                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast.info(`Viewing ${name}'s profile...`)}>
                                     <UserCheck className="h-4 w-4" />
                                   </Button>
-                                  {u.role === "student" && (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-8 w-8"
-                                      title="Grant media/attachment consent (Student Remarks)"
-                                      onClick={() => { void handleGrantMediaConsent(u._id, name); }}
-                                    >
-                                      <FileText className="h-4 w-4" />
-                                    </Button>
-                                  )}
                                   <Button
                                     variant="ghost"
                                     size="icon"
@@ -3853,6 +3907,25 @@ export default function AdminDashboard() {
                                 </div>
                               </td>
                             </tr>
+                            {isExpanded && (
+                              <tr className="bg-muted/30" data-testid="parent-children-row">
+                                <td colSpan={6} className="px-4 py-3 pl-16">
+                                  {kids.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No children on file for this parent.</p>
+                                  ) : (
+                                    <ul className="space-y-1.5">
+                                      {kids.map((kid) => (
+                                        <li key={`${kid.studentId}-${kid.name}`} className="flex flex-wrap items-center gap-x-3 text-sm">
+                                          <span className="font-medium text-foreground">{kid.name}</span>
+                                          <span className="font-mono text-xs text-muted-foreground">Student ID: {kid.studentId || "—"}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                            </Fragment>
                           );
                         })
                       )}
@@ -5011,7 +5084,7 @@ export default function AdminDashboard() {
               <div className="space-y-5">
                 {/* Status badge */}
                 <div className="flex items-center gap-3">
-                  {e.enrollmentId && <span className="font-mono font-bold text-foreground">{String(e.enrollmentId)}</span>}
+                  {(e.permanentStudentId || e.studentId || e.enrollmentId) && <span className="font-mono font-bold text-foreground">{displayStudentId({ permanentStudentId: e.permanentStudentId || undefined, studentId: e.studentId || undefined, enrollmentId: e.enrollmentId })}</span>}
                   <span className={`text-xs px-2 py-1 rounded-full font-medium ${sc}`}>{e.status}</span>
                   {e.allowResubmission && <span className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-800 font-medium">Resubmission Allowed</span>}
                 </div>
@@ -5069,7 +5142,7 @@ export default function AdminDashboard() {
                     <>
                       <p>{[snap.firstName, snap.lastName].filter(Boolean).join(' ') || '—'}</p>
                       {snap.birthdate && <p className="text-muted-foreground">Born: {new Date(snap.birthdate).toLocaleDateString('en-PH')} · Age: {snap.computedAge ? `${snap.computedAge.toFixed(1)} yrs` : '—'}</p>}
-                      {e.studentId && <p className="text-muted-foreground">Student ID: <span className="font-mono font-semibold text-foreground">{String(e.studentId)}</span></p>}
+                      {(e.permanentStudentId || e.studentId) && <p className="text-muted-foreground">Student ID: <span className="font-mono font-semibold text-foreground">{String(e.permanentStudentId || e.studentId)}</span></p>}
                     </>
                   ) : <p className="text-muted-foreground">—</p>}
                   {e.preferredStartDate && <p className="text-muted-foreground">Preferred start: {preferredStart}</p>}

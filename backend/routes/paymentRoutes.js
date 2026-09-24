@@ -9,6 +9,7 @@ const {
   getMyPayments,
   getAdminPayments,
   getPendingPayments,
+  getPendingBalances,
   verifyPayment
 } = require('../controllers/paymentController');
 const { protect, authorize, optionalProtect } = require('../middleware/auth');
@@ -93,6 +94,13 @@ router.get(
   protect,
   authorize('admin'),
   getPendingPayments
+);
+
+router.get(
+  '/admin/pending-balances',
+  protect,
+  authorize('admin'),
+  getPendingBalances
 );
 
 router.put(

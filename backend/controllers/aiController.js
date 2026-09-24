@@ -5353,8 +5353,8 @@ async function buildParentEnrollmentContext(parentId, message) {
       || 'No programs listed';
     return [
       `Child: ${childDisplayName(e)}`,
-      `Enrollment reference: ${e.enrollmentId || 'Not available'}`,
-      `Student ID: ${e.studentId || 'Not yet assigned'}`,
+      `Enrollment reference: ${e.permanentStudentId || e.enrollmentId || 'Not available'}`,
+      `Student ID: ${e.permanentStudentId || e.studentId || 'Not yet assigned'}`,
       `Enrollment status: ${formatStatusLabel(e.status)}`,
       `Payment status: ${formatStatusLabel(e.paymentStatus)}`,
       `Programs / subjects: ${programs}`,
@@ -5396,7 +5396,7 @@ async function buildParentPaymentContext(parentId, message) {
     const latest = payments[0];
     blocks.push([
       `Child: ${childDisplayName(e)}`,
-      `Enrollment reference: ${e.enrollmentId || 'Not available'}`,
+      `Enrollment reference: ${e.permanentStudentId || e.enrollmentId || 'Not available'}`,
       `Enrollment payment status: ${formatStatusLabel(e.paymentStatus)}`,
       `Total fee: ${formatCurrency(e.totalFee)}`,
       latest

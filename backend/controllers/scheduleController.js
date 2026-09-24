@@ -23,6 +23,7 @@ const {
 } = require('../utils/sessionTypeManager');
 const {
   getProgramPolicy,
+  resolveProgramCode,
   validateTimeWindow,
   validateTutorCount,
   validatePlaygroupChildCount,
@@ -32,6 +33,7 @@ const {
 } = require('../utils/schedulingPolicy');
 const { matchesParentPreference, resolvePreferredDays } = require('../utils/schedulePreferences');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
+const { permanentIdOf } = require('../utils/studentIdentity');
 const { isRoomDoubleBooked } = require('../utils/weeklySchedulingUtils');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
@@ -205,11 +207,33 @@ async function ensureStudentUserForEnrollment(enrollmentDoc) {
     const existing = await User.findOne({ _id: enrollmentDoc.student, role: 'student', deletedAt: null });
     if (existing) return existing;
   }
+  // A Renew / Add Program enrollment shares its child's permanent Student ID with
+  // the child's earlier enrollment(s) — reuse that enrollment's student User rather
+  // than creating a second record for the same child.
+  const permanentId = permanentIdOf(enrollmentDoc);
+  if (permanentId && enrollmentDoc.parent) {
+    const sibling = await Enrollment.findOne({
+      _id: { $ne: enrollmentDoc._id },
+      parent: enrollmentDoc.parent,
+      permanentStudentId: permanentId,
+      student: { $ne: null },
+    }).select('student').lean();
+    const siblingUser = sibling
+      ? await User.findOne({ _id: sibling.student, role: 'student', deletedAt: null })
+      : null;
+    if (siblingUser) {
+      enrollmentDoc.student = siblingUser._id;
+      if (typeof enrollmentDoc.save === 'function') await enrollmentDoc.save();
+      else await Enrollment.findByIdAndUpdate(enrollmentDoc._id, { student: siblingUser._id });
+      return siblingUser;
+    }
+  }
   const snap = enrollmentDoc.studentSnapshot || {};
   const email = `child.${enrollmentDoc._id}@students.beebright.internal`;
   let user = await User.findOne({ email });
   if (!user) {
     user = await User.create({
+      studentId: permanentId || null,
       firstName: snap.firstName || 'Student',
       middleName: snap.middleName || '',
       lastName: snap.lastName || 'Child',
@@ -2355,6 +2379,116 @@ const getMySessions = async (req, res) => {
   }
 };
 
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+function formatClock12(hhmm) {
+  const [h, m] = String(hhmm || '').split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return String(hhmm || '');
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+// "9:00–10:00 AM" (shared suffix collapsed), or "11:30 AM–1:00 PM" across noon.
+function formatClockRange(start, end) {
+  const s = formatClock12(start);
+  const e = formatClock12(end);
+  return s.slice(-2) === e.slice(-2) ? `${s.slice(0, -3)}–${e}` : `${s}–${e}`;
+}
+
+// Weekdays grouped by identical time range: "Mon/Tue/Wed, 9:00–10:00 AM • Fri, 2:00–3:00 PM".
+function summarizeSchedulePattern(schedules) {
+  const byRange = new Map();
+  for (const s of schedules) {
+    if (!s.date || !s.startTime || !s.endTime) continue;
+    const range = formatClockRange(s.startTime, s.endTime);
+    if (!byRange.has(range)) byRange.set(range, new Set());
+    byRange.get(range).add(new Date(s.date).getUTCDay());
+  }
+  return [...byRange.entries()]
+    .map(([range, days]) => `${WEEKDAY_ORDER.filter((d) => days.has(d)).map((d) => WEEKDAY_SHORT[d]).join('/')}, ${range}`)
+    .join(' • ');
+}
+
+// @desc    Tutor "My Students" cards: one per student, with the program(s) THIS tutor
+//          handles for them, their permanent Student ID and a schedule summary.
+// @route   GET /api/schedules/my-students
+// @access  Private (Tutor)
+const getMyStudentCards = async (req, res) => {
+  try {
+    if (req.user.role !== 'tutor') {
+      return res.status(403).json({ success: false, message: 'Only tutors can access their students' });
+    }
+    const schedules = await Schedule.find({ $or: [{ tutor: req.user.id }, { tutors: req.user.id }] })
+      .populate('student', 'firstName lastName middleName')
+      .populate('students', 'firstName lastName middleName')
+      .populate('subject', 'name code')
+      .lean();
+
+    // student User id -> { user, schedules[], programCodes:Set, subjectNames:Set }
+    const byStudent = new Map();
+    for (const s of schedules) {
+      const people = [s.student, ...(Array.isArray(s.students) ? s.students : [])].filter(Boolean);
+      for (const p of people) {
+        const id = String(p._id);
+        if (!byStudent.has(id)) byStudent.set(id, { user: p, schedules: [], programCodes: new Set(), subjectNames: new Set() });
+        const entry = byStudent.get(id);
+        entry.schedules.push(s);
+        const code = resolveProgramCode(s.subject);
+        if (code) entry.programCodes.add(code);
+        if (s.subject?.name) entry.subjectNames.add(s.subject.name);
+      }
+    }
+
+    const enrollments = byStudent.size
+      ? await Enrollment.find({ student: { $in: [...byStudent.keys()] }, status: { $nin: ['cancelled', 'rejected', 'draft'] } })
+          .select('student permanentStudentId enrollmentId studentId packages')
+          .lean()
+      : [];
+    const enrollmentsByStudent = new Map();
+    for (const e of enrollments) {
+      const k = String(e.student);
+      if (!enrollmentsByStudent.has(k)) enrollmentsByStudent.set(k, []);
+      enrollmentsByStudent.get(k).push(e);
+    }
+
+    const todayMs = Date.now() - 24 * 60 * 60 * 1000;
+    // One card per CHILD: legacy duplicate student Users of the same child collapse on
+    // their permanent Student ID.
+    const cards = new Map();
+    for (const [id, entry] of byStudent) {
+      const enr = enrollmentsByStudent.get(id) || [];
+      const studentId = permanentIdOf(enr[0]) || null;
+      const programs = [];
+      for (const e of enr) {
+        for (const pkg of e.packages || []) {
+          const code = String(pkg.programCode || '').toUpperCase();
+          if (pkg.displayName && entry.programCodes.has(code) && !programs.includes(pkg.displayName)) programs.push(pkg.displayName);
+        }
+      }
+      if (programs.length === 0) programs.push(...entry.subjectNames);
+
+      const upcoming = entry.schedules.filter((s) => new Date(s.date).getTime() >= todayMs);
+      const scheduleSummary = summarizeSchedulePattern(upcoming.length ? upcoming : entry.schedules);
+      const name = [entry.user.firstName, entry.user.lastName].filter(Boolean).join(' ') || 'Student';
+
+      const key = studentId || `user-${id}`;
+      const existing = cards.get(key);
+      if (existing) {
+        for (const p of programs) if (!existing.programs.includes(p)) existing.programs.push(p);
+        continue;
+      }
+      cards.set(key, { studentUserId: id, name, programs, studentId, schedule: scheduleSummary });
+    }
+
+    res.status(200).json({
+      success: true,
+      students: [...cards.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to fetch students' });
+  }
+};
+
 // @desc    Get schedules for current user (student) – my classes
 // @route   GET /api/schedules/student/my-classes
 // @access  Private (Student)
@@ -3445,6 +3579,9 @@ module.exports = {
   listSchedules,
   deleteSchedule,
   getMySessions,
+  getMyStudentCards,
+  summarizeSchedulePattern,
+  ensureStudentUserForEnrollment,
   getStudentClasses,
   markAttendance,
   assignSubstituteTutor,

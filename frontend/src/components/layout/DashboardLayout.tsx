@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -27,6 +27,8 @@ import { UserRole } from "@/contexts/AuthContext";
 import { useAuth } from "@/hooks/useAuth";
 import { LogoutConfirmDialog } from "@/components/layout/LogoutConfirmDialog";
 import { useOpenRequestsCount } from "@/lib/escalations";
+import { useNavBadges, NAV_BADGE_KEYS, SEEN_BADGE_KEYS } from "@/lib/navBadges";
+import { useSelectedChild } from "@/hooks/useSelectedChild";
 import beeMascot from "@/assets/bee-mascot.png";
 
 interface DashboardLayoutProps {
@@ -117,24 +119,58 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   // Pending support-request count — shown as a badge on the "Requests" nav item
   // (replaces the old top-of-dashboard notification bell). Hook must run before any early return.
   const requestsCount = useOpenRequestsCount(isAdminRole);
+  // Red count badges on specific sidebar items (parent / tutor / admin). Hook must run before any early return.
+  // Parent badges are scoped to the ONE shared selected child (see SelectedChildContext).
+  const { activeChildId, loading: childrenLoading } = useSelectedChild();
+  const isParentRole = user?.role === "parent";
+  const { badges, markSeen } = useNavBadges(user?.role, isParentRole ? activeChildId : "", !isParentRole || !childrenLoading);
+
+  const badgeKeyFor = (itemName: string) => (user ? NAV_BADGE_KEYS[user.role]?.[itemName] : undefined);
+  const isActive = (href: string) => {
+    if (href.includes("#")) {
+      return location.pathname + location.hash === href;
+    }
+    return location.pathname === href && !location.hash;
+  };
+
+  // Opening a "new since last visit" section clears its badge — including when items
+  // arrive while the user is already looking at that section.
+  const activeNavItem = user ? navigationByRole[user.role]?.find((item) => isActive(item.href)) : undefined;
+  const activeBadgeKey = activeNavItem ? badgeKeyFor(activeNavItem.name) : undefined;
+  const activeSeenCount = activeBadgeKey ? badges[activeBadgeKey] || 0 : 0;
+  const lastOpenedKey = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const isSeenType = Boolean(user && activeBadgeKey && SEEN_BADGE_KEYS[user.role]?.includes(activeBadgeKey));
+    if (!isSeenType || !activeBadgeKey) { lastOpenedKey.current = undefined; return; }
+    const openedKey = `${activeBadgeKey}@${isParentRole ? activeChildId : ""}`;
+    if (lastOpenedKey.current !== openedKey || activeSeenCount > 0) {
+      lastOpenedKey.current = openedKey;
+      void markSeen(activeBadgeKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBadgeKey, activeSeenCount, user?.role, activeChildId]);
 
   if (!user) return null;
 
   const navigation = navigationByRole[user.role];
   const title = dashboardTitles[user.role];
   const overviewHref = navigation[0]?.href || "/";
-  const requestsBadge = (item: { href: string }) =>
-    isAdminRole && item.href.endsWith("/escalations") && requestsCount > 0 ? (
-      <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground">
-        {requestsCount > 99 ? "99+" : requestsCount}
+  const countBadge = (count: number, testId: string) =>
+    count > 0 ? (
+      <span
+        data-testid={testId}
+        aria-label={`${count} new`}
+        className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground"
+      >
+        {count > 99 ? "99+" : count}
       </span>
     ) : null;
 
-  const isActive = (href: string) => {
-    if (href.includes("#")) {
-      return location.pathname + location.hash === href;
-    }
-    return location.pathname === href && !location.hash;
+  // Requests keeps its own count (open support requests); every other badge comes from /notifications/badges.
+  const requestsBadge = (item: { name: string; href: string }) => {
+    if (isAdminRole && item.href.endsWith("/escalations")) return countBadge(requestsCount, "nav-badge-requests");
+    const key = badgeKeyFor(item.name);
+    return key ? countBadge(badges[key] || 0, `nav-badge-${key}`) : null;
   };
 
   const handleLogout = () => {

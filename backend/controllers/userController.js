@@ -542,40 +542,39 @@ const permanentlyDeleteUser = async (req, res) => {
   }
 };
 
-// @desc    Record media/attachment consent for a student who has none on file yet
-//          (e.g. enrolled before the Student Remarks feature existed). Reuses the same
-//          User.consents[] shape the enrollment wizard writes to for every other
-//          consent item — see BeeBright Student Remarks Spec v2.
-// @route   POST /api/users/:id/media-consent
+// @desc    Every parent's children (name + permanent Student ID), keyed by parent id
+// @route   GET /api/users/parent-children
 // @access  Private (Admin)
-const grantMediaConsent = async (req, res) => {
+const getParentChildren = async (req, res) => {
   try {
-    const student = await User.findOne({ _id: req.params.id, role: 'student' });
-    if (!student) {
-      return res.status(404).json({ success: false, message: 'Student not found' });
-    }
-    const alreadyGranted = (student.consents || []).some((c) => c.name === 'media_consent');
-    if (!alreadyGranted) {
-      student.consents = [...(student.consents || []), { name: 'media_consent', version: '1.0', acceptedAt: new Date() }];
-      await student.save();
+    const enrollments = await Enrollment.find({
+      parent: { $ne: null },
+      status: { $nin: ['cancelled', 'rejected', 'draft'] },
+    })
+      .select('parent enrollmentId permanentStudentId studentId studentSnapshot createdAt')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // parentId -> childKey -> { name, studentId }: one entry per CHILD, so Renew / Add
+    // Program enrollments (same permanent Student ID) never list a child twice.
+    const byParent = {};
+    for (const e of enrollments) {
+      const parentId = String(e.parent);
+      const studentId = e.permanentStudentId || e.studentId || e.enrollmentId || '';
+      const key = studentId || String(e._id);
+      byParent[parentId] = byParent[parentId] || new Map();
+      if (byParent[parentId].has(key)) continue;
+      const name = [e.studentSnapshot?.firstName, e.studentSnapshot?.lastName].filter(Boolean).join(' ') || 'Child';
+      byParent[parentId].set(key, { name, studentId });
     }
 
-    logAudit({
-      req,
-      userId: req.user.id,
-      action: 'Grant Media Consent',
-      module: 'User Management',
-      description: `Admin recorded media/attachment consent for student ${student._id}`,
-      status: 'SUCCESS',
-      metadata: { studentId: String(student._id), alreadyGranted },
-    }).catch(() => {});
-
-    res.status(200).json({
-      success: true,
-      message: alreadyGranted ? 'Media consent was already on record.' : 'Media consent recorded.',
-    });
+    const children = {};
+    for (const [parentId, map] of Object.entries(byParent)) {
+      children[parentId] = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    res.status(200).json({ success: true, children });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message || 'Failed to record media consent' });
+    res.status(500).json({ success: false, message: error.message || 'Failed to load children' });
   }
 };
 
@@ -586,5 +585,5 @@ module.exports = {
   deleteUser,
   unarchiveUser,
   permanentlyDeleteUser,
-  grantMediaConsent,
+  getParentChildren,
 };

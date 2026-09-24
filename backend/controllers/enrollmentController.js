@@ -29,6 +29,7 @@ const Schedule = require('../models/Schedule');
 const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
 const { PROGRAM_POLICIES } = require('../utils/schedulingPolicy');
 const { canTutorHandleSchedule } = require('./scheduleController');
+const { permanentIdOf, findRenewalSource } = require('../utils/studentIdentity');
 
 // ── Constants ────────────────────────────────────────────────────────────
 const PROOF_DIR = path.join(__dirname, '..', 'uploads', 'payments');
@@ -166,7 +167,7 @@ const verifyEnrollmentEmailCode = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 const submitEnrollment = async (req, res) => {
   try {
-    const body = req.body || {};
+    const body = { ...(req.body || {}) };
 
     // ── Resolve parent identity ──
     let parentId = req.user?._id || null;
@@ -195,6 +196,23 @@ const submitEnrollment = async (req, res) => {
           message: 'That mobile number was just registered to another account. Please go back to the Account step and use a different number.',
         });
       }
+    }
+
+    // ── Renew / Add Program for an EXISTING child ──
+    // The child keeps their permanent Student ID and identity: the stored snapshot
+    // (name + birthdate) overrides whatever the browser sent, and the new enrollment
+    // inherits `permanentStudentId` / the student User instead of minting new ones.
+    let renewalSource = null;
+    if (body.renewalOfEnrollmentId) {
+      renewalSource = await findRenewalSource(body.renewalOfEnrollmentId, parentId);
+      if (!renewalSource) {
+        return res.status(400).json({ success: false, message: 'The child you are adding a program for could not be found on your account.' });
+      }
+      const snap = renewalSource.studentSnapshot || {};
+      body.studentFirstName = snap.firstName || '';
+      body.studentMiddleName = snap.middleName || '';
+      body.studentLastName = snap.lastName || '';
+      body.birthdate = snap.birthdate ? new Date(snap.birthdate).toISOString().slice(0, 10) : body.birthdate;
     }
 
     // ── Validate packages ──
@@ -342,6 +360,9 @@ const submitEnrollment = async (req, res) => {
     const enrollment = new Enrollment({
       enrollmentId,
       parent: parentId,
+      student: renewalSource?.student || null,
+      permanentStudentId: renewalSource ? permanentIdOf(renewalSource) : enrollmentId,
+      renewalOf: renewalSource?._id || null,
       studentSnapshot: snapshot,
       packages: canonicalPackages,
       preferredStartDate,
@@ -397,7 +418,7 @@ const submitEnrollment = async (req, res) => {
       sendEnrollmentConfirmationEmail(email, {
         parentName,
         studentName: `${snapshot.firstName} ${snapshot.lastName}`,
-        enrollmentId,
+        enrollmentId: permanentIdOf(enrollment),
         amountDue,
         paymentMethod,
       }).catch(() => {});
@@ -411,6 +432,7 @@ const submitEnrollment = async (req, res) => {
       success: true,
       message: 'Enrollment submitted successfully.',
       enrollmentId,
+      permanentStudentId: enrollment.permanentStudentId,
       enrollmentDbId: String(enrollment._id),
       paymentId: String(payment._id),
       amountDue,
@@ -421,6 +443,66 @@ const submitEnrollment = async (req, res) => {
   } catch (err) {
     console.error('submitEnrollment error:', err);
     return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Enrollment submission failed.' });
+  }
+};
+
+// ── Parent sets a child's profile picture  PUT /api/enrollments/child-photo ─
+// Body: { childKey, image } — childKey is the child's permanent Student ID (or, for
+// an enrollment not yet backfilled, its _id). Stored on every enrollment of that
+// child so it survives Renew / Add Program.
+const CHILD_PHOTO_DIR = path.join(__dirname, '..', 'uploads', 'student-avatars');
+const CHILD_PHOTO_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+
+function detectChildPhotoMime(buf) {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+const setChildProfilePhoto = async (req, res) => {
+  try {
+    if (req.user?.role !== 'parent') {
+      return res.status(403).json({ success: false, message: 'Only a parent can set a child\'s profile picture.' });
+    }
+    const childKey = String(req.body?.childKey || '').trim();
+    const image = req.body?.image;
+    if (!childKey) return res.status(400).json({ success: false, message: 'childKey is required.' });
+    if (typeof image !== 'string') return res.status(400).json({ success: false, message: 'Please provide an image (base64 data URL).' });
+
+    const match = image.match(/^data:image\/(?:png|jpe?g|webp);base64,(.+)$/i);
+    if (!match) return res.status(400).json({ success: false, message: 'Please upload a JPG, PNG, or WEBP image.' });
+    const buf = Buffer.from(match[1], 'base64');
+    if (buf.length > MAX_REQUIREMENT_BYTES) return res.status(400).json({ success: false, message: 'Image size must be under 5MB.' });
+    const mime = detectChildPhotoMime(buf);
+    if (!mime) return res.status(400).json({ success: false, message: 'Image content is not a valid JPG, PNG, or WEBP file.' });
+
+    const childFilter = { parent: req.user._id, $or: [{ permanentStudentId: childKey }] };
+    if (mongoose.Types.ObjectId.isValid(childKey)) childFilter.$or.push({ _id: childKey });
+    const enrollments = await Enrollment.find(childFilter).select('_id studentProfileImage').lean();
+    if (enrollments.length === 0) return res.status(404).json({ success: false, message: 'Child not found on your account.' });
+
+    if (!fs.existsSync(CHILD_PHOTO_DIR)) fs.mkdirSync(CHILD_PHOTO_DIR, { recursive: true });
+    const filename = `${String(childKey).replace(/[^\w-]/g, '')}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${CHILD_PHOTO_EXT[mime]}`;
+    fs.writeFileSync(path.join(CHILD_PHOTO_DIR, filename), buf);
+    const studentProfileImage = `/uploads/student-avatars/${filename}`;
+
+    await Enrollment.updateMany({ _id: { $in: enrollments.map((e) => e._id) } }, { $set: { studentProfileImage } });
+
+    for (const old of new Set(enrollments.map((e) => e.studentProfileImage).filter(Boolean))) {
+      if (String(old).startsWith('/uploads/student-avatars/')) {
+        fs.unlink(path.join(CHILD_PHOTO_DIR, path.basename(old)), () => {});
+      }
+    }
+
+    logAudit({ req, userId: req.user._id, action: 'Child Profile Image Update', module: 'Enrollment',
+      description: `Parent updated profile picture for child ${childKey}`, status: 'SUCCESS' }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Student profile picture updated.', studentProfileImage });
+  } catch (err) {
+    console.error('setChildProfilePhoto error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update the profile picture.' });
   }
 };
 
@@ -534,6 +616,8 @@ const adminWalkInEnroll = async (req, res) => {
     const enrollment = new Enrollment({
       enrollmentId,
       parent: parentUser._id,
+      studentId: enrollmentId,
+      permanentStudentId: enrollmentId,
       studentSnapshot: snapshot,
       packages: canonicalPackages,
       preferredStartDate,
@@ -582,7 +666,7 @@ const adminWalkInEnroll = async (req, res) => {
       sendEnrollmentApprovedEmail(parentFull.email, {
         parentName: `${parentFull.firstName} ${parentFull.lastName}`,
         studentName: `${snapshot.firstName} ${snapshot.lastName}`,
-        enrollmentId: enrollment.enrollmentId,
+        enrollmentId: permanentIdOf(enrollment),
         studentId: enrollment.studentId,
       }).catch(() => {});
     }
@@ -681,8 +765,8 @@ const submitPaymentProof = async (req, res) => {
       const { sendEmail } = require('../utils/emailService');
       sendEmail({
         to: parentUser.email,
-        subject: `Bee Bright — Payment Proof Received (${enrollment.enrollmentId})`,
-        html: `<p>Hi ${parentUser.firstName}, we received your payment proof for enrollment ${enrollment.enrollmentId}. Our team will verify it within 1–2 business days.</p>`,
+        subject: `Bee Bright — Payment Proof Received (${permanentIdOf(enrollment)})`,
+        html: `<p>Hi ${parentUser.firstName}, we received your payment proof for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
       }, 'proof received notification').catch(() => {});
     }
 
@@ -757,8 +841,8 @@ const submitRemainingPaymentProof = async (req, res) => {
       const { sendEmail } = require('../utils/emailService');
       sendEmail({
         to: parentUser.email,
-        subject: `Bee Bright — Remaining Balance Proof Received (${enrollment.enrollmentId})`,
-        html: `<p>Hi ${parentUser.firstName}, we received your proof of payment for the remaining balance on enrollment ${enrollment.enrollmentId}. Our team will verify it within 1–2 business days.</p>`,
+        subject: `Bee Bright — Remaining Balance Proof Received (${permanentIdOf(enrollment)})`,
+        html: `<p>Hi ${parentUser.firstName}, we received your proof of payment for the remaining balance for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
       }, 'remaining proof received notification').catch(() => {});
     }
 
@@ -1022,7 +1106,7 @@ const adminVerifyPayment = async (req, res) => {
       sendPaymentVerifiedEmail(parentUser.email, {
         parentName: `${parentUser.firstName} ${parentUser.lastName}`,
         studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
-        enrollmentId: enrollment.enrollmentId,
+        enrollmentId: permanentIdOf(enrollment),
       }).catch(() => {});
     }
 
@@ -1046,19 +1130,13 @@ const adminApproveEnrollment = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot approve enrollment with status: ${enrollment.status}` });
     }
 
-    // ── Generate Student ID ──────────────────────────────────────────────
-    // The student ID is stored on the Enrollment itself.
-    // The child is NOT a separate login account — the Parent account is the only user.
+    // ── Student ID ────────────────────────────────────────────────────────
+    // The Student ID is the child's PERMANENT ID (the BB-… enrollmentId of their
+    // first enrollment) — never a fresh one per approval, so Renew / Add Program
+    // approvals keep the child's original ID. See utils/studentIdentity.js.
     const now = new Date();
-    const y = now.getFullYear();
-    const mo = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    // Count existing approved enrollments to generate a sequential ID
-    const approvedCount = await Enrollment.countDocuments({
-      status: { $in: ['approved', 'active'] },
-      studentId: { $exists: true, $ne: null }
-    });
-    const studentId = `S-${y}${mo}${d}-${String(approvedCount + 1).padStart(4, '0')}`;
+    const studentId = permanentIdOf(enrollment);
+    enrollment.permanentStudentId = studentId;
 
     // ── Store Student ID on the Enrollment ────────────────────────────────
     enrollment.studentId = studentId;
@@ -1084,7 +1162,7 @@ const adminApproveEnrollment = async (req, res) => {
       sendEnrollmentApprovedEmail(parentFull.email, {
         parentName: `${parentFull.firstName} ${parentFull.lastName}`,
         studentName: `${snap.firstName || ''} ${snap.lastName || ''}`.trim(),
-        enrollmentId: enrollment.enrollmentId,
+        enrollmentId: permanentIdOf(enrollment),
         studentId,
       }).catch(() => {});
     }
@@ -1131,7 +1209,7 @@ const adminRejectEnrollment = async (req, res) => {
       sendEnrollmentRejectedEmail(parentUser.email, {
         parentName: `${parentUser.firstName} ${parentUser.lastName}`,
         studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
-        enrollmentId: enrollment.enrollmentId,
+        enrollmentId: permanentIdOf(enrollment),
         reason: enrollment.rejectionReason,
         allowResubmission: !!allowResubmission,
       }).catch(() => {});
@@ -1306,5 +1384,6 @@ module.exports = {
   verifyPayment,
   adminAddStudent,
   adminWalkInEnroll,
+  setChildProfilePhoto,
   getPaymentInstructions,
 };

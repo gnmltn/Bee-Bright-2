@@ -2,8 +2,8 @@ import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import beeMascot from "@/assets/bee-mascot.png";
-import heroStudents from "@/assets/hero-students.jpg";
+import beeLogo from "@/assets/bee-logo.png";
+import heroKids from "@/assets/hero-kids-tutors.jpg";
 
 export function HeroSection() {
   return (
@@ -67,9 +67,9 @@ export function HeroSection() {
             {/* Main image */}
             <div className="relative rounded-2xl overflow-hidden shadow-2xl">
               <img
-                src={heroStudents}
-                alt="Students learning at Bee Bright"
-                className="w-full h-auto object-cover"
+                src={heroKids}
+                alt="Kids and tutors at Bee Bright Tutorial Center"
+                className="w-full aspect-[4/3] object-cover object-[center_30%]"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-foreground/20 to-transparent" />
             </div>
@@ -83,9 +83,9 @@ export function HeroSection() {
               <div className="relative">
                 <div className="absolute inset-0 bg-primary/20 rounded-full blur-xl" />
                 <img
-                  src={beeMascot}
-                  alt="Bee mascot"
-                  className="relative h-24 w-24 md:h-32 md:w-32 drop-shadow-xl"
+                  src={beeLogo}
+                  alt="Bee Bright Tutorial Center logo"
+                  className="relative h-24 w-24 md:h-32 md:w-32 object-contain drop-shadow-xl"
                 />
               </div>
             </motion.div>

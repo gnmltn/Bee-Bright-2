@@ -13,6 +13,7 @@ import { authService, settingsService } from "@/services/api";
 import { Switch } from "@/components/ui/switch";
 import { sanitizeName, sanitizePhoneInput } from "@/utils/validation";
 import { PasswordSecuritySection } from "@/components/auth/PasswordSecuritySection";
+import { ParentStudentInfoCard } from "@/components/parent/ParentStudentInfoCard";
 
 const gradeOptions = [
   "Toddler", "Pre-Kindergarten", "Kindergarten",
@@ -421,7 +422,11 @@ export default function ProfileSettings() {
                 <h2 className="text-lg font-semibold">{getFullName() || user.email}</h2>
                 <p className="text-sm text-muted-foreground capitalize">{user.role}</p>
                 <p className="text-sm text-muted-foreground">{user.email}</p>
-                <p className="text-xs text-muted-foreground mt-1">Click the icon to change profile picture (any image type)</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {user.role === "parent"
+                    ? "This is your own profile picture. Click the icon to change it (any image type). Your child's picture is under Student Information below."
+                    : "Click the icon to change profile picture (any image type)"}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -489,6 +494,8 @@ export default function ProfileSettings() {
             </div>
           </CardContent>
         </Card>
+
+        {user.role === "parent" && <ParentStudentInfoCard />}
 
         {/* Role-Specific Fields */}
         {user.role === "student" && (

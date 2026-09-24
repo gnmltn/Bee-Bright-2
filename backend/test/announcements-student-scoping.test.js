@@ -82,3 +82,20 @@ test('getForStudent: a parent WITH ?studentId= for a child they do NOT own is re
     assert.equal(res._status, 403);
   } finally { Enrollment.exists = origExists; }
 });
+
+test('getForStudent: admin-authored announcements always show the author as "Bee Bright Admin"; tutor-authored keep the tutor', async () => {
+  const origFind = Announcement.find;
+  const rows = [
+    { _id: 'a1', authorRole: 'admin', author: { firstName: 'Super', lastName: 'Admin' }, title: 'Holiday' },
+    { _id: 'a2', authorRole: 'tutor', author: { firstName: 'Tina', lastName: 'Reyes' }, title: 'Quiz' },
+  ];
+  Announcement.find = () => ({ sort: () => ({ populate: () => ({ lean: async () => rows }) }) });
+  try {
+    const res = mockRes();
+    await getForStudent({ user: { id: '507f1f77bcf86cd799439022', role: 'student' }, query: {} }, res);
+    assert.equal(res._status, 200);
+    const [admin, tutor] = res._body.announcements;
+    assert.deepEqual(admin.author, { firstName: 'Bee Bright', lastName: 'Admin' });
+    assert.deepEqual(tutor.author, { firstName: 'Tina', lastName: 'Reyes' });
+  } finally { Announcement.find = origFind; }
+});

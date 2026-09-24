@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { Loader2, Check, X, Paperclip, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Loader2, Check, X, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { toast } from "sonner";
-import { remarkService, userService, type RemarkItem } from "@/services/api";
+import { remarkService, type RemarkItem } from "@/services/api";
+import { notifyBadgesChanged } from "@/lib/navBadges";
 
 const TEMPLATE_LABELS: Record<string, string> = {
   toddler_observation: "Toddler Observation Note Card",
@@ -32,7 +33,6 @@ export function RemarksReviewQueue() {
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const [grantingConsent, setGrantingConsent] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -76,6 +76,7 @@ export function RemarksReviewQueue() {
         toast.success(res.data.message || "Done.");
         setSelected(null);
         load();
+        notifyBadgesChanged();
       } else {
         toast.error(res.data?.message || "Failed to review remark.");
       }
@@ -84,34 +85,6 @@ export function RemarksReviewQueue() {
       toast.error(msg);
     } finally {
       setActionLoading(false);
-    }
-  };
-
-  // Spec v3.1 — consent is no longer a tutor-facing blocker; it's information shown here
-  // for the admin to weigh alongside the attachment itself. The existing grant-consent
-  // action (also available from the Users tab) is surfaced directly in this dialog too,
-  // so an admin can grant it and then Approve in the same review without leaving the
-  // queue. Updates both the list and the open dialog optimistically — no need to
-  // re-fetch the whole queue just to see the flag flip.
-  const handleGrantConsent = async () => {
-    if (!selected?.student) return;
-    const studentId = selected.student._id;
-    const studentName = personName(selected.student);
-    setGrantingConsent(true);
-    try {
-      const res = await userService.grantMediaConsent(studentId);
-      if (res.data?.success) {
-        toast.success(res.data.message || `Media consent recorded for ${studentName}.`);
-        setSelected((prev) => (prev ? { ...prev, studentHasMediaConsent: true } : prev));
-        setRemarks((prev) => prev.map((r) => (r._id === selected._id ? { ...r, studentHasMediaConsent: true } : r)));
-      } else {
-        toast.error(res.data?.message || "Failed to record media consent.");
-      }
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to record media consent.";
-      toast.error(msg);
-    } finally {
-      setGrantingConsent(false);
     }
   };
 
@@ -145,11 +118,7 @@ export function RemarksReviewQueue() {
                 <p className="text-xs text-muted-foreground">{TEMPLATE_LABELS[r.templateType] || r.templateType} · {new Date(r.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${r.studentHasMediaConsent ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
-                  {r.studentHasMediaConsent ? <ShieldCheck className="h-3 w-3" /> : <ShieldAlert className="h-3 w-3" />}
-                  {r.studentHasMediaConsent ? "Consent" : "No consent"}
-                </span>
-                <Paperclip className="h-4 w-4 text-muted-foreground" />
+                {r.attachment && <Paperclip className="h-4 w-4 text-muted-foreground" aria-label="Has attachment" />}
               </div>
             </button>
           ))}
@@ -167,21 +136,6 @@ export function RemarksReviewQueue() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-3 text-sm">
-                {/* Spec v3.1 — consent is no longer enforced on the tutor; this is now the
-                    only place it matters. The admin weighs it, together with the
-                    attachment content below, to decide Approve or Reject. */}
-                <div className={`flex items-center justify-between gap-2 rounded-md border p-2 ${selected.studentHasMediaConsent ? "border-success/40 bg-success/10" : "border-warning/40 bg-warning/10"}`}>
-                  <span className={`flex items-center gap-1.5 text-xs font-medium ${selected.studentHasMediaConsent ? "text-success" : "text-warning"}`}>
-                    {selected.studentHasMediaConsent ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
-                    Consent: {selected.studentHasMediaConsent ? "Granted" : "Not on record"}
-                  </span>
-                  {!selected.studentHasMediaConsent && (
-                    <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={handleGrantConsent} disabled={grantingConsent}>
-                      {grantingConsent ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                      Grant consent
-                    </Button>
-                  )}
-                </div>
                 <div>
                   <Label className="text-xs">Activities</Label>
                   <p className="text-foreground">{selected.activities.join(", ") || "—"}</p>

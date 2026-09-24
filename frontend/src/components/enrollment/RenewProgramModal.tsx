@@ -31,6 +31,8 @@ import Step11Consent        from './steps/Step11Consent';
 import Step12Review         from './steps/Step12Review';
 
 export type RenewChildInfo = {
+  /** The child's existing enrollment (_id) — the new enrollment inherits its permanent Student ID. */
+  renewalOfEnrollmentId: string;
   studentFirstName: string;
   studentMiddleName: string;
   studentLastName: string;
@@ -85,6 +87,7 @@ export default function RenewProgramModal({ open, onOpenChange, child, onEnrolle
       guardianName: user?.guardianName || parentName,
       guardianPhone: user?.guardianPhone || parentPhone,
       guardianEmail: parentEmail,
+      renewalOfEnrollmentId: child.renewalOfEnrollmentId,
       studentFirstName: child.studentFirstName,
       studentMiddleName: child.studentMiddleName,
       studentLastName: child.studentLastName,

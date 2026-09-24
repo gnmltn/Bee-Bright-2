@@ -16,8 +16,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import PayInvoiceModal from "@/components/payment/PayInvoiceModal";
 import { enrollmentService } from "@/services/api";
 import { useAuth } from "@/hooks/useAuth";
-import { useActiveChildId } from "@/hooks/useActiveChildId";
+import { useSelectedChild } from "@/hooks/useSelectedChild";
+import { notifyBadgesChanged } from "@/lib/navBadges";
 import { downloadPaymentReceipt } from "@/lib/receiptPdf";
+import { displayStudentId } from "@/lib/children";
 
 interface PaymentRecord {
   _id: string;
@@ -47,6 +49,8 @@ interface EnrollmentItem {
   packages?: { displayName?: string; price?: number }[];
   payments?: PaymentRecord[];
   studentSnapshot?: { firstName?: string; lastName?: string };
+  permanentStudentId?: string;
+  studentId?: string;
 }
 
 // Every current write path (adminApproveEnrollment, adminVerifyPayment, the
@@ -71,7 +75,9 @@ function computeAmountPaid(payments: PaymentRecord[]): number {
 type InvoiceLike = {
   id: string;
   _id: string;
-  enrollmentId: string; // human-readable id the backend payment routes key on
+  enrollmentId: string; // per-enrollment id the backend payment routes key on — internal, never shown
+  /** The child's PERMANENT Student ID — the only ID ever displayed (invoice number, receipts). */
+  studentId: string;
   date: string;
   dueDate: string;
   items: { name: string; quantity: number; price: number }[];
@@ -89,6 +95,7 @@ const fallbackInvoices: InvoiceLike[] = [
     id: "demo-1",
     _id: "",
     enrollmentId: "",
+    studentId: "",
     date: new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }),
     dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }),
     items: [{ name: "Sample subject", quantity: 1, price: 2500 }],
@@ -118,9 +125,10 @@ function mapEnrollmentToInvoice(e: EnrollmentItem): InvoiceLike {
   const remainingBalance = Math.max(0, (e.totalFee || 0) - amountPaid);
 
   return {
-    id: e.referenceNumber || e.enrollmentId || e._id,
+    id: e.referenceNumber || displayStudentId(e) || e._id,
     _id: e._id,
     enrollmentId: e.enrollmentId || "",
+    studentId: displayStudentId(e),
     date,
     dueDate,
     items,
@@ -158,7 +166,7 @@ const statusConfig = {
 export default function StudentPayments() {
   const { user } = useAuth();
   const isParent = user?.role === "parent";
-  const [activeChildId] = useActiveChildId();
+  const { activeChildId } = useSelectedChild();
   const [invoices, setInvoices] = useState<InvoiceLike[]>(fallbackInvoices);
   // Every enrollment, unfiltered — needed to resolve which childName the
   // currently active (per-enrollment) child selection belongs to.
@@ -192,7 +200,7 @@ export default function StudentPayments() {
   // payment data together). Invoice_Display_DownPaymentBug_Receipt_
   // RemarksPolicy.pdf D. Falls back to every invoice for a single-child
   // account, a student-role account, or a stale/unset selection.
-  const activeEnrollmentForChild = isParent ? allEnrollments.find((e) => e._id === activeChildId) : undefined;
+  const activeEnrollmentForChild = isParent ? allEnrollments.find((e) => e.permanentStudentId === activeChildId || e._id === activeChildId) : undefined;
   const activeChildName = activeEnrollmentForChild?.studentSnapshot
     ? [activeEnrollmentForChild.studentSnapshot.firstName, activeEnrollmentForChild.studentSnapshot.lastName].filter(Boolean).join(" ")
     : null;
@@ -220,12 +228,13 @@ export default function StudentPayments() {
   // settled. Otherwise the original 50% down payment has nowhere to be looked up
   // again once verified, while the remaining balance is still outstanding.
   const paymentHistoryEntries = displayInvoices.flatMap((inv) => {
-    const entries: { key: string; invoiceId: string; enrollmentId: string; childName: string; label: string; amount: number; verifiedAt: string | null; referenceNumber?: string }[] = [];
+    const entries: { key: string; invoiceId: string; enrollmentId: string; studentId: string; childName: string; label: string; amount: number; verifiedAt: string | null; referenceNumber?: string }[] = [];
     if (inv.downPayment?.status === "verified") {
       entries.push({
         key: `${inv._id}-down`,
         invoiceId: inv.id,
         enrollmentId: inv.enrollmentId,
+        studentId: inv.studentId,
         childName: inv.childName,
         label: "Down Payment (50%)",
         amount: inv.downPayment.amountPaid ?? inv.downPayment.amountDue ?? inv.downPayment.amount ?? 0,
@@ -238,6 +247,7 @@ export default function StudentPayments() {
         key: `${inv._id}-remaining`,
         invoiceId: inv.id,
         enrollmentId: inv.enrollmentId,
+        studentId: inv.studentId,
         childName: inv.childName,
         label: "Remaining Balance (50%)",
         amount: inv.remainingPayment.amountPaid ?? inv.remainingPayment.amountDue ?? inv.remainingPayment.amount ?? 0,
@@ -471,7 +481,7 @@ export default function StudentPayments() {
                             if (!currentInvoice) return;
                             const latestPayment = status === "paid" ? currentInvoice.remainingPayment ?? currentInvoice.downPayment : currentInvoice.downPayment;
                             downloadPaymentReceipt({
-                              bbId: currentInvoice.enrollmentId || currentInvoice.id,
+                              bbId: currentInvoice.studentId || currentInvoice.id,
                               fullName: currentInvoice.childName,
                               amount: currentInvoice.amountPaid,
                               transactionId: latestPayment?.referenceNumber,
@@ -540,7 +550,7 @@ export default function StudentPayments() {
                             variant="outline"
                             size="sm"
                             onClick={() => downloadPaymentReceipt({
-                              bbId: entry.enrollmentId || entry.invoiceId,
+                              bbId: entry.studentId || entry.invoiceId,
                               fullName: entry.childName,
                               amount: entry.amount,
                               transactionId: entry.referenceNumber,
@@ -573,6 +583,7 @@ export default function StudentPayments() {
           onSubmitted={() => {
             setShowPayModal(false);
             loadEnrollments();
+            notifyBadgesChanged();
           }}
         />
       )}

@@ -197,10 +197,21 @@ const enrollmentSchema = new mongoose.Schema({
   approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 
-  // Generated on approval — unique identifier for this student record
-  // Format: S-YYYYMMDD-XXXX
-  // The child is NOT a separate login account. This ID lives on the enrollment.
+  // The Student ID shown to parents / tutors / admins. Equals permanentStudentId
+  // (BB-YYYYMMDD-XXXX); older enrollments approved before that change may still
+  // carry the legacy S-YYYYMMDD-XXXX value.
   studentId: { type: String, default: null },
+
+  // The child's permanent Student ID — the BB-… enrollmentId of their FIRST
+  // enrollment. Renew / Add Program creates a new Enrollment but inherits this value
+  // (and `renewalOf` points at the enrollment it renewed) so the child keeps one
+  // identity. See utils/studentIdentity.js.
+  permanentStudentId: { type: String, default: null, index: true },
+  renewalOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Enrollment', default: null },
+
+  // The child's own profile picture (set by the parent, kept in sync across every
+  // enrollment of the child). Falls back to the enrollment 2×2 photo when unset.
+  studentProfileImage: { type: String, default: null },
 
   // Pre-enrollment assessment (Academic Tutorial Kindergarten / Grade 1 only).
   // Structure is copied from AssessmentTemplate at submit time.

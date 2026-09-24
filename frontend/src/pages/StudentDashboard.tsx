@@ -43,7 +43,10 @@ import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAsse
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
 import { ContactTutorPanel } from "@/components/dashboard/ContactTutorPanel";
-import { useActiveChildId } from "@/hooks/useActiveChildId";
+import { useSelectedChild } from "@/hooks/useSelectedChild";
+import { resolveUploadUrl, displayStudentId } from "@/lib/children";
+import { remainingBalanceOf, expectedRemainingAfterDown, peso, type BalanceEnrollment } from "@/lib/balance";
+import { notifyBadgesChanged } from "@/lib/navBadges";
 
 function formatTime12h(hhmm: string) {
   if (!hhmm) return "";
@@ -135,6 +138,13 @@ function announcementCategoryLabel(category: string) {
   }[category] || category;
 }
 
+/** Center announcements always read "Bee Bright Admin" (whether an Admin or Super Admin posted it); tutor announcements keep the tutor's name. */
+function announcementAuthorLabel(a: Pick<AnnouncementItem, "author" | "authorRole">) {
+  if (a.authorRole === "admin") return "Bee Bright Admin";
+  const name = a.author ? [a.author.firstName, a.author.lastName].filter(Boolean).join(" ") : "";
+  return name || "Tutor";
+}
+
 function summarizeAnnouncement(body: string) {
   const trimmed = body.trim();
   return trimmed.length > 110 ? `${trimmed.slice(0, 107)}...` : trimmed;
@@ -146,36 +156,22 @@ export default function StudentDashboard() {
   const navigate = useNavigate();
   const isParent = user?.role === "parent";
 
-  // Parent Dashboard reframe (Final Implementation Prompt Section 2): a parent
-  // account can have multiple children; track which one is currently selected.
-  // Persisted (not plain useState) so the Payments page — a separate route —
-  // shows the same child's invoices when navigated to. See useActiveChildId.
-  const [activeChildId, setActiveChildId] = useActiveChildId();
+  // ONE shared "Viewing child" selection + enrollment list for the whole parent
+  // dashboard (Overview, Progress, Payments, Settings, sidebar badges…). See
+  // contexts/SelectedChildContext.tsx — no page keeps its own copy.
+  const {
+    enrollments,
+    setEnrollments,
+    loading: enrollmentsLoading,
+    refresh: fetchEnrollments,
+    childList: children,
+    activeChildId,
+    setActiveChildId,
+  } = useSelectedChild();
 
-  const [enrollments, setEnrollments] = useState<{
-    _id: string;
-    enrollmentId?: string;
-    status?: string;
-    studentSnapshot?: { firstName?: string; middleName?: string; lastName?: string; birthdate?: string };
-    studentId?: string;
-    /** The child's actual User._id, once one has been created (see backend
-     *  ensureStudentUserForEnrollment) — needed to fetch a parent's child's
-     *  own schedule/grades/materials. Absent until the child's first class. */
-    student?: string;
-    selectedSubjects?: { _id: string; name: string }[];
-    packages?: { displayName?: string; programCode?: string }[];
-    preEnrollmentAssessment?: PreEnrollmentAssessment | null;
-    rejectionReason?: string | null;
-    allowResubmission?: boolean;
-    healthInfo?: {
-      allergies?: string;
-      medications?: string;
-      specialNeeds?: boolean;
-      specialNeedsDetails?: string;
-      emergencyContact?: string;
-    };
-  }[]>([]);
-  const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
+  // Payment reminder popup: shown right after a child is added / a program is renewed
+  // or added, and once per browser session while a remaining 50% balance is still owed.
+  const [balancePopup, setBalancePopup] = useState<{ heading: string; lines: string[] } | null>(null);
   const [schedules, setSchedules] = useState<{
     _id: string;
     date: string;
@@ -233,56 +229,26 @@ export default function StudentDashboard() {
   });
   const [scheduleWeekStart, setScheduleWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
 
-  const fetchEnrollments = () => {
-    return enrollmentService
-      .getMyEnrollments()
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.enrollments)) {
-          setEnrollments(res.data.enrollments);
-        } else {
-          setEnrollments([]);
-        }
-      })
-      .catch(() => setEnrollments([]))
-      .finally(() => setEnrollmentsLoading(false));
-  };
-
+  // Once per browser session, if any remaining 50% balance is outstanding, say so.
   useEffect(() => {
-    fetchEnrollments();
-  }, []);
-
-  // Every enrollment record is one child. A parent may have several; a student
-  // account only ever has their own single (implicit) record.
-  const children = useMemo(
-    () =>
-      enrollments.map((e) => ({
-        key: e._id,
-        studentUserId: e.student || null,
-        name: [e.studentSnapshot?.firstName, e.studentSnapshot?.lastName].filter(Boolean).join(" ") || e.studentId || "Child",
-        status: e.status,
-      })),
-    [enrollments]
-  );
-
-  // Default to the first (most recent) child once the list loads; keep the
-  // current selection if it's still valid. Critically, do nothing while
-  // enrollments are still being fetched — on every remount (e.g. navigating
-  // back from Payments/Settings), `children` starts empty for a moment before
-  // the fetch resolves, and treating that as "genuinely zero children" was
-  // wiping the persisted selection (sessionStorage, via useActiveChildId)
-  // before it ever got a chance to be validated against the real list. See
-  // ChildSelector_AddChildModal_TutorRemarksView.pdf A.
-  useEffect(() => {
-    if (!isParent) return;
-    if (enrollmentsLoading) return;
-    if (children.length === 0) {
-      if (activeChildId) setActiveChildId("");
-      return;
+    if (!isParent || enrollmentsLoading) return;
+    const owed = enrollments.map((e) => remainingBalanceOf(e as BalanceEnrollment)).filter((r) => r > 0);
+    if (owed.length === 0) return;
+    try {
+      if (sessionStorage.getItem("bb-balance-popup-shown")) return;
+      sessionStorage.setItem("bb-balance-popup-shown", "1");
+    } catch {
+      /* storage unavailable — show it anyway */
     }
-    if (!children.some((c) => c.key === activeChildId)) {
-      setActiveChildId(children[0].key);
-    }
-  }, [isParent, children, activeChildId, enrollmentsLoading]);
+    const total = owed.reduce((a, b) => a + b, 0);
+    setBalancePopup((current) => current ?? {
+      heading: "Remaining balance due",
+      lines: [
+        `You have ${owed.length} enrollment${owed.length === 1 ? "" : "s"} with a remaining 50% balance, ${peso(total)} in total.`,
+        "Open Payments to review and pay it.",
+      ],
+    });
+  }, [isParent, enrollmentsLoading, enrollments]);
 
   const activeChild = isParent ? children.find((c) => c.key === activeChildId) : undefined;
   // For a parent, the child's real User._id (needed by the schedule/grades/
@@ -876,6 +842,7 @@ export default function StudentDashboard() {
     }
 
     setRenewChildInfo({
+      renewalOfEnrollmentId: latest._id,
       studentFirstName: snap?.firstName || '',
       studentMiddleName: snap?.middleName || '',
       studentLastName: snap?.lastName || '',
@@ -890,10 +857,32 @@ export default function StudentDashboard() {
     setIsRenewModalOpen(true);
   };
 
+  // After an enrollment is submitted, remind the parent what the remaining 50% will be.
+  const announceRemainingBalance = (enrollmentId: string, list: typeof enrollments) => {
+    const created = list.find((e) => e.enrollmentId === enrollmentId);
+    if (!created) return;
+    const remaining = expectedRemainingAfterDown(created);
+    if (remaining <= 0) return;
+    const childName = [created.studentSnapshot?.firstName, created.studentSnapshot?.lastName].filter(Boolean).join(" ") || "your child";
+    const programs = (created.packages || []).map((p) => p.displayName).filter(Boolean).join(", ");
+    setBalancePopup({
+      heading: "Remaining balance for this enrollment",
+      lines: [
+        `${childName}${programs ? ` — ${programs}` : ""}`,
+        `The remaining 50% (${peso(remaining)}) is due after half of the sessions are completed.`,
+        "You can pay it any time from the Payments page once your down payment is verified.",
+      ],
+    });
+    notifyBadgesChanged();
+  };
+
   const handleRenewEnrolled = (enrollmentId: string) => {
-    toast.success("Enrollment submitted", { description: `Your new enrollment ID is ${enrollmentId}. Check your email for confirmation.` });
     setRenewChildInfo(null);
-    fetchEnrollments();
+    fetchEnrollments().then((list) => {
+      const created = list.find((e) => e.enrollmentId === enrollmentId);
+      toast.success("Enrollment submitted", { description: `Student ID: ${created ? displayStudentId(created) : enrollmentId}. Check your email for confirmation.` });
+      announceRemainingBalance(enrollmentId, list);
+    });
   };
 
   const statusBadgeClass = (status: string) => {
@@ -901,6 +890,27 @@ export default function StudentDashboard() {
     if (status === "rejected" || status === "cancelled") return "bg-red-100 text-red-700";
     if (status === "pending_approval" || status === "payment_under_verification") return "bg-amber-100 text-amber-800";
     return "bg-muted text-muted-foreground";
+  };
+
+  // One human-readable summary per CHILD (never raw enum text like payment_under_verification):
+  // a single primary badge, plus small notes for programs that are still in progress.
+  const IN_PROGRESS_NOTES: Record<string, string> = {
+    payment_under_verification: "Payment under verification in this program",
+    pending_approval: "Awaiting approval in this program",
+    submitted: "Awaiting payment in this program",
+    rejected: "Rejected in this program",
+    cancelled: "Cancelled in this program",
+  };
+  const childStatusSummary = (statuses: string[]) => {
+    const hasActive = statuses.some((st) => st === "approved" || st === "active");
+    let badge = { label: "Pending", value: "pending" };
+    if (hasActive) badge = { label: "Active", value: "active" };
+    else if (statuses.includes("rejected")) badge = { label: "Rejected", value: "rejected" };
+    else if (statuses.length > 0 && statuses.every((st) => st === "cancelled")) badge = { label: "Cancelled", value: "cancelled" };
+    const notes = statuses
+      .filter((st) => IN_PROGRESS_NOTES[st] && !(st === badge.value))
+      .map((st) => IN_PROGRESS_NOTES[st]);
+    return { badge, notes };
   };
 
   const handleAddChildSubmit = async (event: React.FormEvent) => {
@@ -969,7 +979,10 @@ export default function StudentDashboard() {
       setAddChildStep(1);
       setIsAddChildOpen(false);
       const response = await enrollmentService.getMyEnrollments();
-      if (response.data?.success && Array.isArray(response.data.enrollments)) setEnrollments(response.data.enrollments);
+      if (response.data?.success && Array.isArray(response.data.enrollments)) {
+        setEnrollments(response.data.enrollments);
+        if (submission?.data?.enrollmentId) announceRemainingBalance(submission.data.enrollmentId, response.data.enrollments);
+      }
     } catch (error) {
       const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
       toast.error(message || "Unable to add child. Please try again.");
@@ -1048,6 +1061,13 @@ export default function StudentDashboard() {
     }
   };
 
+  const childInitials = (activeChild?.name || "")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase() || "ST";
   const avatarInitials = user?.firstName && user?.lastName
     ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase()
     : "ST";
@@ -1101,9 +1121,11 @@ export default function StudentDashboard() {
               <div className="bg-card rounded-xl p-6 border border-border">
                 <div className="text-center">
                   <div className="flex justify-center mb-4">
+                    {/* Parent: this card is the SELECTED CHILD's — its picture is the one
+                        uploaded under Settings → Student Information, never the parent's own. */}
                     <UserAvatar
-                      src={user?.profileImageUrl}
-                      fallback={avatarInitials}
+                      src={isParent ? resolveUploadUrl(activeChild?.photoPath) : user?.profileImageUrl}
+                      fallback={isParent ? childInitials : avatarInitials}
                       size={20}
                     />
                   </div>
@@ -1295,15 +1317,19 @@ export default function StudentDashboard() {
                                 )}
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                {child.statuses.length > 0 ? child.statuses.map((status) => (
-                                  <span key={`${child.childName}-${status}`} className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(status)}`}>
-                                    {status}
-                                  </span>
-                                )) : (
-                                  <span className="rounded-full bg-muted px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                    Pending
-                                  </span>
-                                )}
+                                {(() => {
+                                  const { badge, notes } = childStatusSummary(child.statuses);
+                                  return (
+                                    <div className="flex flex-col items-start gap-1 sm:items-end">
+                                      <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(badge.value)}`}>
+                                        {badge.label}
+                                      </span>
+                                      {notes.map((note) => (
+                                        <span key={note} className="text-[10px] leading-tight text-muted-foreground">{note}</span>
+                                      ))}
+                                    </div>
+                                  );
+                                })()}
                                 <Button type="button" size="sm" variant="outline" onClick={() => handleRenewChild(child)}>
                                   Renew / Add Program
                                 </Button>
@@ -1325,19 +1351,23 @@ export default function StudentDashboard() {
                               <div className="rounded-xl border border-border bg-background p-3">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Enrollment Record</p>
                                 <div className="mt-2 space-y-2">
-                                  {child.enrollments.map((enrollment) => (
-                                    <div key={enrollment._id} className="rounded-lg border border-dashed border-border bg-muted/30 p-2">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <p className="text-sm font-medium text-foreground">{enrollment.enrollmentId || "Enrollment"}</p>
-                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusBadgeClass(enrollment.status || "pending")}`}>{enrollment.status || "Pending"}</span>
-                                      </div>
-                                      {enrollment.status === "rejected" && enrollment.rejectionReason && (
+                                  {/* ONE record per child: the original enrollment's permanent Student ID, shown once.
+                                      Renewing / adding a program never adds a row — it only changes the Programs + status. */}
+                                  <div className="rounded-lg border border-dashed border-border bg-muted/30 p-2" data-testid="enrollment-record-row">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-sm font-medium text-foreground">{displayStudentId(child.enrollments[child.enrollments.length - 1]) || "Enrollment"}</p>
+                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusBadgeClass(childStatusSummary(child.statuses).badge.value)}`}>{childStatusSummary(child.statuses).badge.label}</span>
+                                    </div>
+                                  </div>
+                                  {child.enrollments.filter((enrollment) => enrollment.status === "rejected").map((enrollment) => (
+                                    <div key={enrollment._id}>
+                                      {enrollment.rejectionReason && (
                                         <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
                                           <p className="font-semibold">Admin feedback</p>
                                           <p>{enrollment.rejectionReason}</p>
                                         </div>
                                       )}
-                                      {enrollment.status === "rejected" && enrollment.allowResubmission && (
+                                      {enrollment.allowResubmission && (
                                         <Button type="button" size="sm" variant="outline" className="mt-2 w-full border-red-200 text-red-700 hover:bg-red-50" onClick={() => handleAddChild(enrollment)}>
                                           Review and Resubmit
                                         </Button>
@@ -1589,7 +1619,7 @@ export default function StudentDashboard() {
                             <div key={en._id} className="rounded-lg border border-border p-4 space-y-3">
                               <div className="flex flex-wrap justify-between gap-2 text-sm">
                                 <p className="font-semibold">{childName}</p>
-                                <p className="text-muted-foreground">{en.enrollmentId} · {en.status}</p>
+                                <p className="text-muted-foreground">{displayStudentId(en)} · {en.status}</p>
                               </div>
                               <EnrollmentAssessmentView assessment={en.preEnrollmentAssessment} />
                             </div>
@@ -1801,7 +1831,7 @@ export default function StudentDashboard() {
                     ) : (
                       <div className="space-y-4">
                         {announcements.map((a) => {
-                          const authorName = a.author ? [a.author.firstName, a.author.lastName].filter(Boolean).join(" ") || "Center" : a.authorRole === "admin" ? "Bee Bright" : "Tutor";
+                          const authorName = announcementAuthorLabel(a);
                           const categoryLabel = { sick_leave: "Sick Leave", exam: "Exam", quiz: "Quiz", exam_quiz: "Exam / Quiz", materials: "Materials to Bring", reschedule: "Reschedule", reminder: "Reminder", suspension: "Class Suspension", maintenance: "Maintenance", holiday: "Holiday", general: "Announcement" }[a.category] || a.category;
                           const dateStr = a.approvedAt || a.createdAt ? new Date(a.approvedAt || a.createdAt).toLocaleDateString("en-US", { dateStyle: "medium" }) : "";
                           return (
@@ -1959,7 +1989,7 @@ export default function StudentDashboard() {
               <div className="space-y-4">
                 <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
                   <span className="px-2 py-0.5 rounded bg-primary/10 text-primary font-medium">{announcementCategoryLabel(selectedAnnouncement.category)}</span>
-                  <span>{selectedAnnouncement.author ? [selectedAnnouncement.author.firstName, selectedAnnouncement.author.lastName].filter(Boolean).join(" ") || "Center" : selectedAnnouncement.authorRole === "admin" ? "Bee Bright" : "Tutor"}</span>
+                  <span>{announcementAuthorLabel(selectedAnnouncement)}</span>
                   {(selectedAnnouncement.approvedAt || selectedAnnouncement.createdAt) && (
                     <span>{new Date(selectedAnnouncement.approvedAt || selectedAnnouncement.createdAt).toLocaleDateString("en-US", { dateStyle: "medium" })}</span>
                   )}
@@ -1971,6 +2001,21 @@ export default function StudentDashboard() {
               </div>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={balancePopup !== null} onOpenChange={(open) => { if (!open) setBalancePopup(null); }}>
+        <DialogContent className="sm:max-w-md" data-testid="balance-popup">
+          <DialogHeader>
+            <DialogTitle>{balancePopup?.heading}</DialogTitle>
+            <DialogDescription>Payment reminder</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-foreground">
+            {balancePopup?.lines.map((line, i) => <p key={i}>{line}</p>)}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setBalancePopup(null)}>Later</Button>
+            <Button type="button" onClick={() => { setBalancePopup(null); navigate("/student-dashboard/payments"); }}>Go to Payments</Button>
+          </div>
         </DialogContent>
       </Dialog>
       <RenewProgramModal

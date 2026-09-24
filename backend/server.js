@@ -48,10 +48,12 @@ const escalationRoutes = require('./routes/escalationRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const adminCreationRoutes = require('./routes/adminCreationRoutes');
 const assessmentRoutes = require('./routes/assessmentRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const { ensureSuperAdmin } = require('./utils/ensureSuperAdmin');
 const { migrateScheduleIndexes } = require('./utils/scheduleIndexMigration');
 const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
 const { ensureAssessmentTemplates } = require('./utils/ensureAssessmentTemplates');
+const { backfillPermanentStudentIds } = require('./utils/studentIdentity');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
 const { warmUpOllama } = require('./utils/ollamaWarmup');
 
@@ -93,7 +95,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-BB-Passive']
 }));
 
 // Body parsing middleware
@@ -147,6 +149,8 @@ mongoose.connect(process.env.MONGODB_URI, mongoConnectionOptions)
     await ensureSuperAdmin();
     await ensureRetiredPricing();
     await ensureAssessmentTemplates();
+    const backfilled = await backfillPermanentStudentIds();
+    if (backfilled) console.log(`🆔 Backfilled permanent Student IDs on ${backfilled} enrollment(s)`);
   } catch (err) {
     console.error('❌ Startup initialization task failed:', err);
   }
@@ -174,6 +178,7 @@ app.use('/api/escalations', escalationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/admin-invites', adminCreationRoutes);
 app.use('/api/assessments', assessmentRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // New value on every process start. The enrollment wizard stores it alongside
 // its client-side draft and wipes the draft when it changes — so stopping and

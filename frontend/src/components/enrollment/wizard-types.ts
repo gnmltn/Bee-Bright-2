@@ -48,6 +48,9 @@ export interface WizardData {
   studentMiddleName: string;
   studentLastName: string;
   birthdate: string; // YYYY-MM-DD
+  /** Set only by Renew / Add Program: the child's existing enrollment (_id), so the
+   *  server reuses the child's permanent Student ID instead of creating a new one. */
+  renewalOfEnrollmentId?: string;
 
   // ── Step 6 – Program selection ────────────────────────────────────────
   selectedPackages: SelectedPackage[];
