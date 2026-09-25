@@ -10,6 +10,7 @@ import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { parentAuthService } from '@/services/api';
 import { validateFullName, validateMobileNumber, normalizeMobile, toTitleCase } from '@/lib/enrollmentValidation';
+import { getEmailError, getEmailCharacterError } from '@/utils/emailRules';
 
 interface Props {
   data: WizardData;
@@ -44,8 +45,8 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
     const nameRes = validateFullName(data.parentName, 'Full name', { minParts: 2 });
     if (!nameRes.valid) e.parentName = nameRes.error!;
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.parentEmail.trim()))
-      e.parentEmail = 'Enter a valid email address.';
+    const emailProblem = getEmailError(data.parentEmail);
+    if (emailProblem) e.parentEmail = emailProblem;
 
     const mobileRes = validateMobileNumber(data.parentMobile, 'Mobile number');
     if (!mobileRes.valid) e.parentMobile = mobileRes.error!;
@@ -146,10 +147,10 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
           <div className="relative">
             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              id="parentEmail" type="email" placeholder="maria@example.com"
+              id="parentEmail" type="text" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} placeholder="maria@example.com"
               className={`pl-10 ${errors.parentEmail ? 'border-destructive' : ''}`}
               value={data.parentEmail}
-              onChange={(e) => { update({ parentEmail: e.target.value }); setErrors((p) => ({ ...p, parentEmail: '' })); }}
+              onChange={(e) => { update({ parentEmail: e.target.value }); setErrors((p) => ({ ...p, parentEmail: getEmailCharacterError(e.target.value) || '' })); }}
             />
           </div>
           {errors.parentEmail && <p className="text-xs text-destructive">{errors.parentEmail}</p>}

@@ -3,6 +3,7 @@
  * Use with validate() middleware from ./validate.js
  */
 const { body } = require('express-validator');
+const { assertValidEmail } = require('../utils/emailRules');
 
 const enrollmentSubmitRules = [
   body('selectedSubjectCodes').isArray({ min: 1 }).withMessage('Select at least one subject'),
@@ -11,7 +12,7 @@ const enrollmentSubmitRules = [
   body('paymentMethod').optional().isIn(['gcash', 'blockchain']).withMessage('Invalid payment method'),
   body('firstName').optional().trim().isLength({ max: 100 }),
   body('lastName').optional().trim().isLength({ max: 100 }),
-  body('email').optional().trim().isEmail().toLowerCase(),
+  body('email').optional().trim().custom(assertValidEmail).toLowerCase(),
   body('phone').optional().trim().isLength({ max: 11 }),
   body('guardianName').optional().trim().isLength({ max: 50 }),
   body('guardianPhone').optional().trim().isLength({ max: 20 }),

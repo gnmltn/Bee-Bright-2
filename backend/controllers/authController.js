@@ -31,6 +31,7 @@ const MIME_TO_EXT = {
   'image/webp': '.webp'
 };
 
+const { getEmailError } = require('../utils/emailRules');
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 const LOGIN_OTP_TTL_MINUTES = 10;
 const LOGIN_OTP_MAX_VERIFY_ATTEMPTS = 5;
@@ -515,11 +516,11 @@ const register = async (req, res) => {
     }
 
     // Validate email format (any valid email)
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test((email || '').trim().toLowerCase())) {
+    const emailProblem = getEmailError(email);
+    if (emailProblem) {
       return res.status(400).json({
         success: false,
-        message: 'Please enter a valid email address'
+        message: emailProblem
       });
     }
 

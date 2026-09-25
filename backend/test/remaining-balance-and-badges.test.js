@@ -124,7 +124,7 @@ test('getBadges (admin): action counts are state, "users" is new-since-seen and 
   User.findById = () => ({ select: async () => userDoc('admin') });
   User.updateOne = async (_f, u) => { updates.push(u); };
   User.countDocuments = async (f) => { captured.users = f; return 0; };
-  Enrollment.countDocuments = async (f) => { captured.enrollments = f; return 3; };
+  Enrollment.countDocuments = async (f) => { captured.enrollments = f; return f.status === 'pending_approval' ? 1 : 2; };
   Payment.countDocuments = async (f) => { captured.payments = f; return 2; };
   Remark.countDocuments = async (f) => { captured.remarks = f; return 4; };
   Announcement.countDocuments = async (f) => { captured.announcements = f; return 1; };
@@ -132,8 +132,8 @@ test('getBadges (admin): action counts are state, "users" is new-since-seen and 
     const res = mockRes();
     await getBadges({ user: { _id: 'u1' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
-    assert.deepEqual(res._body.badges, { users: 0, enrollments: 3, payments: 2, remarks: 4, announcements: 1 });
-    assert.deepEqual(captured.enrollments, { status: { $in: ['payment_under_verification', 'pending_approval'] } });
+    assert.deepEqual(res._body.badges, { users: 0, enrollments: 3, paymentReview: 2, pendingApproval: 1, payments: 2, remarks: 4, announcements: 1 });
+    assert.deepEqual(captured.enrollments, { status: 'pending_approval' }, 'last enrollment count query is the Pending Approval tab');
     assert.deepEqual(captured.payments, { status: 'submitted' });
     assert.deepEqual(captured.remarks, { status: 'pending_admin_review' });
     assert.deepEqual(captured.announcements, { status: 'pending' });

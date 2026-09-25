@@ -3,6 +3,7 @@
  * Route: /track-enrollment
  * Parents enter their Enrollment ID + email to check status.
  */
+import { getEmailError, useEmailFieldError } from '@/utils/emailRules';
 import { useState, useEffect } from 'react';
 import { Search, CheckCircle2, Clock, XCircle, AlertCircle, Upload, RefreshCw } from 'lucide-react';
 import { Layout } from '@/components/layout/Layout';
@@ -56,6 +57,7 @@ export default function EnrollmentTracking() {
     () => searchParams.get('enrollmentId')?.trim().toUpperCase() || ''
   );
   const [email, setEmail] = useState('');
+  const emailField = useEmailFieldError(email);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<TrackResult | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -66,6 +68,11 @@ export default function EnrollmentTracking() {
     const trimEmail = email.trim().toLowerCase();
     if (!trimId || !trimEmail) {
       toast({ title: 'Missing fields', description: 'Enter your Enrollment ID and registered email.', variant: 'destructive' });
+      return;
+    }
+    const emailProblem = getEmailError(trimEmail);
+    if (emailProblem) {
+      toast({ title: 'Check your email address', description: emailProblem, variant: 'destructive' });
       return;
     }
     setLoading(true);
@@ -124,12 +131,17 @@ export default function EnrollmentTracking() {
               <Label htmlFor="trackEmail">Registered Email</Label>
               <Input
                 id="trackEmail"
-                type="email"
+                type="text"
+                inputMode="email"
+                autoComplete="email"
                 placeholder="you@example.com"
                 value={email}
+                aria-invalid={!!emailField.error}
+                onBlur={emailField.onBlur}
                 onChange={(e) => { setEmail(e.target.value); setNotFound(false); setEmailMismatch(false); setResult(null); }}
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleTrack(); }}
               />
+              {emailField.error && <p role="alert" className="text-xs text-destructive">{emailField.error}</p>}
             </div>
 
             <Button

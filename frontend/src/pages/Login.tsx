@@ -1,4 +1,5 @@
 import { useState, useEffect, lazy, Suspense, useMemo } from "react";
+import { getEmailError, useEmailFieldError } from "@/utils/emailRules";
 import { useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowLeft, GraduationCap, Users, Eye, EyeOff, RotateCcw, Baby } from "lucide-react";
@@ -60,6 +61,7 @@ function formatExpiry(expiresAt?: string) {
 export default function Login() {
   const [selectedRole, setSelectedRole] = useState<LoginRole | null>(null);
   const [email, setEmail] = useState("");
+  const emailField = useEmailFieldError(email);
   const [password, setPassword] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [verificationId, setVerificationId] = useState("");
@@ -141,6 +143,11 @@ export default function Login() {
       return;
     }
     if (isSubmitting) return;
+    const emailProblem = getEmailError(email);
+    if (emailProblem) {
+      toast({ title: "Check your email address", description: emailProblem, variant: "destructive" });
+      return;
+    }
     setIsSubmitting(true);
     try {
       const result = await startOtpLogin(email.trim().toLowerCase(), password, getApiRole(selectedRole));
@@ -301,9 +308,14 @@ export default function Login() {
                       <Label htmlFor="email">Email</Label>
                       <Input
                         id="email"
-                        type="email"
+                        type="text"
+                        inputMode="email"
+                        autoComplete="email"
                         placeholder="your@email.com"
                         value={email}
+                        aria-invalid={!!emailField.error}
+                        className={emailField.error ? "border-destructive" : ""}
+                        onBlur={emailField.onBlur}
                         onChange={(e) => setEmail(e.target.value.toLowerCase())}
                         autoCapitalize="none"
                         autoCorrect="off"
@@ -311,6 +323,7 @@ export default function Login() {
                         required
                         disabled={!selectedRole}
                       />
+                      {emailField.error && <p role="alert" className="text-xs text-destructive">{emailField.error}</p>}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="password">Password</Label>

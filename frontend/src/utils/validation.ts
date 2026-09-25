@@ -1,7 +1,6 @@
-export const validateEmail = (email: string): boolean => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-};
+import { getEmailError } from "./emailRules";
+
+export const validateEmail = (email: string): boolean => getEmailError(email) === null;
 
 export const validatePhone = (phone: string): boolean => {
   const phoneRegex = /^\+?[1-9]\d{1,14}$/;

@@ -202,8 +202,12 @@ userSchema.pre('save', async function(next) {
   }
   
   try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    // A signup that was already hashed at registration time (PendingParentSignup) is
+    // copied across as-is — hashing the hash would make the password unusable.
+    if (!this.$locals?.passwordAlreadyHashed) {
+      const salt = await bcrypt.genSalt(10);
+      this.password = await bcrypt.hash(this.password, salt);
+    }
     this.passwordChangedAt = new Date();
     this.passwordExpiresAt = getPasswordExpiresAt({ passwordChangedAt: this.passwordChangedAt });
     

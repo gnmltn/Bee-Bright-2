@@ -17,10 +17,14 @@ const validate = (validations) => {
     }
     
     // Return validation errors
+    const all = errors.array();
+    // An invalid email gets its own specific sentence (which character is not allowed,
+    // etc.) as the top-level message so clients that only show `message` stay clear.
+    const emailError = all.find((e) => e.path === 'email');
     res.status(400).json({
       success: false,
-      message: 'Validation failed',
-      errors: errors.array()
+      message: emailError?.msg || 'Validation failed',
+      errors: all
     });
   };
 };

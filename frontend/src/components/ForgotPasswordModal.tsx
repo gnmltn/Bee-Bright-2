@@ -6,6 +6,7 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { authService } from "@/services/api"; // adjust path if yours is different
+import { getEmailError, useEmailFieldError } from "@/utils/emailRules";
 
 type Props = {
   defaultEmail?: string;
@@ -21,6 +22,7 @@ export default function ForgotPasswordModal({ defaultEmail = "", onClose }: Prop
 
   const [step, setStep] = useState<Step>("request");
   const [email, setEmail] = useState(defaultEmail.toLowerCase());
+  const emailField = useEmailFieldError(email);
   const [otp, setOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   
@@ -37,8 +39,9 @@ export default function ForgotPasswordModal({ defaultEmail = "", onClose }: Prop
   }, [onClose]);
 
 const requestOtp = async () => {
-  if (!email.trim()) {
-    toast({ title: "Email required", variant: "destructive" });
+  const emailProblem = getEmailError(email);
+  if (emailProblem) {
+    toast({ title: "Check your email address", description: emailProblem, variant: "destructive" });
     return;
   }
 
@@ -164,8 +167,13 @@ const resetPassword = async () => {
           <div className="space-y-2">
             <Label>Email</Label>
             <Input
-              type="email"
+              type="text"
+              inputMode="email"
+              autoComplete="email"
               value={email}
+              aria-invalid={!!emailField.error}
+              className={emailField.error ? "border-destructive" : ""}
+              onBlur={emailField.onBlur}
               onChange={(e) => setEmail(e.target.value.toLowerCase())}
               placeholder="your@email.com"
               autoCapitalize="none"
@@ -173,6 +181,7 @@ const resetPassword = async () => {
               spellCheck={false}
               disabled={step === "verify"} // lock email after sending OTP
             />
+            {emailField.error && <p role="alert" className="text-xs text-destructive">{emailField.error}</p>}
           </div>
 
           {step === "request" ? (

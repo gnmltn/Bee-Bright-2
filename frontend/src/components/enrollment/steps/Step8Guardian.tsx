@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { validateFullName, validateMobileNumber, normalizeMobile, toTitleCase } from '@/lib/enrollmentValidation';
+import { getEmailError, getEmailCharacterError } from '@/utils/emailRules';
 import { parentAuthService } from '@/services/api';
 
 interface Props { data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void; }
@@ -35,6 +36,10 @@ export default function Step8Guardian({ data, update, onNext, onBack }: Props) {
     if (data.alternateGuardianPhone.trim()) {
       const ap = validateMobileNumber(data.alternateGuardianPhone, 'Alternate guardian number', { required: false });
       if (!ap.valid) e.alternateGuardianPhone = ap.error!;
+    }
+    if (guardianEmail.trim()) {
+      const ge = getEmailError(guardianEmail);
+      if (ge) e.guardianEmail = ge;
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -84,10 +89,12 @@ export default function Step8Guardian({ data, update, onNext, onBack }: Props) {
             <Label htmlFor="guardianEmail">Email</Label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input id="guardianEmail" type="email" className="pl-10"
+              <Input id="guardianEmail" type="text" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false}
+                className={`pl-10 ${errors.guardianEmail ? 'border-destructive' : ''}`}
                 value={guardianEmail}
-                onChange={(e) => update({ guardianEmail: e.target.value })} placeholder="Email address" />
+                onChange={(e) => { update({ guardianEmail: e.target.value }); setErrors((p) => ({ ...p, guardianEmail: getEmailCharacterError(e.target.value) || '' })); }} placeholder="Email address" />
             </div>
+            {errors.guardianEmail && <p className="text-xs text-destructive">{errors.guardianEmail}</p>}
           </div>
         </div>
       </div>

@@ -10,6 +10,7 @@ const { logAudit } = require('../utils/auditService');
 const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { validateName, validatePhoneNoLetters } = require('../utils/validation');
 const { listOutstandingBalances } = require('../utils/remainingBalance');
+const { getEmailError } = require('../utils/emailRules');
 
 const generateEnrollmentReference = () =>
   `BRGHT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -193,9 +194,9 @@ const validateCheckoutStudent = (student) => {
     if (gPhoneErr) return gPhoneErr;
   }
 
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test((email || '').trim().toLowerCase())) {
-    return 'Please enter a valid email address';
+  const emailProblem = getEmailError(email);
+  if (emailProblem) {
+    return emailProblem;
   }
 
   const phPhoneRegex = /^(0?9|639)\d{9}$/;

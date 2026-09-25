@@ -8,6 +8,7 @@ const { validateName, validatePhoneNoLetters } = require('../utils/validation');
 const { logAudit } = require('../utils/auditService');
 const { normalizeEmailAddress, buildEmailLookupFilter } = require('../utils/email');
 const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
+const { getEmailError } = require('../utils/emailRules');
 
 const loadAdminUser = async (userId) => (
   User.findById(userId)
@@ -127,11 +128,11 @@ const createTutor = async (req, res) => {
     const phoneErr = validatePhoneNoLetters(phone);
     if (phoneErr) return res.status(400).json({ success: false, message: phoneErr });
 
-    const emailRegex = /^\S+@\S+\.\S+$/;
-    if (!emailRegex.test((email || '').trim())) {
+    const emailProblem = getEmailError(email);
+    if (emailProblem) {
       return res.status(400).json({
         success: false,
-        message: 'Please enter a valid email address'
+        message: emailProblem
       });
     }
 
@@ -235,11 +236,11 @@ const createAdmin = async (req, res) => {
     const phoneErr = validatePhoneNoLetters(phone);
     if (phoneErr) return res.status(400).json({ success: false, message: phoneErr });
 
-    const emailRegex = /^\S+@\S+\.\S+$/;
-    if (!emailRegex.test((email || '').trim())) {
+    const emailProblem = getEmailError(email);
+    if (emailProblem) {
       return res.status(400).json({
         success: false,
-        message: 'Please enter a valid email address'
+        message: emailProblem
       });
     }
 

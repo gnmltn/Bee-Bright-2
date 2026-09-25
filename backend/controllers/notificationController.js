@@ -128,19 +128,22 @@ async function tutorBadges(user, since) {
 }
 
 async function adminBadges(user, since) {
-  const [users, enrollments, payments, remarks, announcements] = await Promise.all([
+  const [users, paymentReview, pendingApproval, payments, remarks, announcements] = await Promise.all([
     User.countDocuments({
       role: { $in: ['parent', 'tutor'] },
       deletedAt: null,
       enrollmentDraft: { $ne: true },
       createdAt: { $gt: since.users },
     }),
-    Enrollment.countDocuments({ status: { $in: ['payment_under_verification', 'pending_approval'] } }),
+    // The Enrollments sidebar badge is the sum; the two tabs inside the Enrollments
+    // section each show their own count (paymentReview / pendingApproval).
+    Enrollment.countDocuments({ status: 'payment_under_verification' }),
+    Enrollment.countDocuments({ status: 'pending_approval' }),
     Payment.countDocuments({ status: 'submitted' }),
     Remark.countDocuments({ status: 'pending_admin_review' }),
     Announcement.countDocuments({ status: 'pending' }),
   ]);
-  return { users, enrollments, payments, remarks, announcements };
+  return { users, enrollments: paymentReview + pendingApproval, paymentReview, pendingApproval, payments, remarks, announcements };
 }
 
 // @route   GET /api/notifications/badges

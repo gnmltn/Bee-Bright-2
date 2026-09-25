@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { getEmailError, useEmailFieldError } from "@/utils/emailRules";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff, RotateCcw, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ function formatExpiry(expiresAt?: string) {
 
 export default function AdminLogin() {
   const [email, setEmail] = useState("");
+  const emailField = useEmailFieldError(email);
   const [password, setPassword] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [verificationId, setVerificationId] = useState("");
@@ -85,6 +87,11 @@ export default function AdminLogin() {
   const handleStartLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+    const emailProblem = getEmailError(email);
+    if (emailProblem) {
+      toast.error(emailProblem);
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -228,15 +235,21 @@ export default function AdminLogin() {
                     <Label htmlFor="admin-email">Email</Label>
                     <Input
                       id="admin-email"
-                      type="email"
+                      type="text"
+                      inputMode="email"
+                      autoComplete="email"
                       placeholder="admin@beebright.com"
                       value={email}
+                      aria-invalid={!!emailField.error}
+                      className={emailField.error ? "border-destructive" : ""}
+                      onBlur={emailField.onBlur}
                       onChange={(e) => setEmail(e.target.value.toLowerCase())}
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}
                       required
                     />
+                    {emailField.error && <p role="alert" className="text-xs text-destructive">{emailField.error}</p>}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="admin-password">Password</Label>

@@ -2,15 +2,19 @@
  * Parent/Guardian Authentication Controller
  * Handles registration, OTP send/verify for the enrollment wizard flow.
  *
- * Flow:
- *  1. POST /api/auth/register-parent  → create inactive User(role:parent), send OTP
+ * Flow (nothing here writes to the Users collection — see models/PendingParentSignup.js):
+ *  1. POST /api/auth/register-parent  → store a PENDING signup, send OTP
  *  2. POST /api/auth/parent-otp/send  → resend OTP
- *  3. POST /api/auth/parent-otp/verify → verify OTP, set emailVerifiedAt, return short-lived token
+ *  3. POST /api/auth/parent-otp/verify → verify OTP, mark the pending signup verified, return short-lived token
+ *  The real User is created when the completed enrollment + payment proof is submitted.
  */
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const PendingParentSignup = require('../models/PendingParentSignup');
+const { getEmailError } = require('../utils/emailRules');
 const { sendEmail, getEmailErrorMessage, logEmailError } = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
 const { validateFullName, validatePhMobile, normalizeMobile, checkMobileNumberUnique, toTitleCase } = require('../utils/validation');
@@ -22,7 +26,7 @@ const OTP_MAX_ATTEMPTS = 5;
 const ENROLLMENT_TOKEN_TTL = '2h'; // short-lived token scoped to enrollment wizard
 // How long an abandoned Step-2 draft account survives before the TTL index removes it.
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
-const OTP_SELECT = '+parentOtpHash +parentOtpExpires +parentOtpAttempts +parentOtpLastSentAt';
+const OTP_SELECT = '+passwordHash +otpHash +otpExpires +otpAttempts +otpLastSentAt';
 
 const draftExpiry = () => new Date(Date.now() + DRAFT_TTL_MS);
 
@@ -97,16 +101,17 @@ async function sendParentOtpEmail(to, otp) {
  * POST /api/auth/register-parent
  * Body: { name, email, mobile, password, draftId? }
  *
- * Creates a DRAFT parent account (enrollmentDraft:true) and sends an OTP. The
- * real, permanent account is only finalized when the parent submits the
- * enrollment (see enrollmentController.submitEnrollment).
+ * Stores the signup in PendingParentSignup (NOT in Users) and sends an OTP. The real
+ * parent account is only created when the completed enrollment — payment proof included
+ * — is submitted (enrollmentController.submitEnrollment / adminWalkInEnroll, via
+ * utils/parentSignup.js). Abandoning the wizard at any step therefore leaves nothing in
+ * the Users collection, and the pending record expires by itself.
  *
- * `draftId` is the id this wizard session is already tracking. When present it
- * lets the parent go Back and fix a mistyped email / mobile without their own
- * earlier draft blocking them — the same record is updated in place.
+ * `draftId` is the pending id this wizard session already owns; when present the same
+ * record is updated in place so the parent can go Back and fix a mistyped email/mobile.
  *
- * Uniqueness (email + mobile) is enforced against FINALIZED accounts only, so an
- * abandoned draft never permanently reserves a number or address.
+ * Uniqueness (email + mobile) is enforced against real accounts only, so an abandoned
+ * signup never reserves an address or number.
  */
 const registerParent = async (req, res) => {
   try {
@@ -118,8 +123,8 @@ const registerParent = async (req, res) => {
     const cleanName = toTitleCase(name);
 
     const normalizedEmail = normalizeEmail(email);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
-      return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
+    const emailErr = getEmailError(normalizedEmail);
+    if (emailErr) return res.status(400).json({ success: false, message: emailErr });
 
     const mobileErr = validatePhMobile(mobile, 'Mobile number');
     if (mobileErr) return res.status(400).json({ success: false, message: mobileErr });
@@ -132,33 +137,32 @@ const registerParent = async (req, res) => {
           'Password must be at least 8 characters and include uppercase, lowercase, number, and special character (@$!%*?&).',
       });
 
-    // ── Resolve which record to write ──────────────────────────────────────
-    // 1. The draft this wizard session already owns (if the id still points at a draft).
-    let sessionDraft = null;
-    if (draftId && mongoose.Types.ObjectId.isValid(draftId)) {
-      sessionDraft = await User.findOne({ _id: draftId, role: 'parent', enrollmentDraft: true }).select(OTP_SELECT);
-    }
-
-    // 2. Whatever account currently holds the requested email (email is unique).
-    const byEmail = await User.findOne({ email: normalizedEmail }).select(OTP_SELECT);
-
-    // A finalized (non-draft) account already owns this email → cannot reuse it.
-    if (byEmail && !byEmail.enrollmentDraft) {
-      if (byEmail.role !== 'parent')
+    // ── An existing REAL account owns this email → cannot sign up again ──
+    const existingUser = await User.findOne({ email: normalizedEmail }).select('role enrollmentDraft emailVerifiedAt isActive');
+    if (existingUser && existingUser.enrollmentDraft) {
+      // Left over from before signups moved to PendingParentSignup: an abandoned draft. Retire it.
+      await User.deleteOne({ _id: existingUser._id, enrollmentDraft: true }).catch(() => {});
+    } else if (existingUser) {
+      if (existingUser.role !== 'parent')
         return res.status(409).json({
           success: false,
           message: 'An account with this email already exists. Please log in instead.',
         });
-      if (byEmail.emailVerifiedAt && byEmail.isActive)
-        return res.status(409).json({
-          success: false,
-          message: 'This email is already registered and verified. Please log in.',
-        });
-      // else: a legacy unverified/inactive non-draft parent — fall through and reuse it.
+      return res.status(409).json({
+        success: false,
+        message: 'This email is already registered. Please log in.',
+      });
     }
 
-    // Mobile number must be free among FINALIZED accounts only (drafts don't reserve).
-    const mobileIsFree = await checkMobileNumberUnique(phoneDigits, byEmail?._id || sessionDraft?._id || null);
+    // ── Resolve which pending record to write: this session's, else one already on the email ──
+    let sessionPending = null;
+    if (draftId && mongoose.Types.ObjectId.isValid(draftId)) {
+      sessionPending = await PendingParentSignup.findById(draftId).select(OTP_SELECT);
+    }
+    const byEmail = await PendingParentSignup.findOne({ email: normalizedEmail }).select(OTP_SELECT);
+
+    // Mobile number must be free among real accounts (pending signups don't reserve).
+    const mobileIsFree = await checkMobileNumberUnique(phoneDigits, null);
     if (!mobileIsFree) {
       return res.status(409).json({
         success: false,
@@ -166,33 +170,20 @@ const registerParent = async (req, res) => {
       });
     }
 
-    // Prefer the record that owns the email; otherwise reuse the session draft.
-    let parent = byEmail || sessionDraft;
-
-    // If the email moved to a *different* draft, retire the now-orphaned session draft.
-    if (parent && sessionDraft && String(parent._id) !== String(sessionDraft._id)) {
-      await User.deleteOne({ _id: sessionDraft._id, enrollmentDraft: true }).catch(() => {});
+    let pending = byEmail || sessionPending;
+    // The email moved onto a different pending record → retire this session's now-orphaned one.
+    if (pending && sessionPending && String(pending._id) !== String(sessionPending._id)) {
+      await PendingParentSignup.deleteOne({ _id: sessionPending._id }).catch(() => {});
     }
 
     const { firstName, middleName, lastName } = splitName(cleanName);
-    const emailChanged = !!parent && parent.email !== normalizedEmail;
+    const emailChanged = !!pending && pending.email !== normalizedEmail;
+    const passwordHash = await bcrypt.hash(password, 10);
 
-    if (parent) {
-      // Reuse the draft / legacy record — update its details in place.
-      parent.firstName = firstName;
-      parent.middleName = middleName;
-      parent.lastName = lastName;
-      parent.email = normalizedEmail;
-      parent.phone = phoneDigits;
-      parent.password = password; // re-hashed by the pre-save hook when modified
-      parent.role = 'parent';
-      parent.isActive = false;
-      if (emailChanged) parent.emailVerifiedAt = null; // new address → must verify again
-      if (parent.enrollmentDraft) parent.draftExpiresAt = draftExpiry();
-
+    if (pending) {
       // Cooldown only matters when we'd resend to the SAME address.
-      if (!emailChanged && parent.parentOtpLastSentAt) {
-        const elapsed = Date.now() - new Date(parent.parentOtpLastSentAt).getTime();
+      if (!emailChanged && pending.otpLastSentAt) {
+        const elapsed = Date.now() - new Date(pending.otpLastSentAt).getTime();
         if (elapsed < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
           const wait = Math.ceil((OTP_RESEND_COOLDOWN_SECONDS * 1000 - elapsed) / 1000);
           return res.status(429).json({
@@ -201,31 +192,35 @@ const registerParent = async (req, res) => {
           });
         }
       }
+      pending.firstName = firstName;
+      pending.middleName = middleName;
+      pending.lastName = lastName;
+      pending.email = normalizedEmail;
+      pending.phone = phoneDigits;
+      pending.passwordHash = passwordHash;
+      if (emailChanged) pending.emailVerifiedAt = null; // new address → must verify again
+      pending.expiresAt = draftExpiry();
     } else {
-      // Brand-new draft account.
-      parent = new User({
+      pending = new PendingParentSignup({
         firstName,
         middleName,
         lastName,
         email: normalizedEmail,
         phone: phoneDigits,
-        password,
-        role: 'parent',
-        isActive: false,
+        passwordHash,
         emailVerifiedAt: null,
-        enrollmentDraft: true,
-        draftExpiresAt: draftExpiry(),
+        expiresAt: draftExpiry(),
       });
     }
 
     // ── Generate & store OTP ──
     const otp = generateOtp();
-    parent.parentOtpHash = hashValue(otp);
-    parent.parentOtpExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
-    parent.parentOtpAttempts = 0;
-    parent.parentOtpLastSentAt = new Date();
+    pending.otpHash = hashValue(otp);
+    pending.otpExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+    pending.otpAttempts = 0;
+    pending.otpLastSentAt = new Date();
 
-    await parent.save();
+    await pending.save();
 
     // ── Send email ──
     try {
@@ -242,7 +237,7 @@ const registerParent = async (req, res) => {
       req,
       action: 'Parent Register',
       module: 'Authentication',
-      description: `Parent account created for ${normalizedEmail}`,
+      description: `Parent signup started (pending, no account yet) for ${normalizedEmail}`,
       status: 'SUCCESS',
       metadata: { email: normalizedEmail },
     }).catch(() => {});
@@ -251,7 +246,7 @@ const registerParent = async (req, res) => {
       success: true,
       message: 'Verification code sent to your email.',
       verificationSentTo: maskEmail(normalizedEmail),
-      parentId: String(parent._id),
+      parentId: String(pending._id),
     });
   } catch (err) {
     console.error('registerParent error:', err);
@@ -261,7 +256,7 @@ const registerParent = async (req, res) => {
 
 /**
  * POST /api/auth/parent-otp/send
- * Body: { email }   – resend OTP for an existing unverified parent
+ * Body: { email }   – resend OTP for a pending (not yet enrolled) signup
  */
 const sendParentOtp = async (req, res) => {
   try {
@@ -269,23 +264,21 @@ const sendParentOtp = async (req, res) => {
     if (!normalizedEmail)
       return res.status(400).json({ success: false, message: 'Email is required.' });
 
-    const parent = await User.findOne({ email: normalizedEmail, role: 'parent' }).select(
-      '+parentOtpHash +parentOtpExpires +parentOtpAttempts +parentOtpLastSentAt'
-    );
+    const pending = await PendingParentSignup.findOne({ email: normalizedEmail }).select(OTP_SELECT);
 
-    if (!parent)
+    if (!pending)
       return res.status(404).json({
         success: false,
         message: 'No pending parent account found for this email. Please register first.',
       });
 
-    if (parent.emailVerifiedAt)
+    if (pending.emailVerifiedAt)
       return res.status(400).json({
         success: false,
         message: 'Email already verified. Please proceed to the enrollment wizard.',
       });
 
-    const lastSent = parent.parentOtpLastSentAt;
+    const lastSent = pending.otpLastSentAt;
     if (lastSent) {
       const elapsed = Date.now() - new Date(lastSent).getTime();
       if (elapsed < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
@@ -299,12 +292,12 @@ const sendParentOtp = async (req, res) => {
     }
 
     const otp = generateOtp();
-    parent.parentOtpHash = hashValue(otp);
-    parent.parentOtpExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
-    parent.parentOtpAttempts = 0;
-    parent.parentOtpLastSentAt = new Date();
-    if (parent.enrollmentDraft) parent.draftExpiresAt = new Date(Date.now() + DRAFT_TTL_MS);
-    await parent.save();
+    pending.otpHash = hashValue(otp);
+    pending.otpExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+    pending.otpAttempts = 0;
+    pending.otpLastSentAt = new Date();
+    pending.expiresAt = draftExpiry();
+    await pending.save();
 
     try {
       await sendParentOtpEmail(normalizedEmail, otp);
@@ -328,7 +321,9 @@ const sendParentOtp = async (req, res) => {
  * POST /api/auth/parent-otp/verify
  * Body: { email, code }
  *
- * Returns a short-lived JWT (scope: enrollment) so the wizard can auto-save drafts.
+ * Marks the pending signup's email verified and returns a short-lived enrollment-scoped
+ * JWT whose `id` is the pending record's id. That id becomes the User `_id` when the
+ * enrollment is submitted, so the same token then works as a normal session token.
  */
 const verifyParentOtp = async (req, res) => {
   try {
@@ -338,39 +333,37 @@ const verifyParentOtp = async (req, res) => {
     if (!normalizedEmail || !code)
       return res.status(400).json({ success: false, message: 'Email and verification code are required.' });
 
-    const parent = await User.findOne({ email: normalizedEmail, role: 'parent' }).select(
-      '+parentOtpHash +parentOtpExpires +parentOtpAttempts +parentOtpLastSentAt password'
-    );
+    const pending = await PendingParentSignup.findOne({ email: normalizedEmail }).select(OTP_SELECT);
 
-    if (!parent)
+    if (!pending)
       return res.status(404).json({
         success: false,
         message: 'No pending account found. Please register first.',
       });
 
-    if (parent.emailVerifiedAt) {
+    if (pending.emailVerifiedAt) {
       // Already verified – just return a new token
-      const token = issueEnrollmentToken(parent._id);
+      const token = issueEnrollmentToken(pending._id);
       return res.status(200).json({
         success: true,
         message: 'Email already verified.',
         token,
-        emailVerifiedAt: parent.emailVerifiedAt,
-        parentId: String(parent._id),
+        emailVerifiedAt: pending.emailVerifiedAt,
+        parentId: String(pending._id),
       });
     }
 
-    if (!parent.parentOtpHash || !parent.parentOtpExpires)
+    if (!pending.otpHash || !pending.otpExpires)
       return res.status(400).json({ success: false, message: 'No verification code found. Please request a new one.' });
 
-    if (new Date() > new Date(parent.parentOtpExpires))
+    if (new Date() > new Date(pending.otpExpires))
       return res.status(400).json({ success: false, message: 'Verification code has expired. Please request a new one.' });
 
     // Increment attempts before checking to prevent timing attacks
-    parent.parentOtpAttempts = (parent.parentOtpAttempts || 0) + 1;
+    pending.otpAttempts = (pending.otpAttempts || 0) + 1;
 
-    if (parent.parentOtpAttempts > OTP_MAX_ATTEMPTS) {
-      await parent.save();
+    if (pending.otpAttempts > OTP_MAX_ATTEMPTS) {
+      await pending.save();
       return res.status(429).json({
         success: false,
         message: 'Too many incorrect attempts. Please request a new verification code.',
@@ -378,9 +371,9 @@ const verifyParentOtp = async (req, res) => {
       });
     }
 
-    if (hashValue(code) !== parent.parentOtpHash) {
-      const remaining = OTP_MAX_ATTEMPTS - parent.parentOtpAttempts;
-      await parent.save();
+    if (hashValue(code) !== pending.otpHash) {
+      const remaining = OTP_MAX_ATTEMPTS - pending.otpAttempts;
+      await pending.save();
       return res.status(400).json({
         success: false,
         message: `Incorrect verification code. ${remaining} attempt(s) remaining.`,
@@ -389,22 +382,21 @@ const verifyParentOtp = async (req, res) => {
     }
 
     // ── Success ──
-    parent.emailVerifiedAt = new Date();
-    parent.parentOtpHash = undefined;
-    parent.parentOtpExpires = undefined;
-    parent.parentOtpAttempts = 0;
-    // Verifying the email buys the draft a fresh survival window.
-    if (parent.enrollmentDraft) parent.draftExpiresAt = new Date(Date.now() + DRAFT_TTL_MS);
-    await parent.save();
+    pending.emailVerifiedAt = new Date();
+    pending.otpHash = undefined;
+    pending.otpExpires = undefined;
+    pending.otpAttempts = 0;
+    // Verifying the email buys the signup a fresh survival window.
+    pending.expiresAt = draftExpiry();
+    await pending.save();
 
-    const token = issueEnrollmentToken(parent._id);
+    const token = issueEnrollmentToken(pending._id);
 
     logAudit({
       req,
-      userId: parent._id,
       action: 'Parent OTP Verified',
       module: 'Authentication',
-      description: `Parent email verified: ${normalizedEmail}`,
+      description: `Parent email verified (pending signup): ${normalizedEmail}`,
       status: 'SUCCESS',
     }).catch(() => {});
 
@@ -412,8 +404,8 @@ const verifyParentOtp = async (req, res) => {
       success: true,
       message: 'Email verified successfully. You may now continue with enrollment.',
       token,
-      emailVerifiedAt: parent.emailVerifiedAt,
-      parentId: String(parent._id),
+      emailVerifiedAt: pending.emailVerifiedAt,
+      parentId: String(pending._id),
     });
   } catch (err) {
     console.error('verifyParentOtp error:', err);

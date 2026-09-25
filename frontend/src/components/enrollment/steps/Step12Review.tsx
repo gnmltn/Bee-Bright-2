@@ -62,6 +62,10 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         emergencyContact: data.emergencyContact || undefined,
         consentVersion: data.consentVersion,
         consentItems: data.consentItems,
+        // The payment proof is submitted WITH the enrollment: the parent account, the
+        // enrollment and the proof are all created together at this one point.
+        proofDataUrl: data.proofDataUrl || undefined,
+        payerReference: data.payerReference || undefined,
         assessment: data.assessmentApplicable === null ? undefined : {
           applicable: data.assessmentApplicable,
           skipReason: data.assessmentSkipReason || undefined,
@@ -76,20 +80,6 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
 
       const res = await enrollmentService.submitWizard(payload);
       const { enrollmentId, paymentId, permanentStudentId } = res.data;
-
-      // Upload proof
-      if (data.proofDataUrl) {
-        try {
-          await enrollmentService.submitPaymentProof(enrollmentId, {
-            proofDataUrl: data.proofDataUrl,
-            payerReference: data.payerReference || undefined,
-            paymentMethod: data.paymentMethod,
-          });
-        } catch {
-          // Non-fatal — enrollment was created, proof can be uploaded later
-          toast({ title: 'Note', description: 'Enrollment created but proof upload failed. You can re-upload from your dashboard.', variant: 'destructive' });
-        }
-      }
 
       update({ submittedEnrollmentId: enrollmentId, submittedPaymentId: paymentId, submittedAmountDue: amountDue });
       if (!keepSessionToken) {

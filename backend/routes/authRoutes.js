@@ -35,8 +35,11 @@ const {
 } = require('../middleware/rateLimit');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validate');
+const { assertValidEmail } = require('../utils/emailRules');
 
 const preserveEmailAddress = (value) => String(value || '').trim().toLowerCase();
+// Every email field on every auth form goes through the same character rules.
+const emailField = () => body('email').customSanitizer(preserveEmailAddress).custom(assertValidEmail);
 
 // Middleware to normalize field names
 const normalizeFields = (req, res, next) => {
@@ -64,7 +67,7 @@ router.post(
   '/register-parent',
   validate([
     body('name').notEmpty().trim().withMessage('Name is required'),
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('mobile').notEmpty().withMessage('Mobile number is required'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     body('draftId').optional({ nullable: true }).isMongoId().withMessage('Invalid draft reference'),
@@ -74,14 +77,14 @@ router.post(
 router.post(
   '/parent-otp/send',
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
   ]),
   sendParentOtp
 );
 router.post(
   '/parent-otp/verify',
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('code').isLength({ min: 6, max: 6 }).isNumeric().withMessage('6-digit code required'),
   ]),
   verifyParentOtp
@@ -91,7 +94,7 @@ router.post(
   '/login-start',
   userLoginLimiter,
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('password').notEmpty().withMessage('Password is required'),
     body('role').isIn(['student', 'tutor', 'parent']).withMessage('Role must be student, tutor, or parent'),
   ]),
@@ -102,7 +105,7 @@ router.post(
   '/admin-login-start',
   adminLoginLimiter,
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('password').notEmpty().withMessage('Password is required'),
   ]),
   adminLoginStart
@@ -111,7 +114,7 @@ router.post(
 router.post(
   '/login-verify-otp',
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('verificationId').notEmpty().withMessage('Verification session is required'),
     body('otp')
       .isLength({ min: 6, max: 6 })
@@ -125,7 +128,7 @@ router.post(
 router.post(
   '/admin-login-verify-otp',
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('verificationId').notEmpty().withMessage('Verification session is required'),
     body('otp')
       .isLength({ min: 6, max: 6 })
@@ -145,7 +148,7 @@ router.post(
   validate([
     body('firstName').notEmpty().withMessage('First name is required').trim(),
     body('lastName').notEmpty().withMessage('Last name is required').trim(),
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('phone').notEmpty().withMessage('Phone number is required').trim(),
     body('role').optional().equals('student').withMessage('Public registration is only available for student accounts'),
     body('password')
@@ -160,7 +163,7 @@ router.post(
   '/login',
   userLoginLimiter,
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('password').notEmpty().withMessage('Password is required'),
     body('role').isIn(['student', 'tutor']).withMessage('Role must be student or tutor'),
   ]),
@@ -171,7 +174,7 @@ router.post(
   '/admin-login',
   adminLoginLimiter,
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('password').notEmpty().withMessage('Password is required'),
   ]),
   adminLogin
@@ -181,7 +184,7 @@ router.post(
   '/forgot_password',
   passwordOtpRequestLimiter,
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
   ]),
   forgotPassword
 );
@@ -190,7 +193,7 @@ router.post(
   '/reset_password',
   passwordOtpVerifyLimiter,
   validate([
-    body('email').isEmail().withMessage('Valid email is required').customSanitizer(preserveEmailAddress),
+    emailField(),
     body('otp')
       .isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
       .isNumeric().withMessage('OTP must be numeric'),

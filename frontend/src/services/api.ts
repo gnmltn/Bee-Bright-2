@@ -337,6 +337,9 @@ export const enrollmentService = {
     emergencyContact?: string;
     consentVersion: string;
     consentItems: { name: string; accepted: boolean; version: string }[];
+    /** Payment proof (data URL) + reference, submitted together with the enrollment. */
+    proofDataUrl?: string;
+    payerReference?: string;
     assessment?: {
       applicable: boolean;
       skipReason?: string;

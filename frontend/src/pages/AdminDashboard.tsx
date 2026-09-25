@@ -35,8 +35,9 @@ import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment
 import { OneOnOneSchedulingWizard } from "@/components/admin/OneOnOneSchedulingWizard";
 import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulingWizard";
 import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
-import { notifyBadgesChanged } from "@/lib/navBadges";
+import { notifyBadgesChanged, useNavBadges } from "@/lib/navBadges";
 import { displayStudentId } from "@/lib/children";
+import { getEmailError, getEmailCharacterError } from "@/utils/emailRules";
 import { RemarksReviewHistory } from "@/components/admin/RemarksReviewHistory";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -423,6 +424,9 @@ export default function AdminDashboard() {
   const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
   const [enrollmentsError, setEnrollmentsError] = useState<string | null>(null);
   const [enrollmentStatusFilter, setEnrollmentStatusFilter] = useState<string>('all');
+  // Waiting-item counts for the Payment Review / Pending Approval tabs (server-side, so they
+  // are exact even past the 100 rows the table loads); refreshed with the sidebar badges.
+  const { badges: enrollmentTabBadges } = useNavBadges(user?.role);
   const [enrollmentSearch, setEnrollmentSearch] = useState('');
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [viewEnrollmentId, setViewEnrollmentId] = useState<string | null>(null);
@@ -2464,12 +2468,26 @@ export default function AdminDashboard() {
                     { value: 'pending',                  label: 'Legacy Pending' },
                   ].map((f) => (
                     <button key={f.value} onClick={() => setEnrollmentStatusFilter(f.value)}
-                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
                         enrollmentStatusFilter === f.value
                           ? 'bg-primary text-primary-foreground border-primary'
                           : 'bg-card border-border text-muted-foreground hover:border-primary/40'
                       }`}>
                       {f.label}
+                      {(() => {
+                        // Same red count badge as the sidebar: how many are waiting in this tab.
+                        const waiting = f.value === 'payment_under_verification' ? (enrollmentTabBadges.paymentReview || 0)
+                          : f.value === 'pending_approval' ? (enrollmentTabBadges.pendingApproval || 0) : 0;
+                        return waiting > 0 ? (
+                          <span
+                            data-testid={`enrollment-tab-badge-${f.value}`}
+                            aria-label={`${waiting} waiting`}
+                            className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground"
+                          >
+                            {waiting > 99 ? '99+' : waiting}
+                          </span>
+                        ) : null;
+                      })()}
                     </button>
                   ))}
                 </div>
@@ -4253,6 +4271,11 @@ export default function AdminDashboard() {
                 toast.error("First name, last name, email, password, and phone are required.");
                 return;
               }
+              const tutorEmailProblem = getEmailError(addTutorForm.email);
+              if (tutorEmailProblem) {
+                toast.error(tutorEmailProblem);
+                return;
+              }
               setAddTutorSubmitting(true);
               try {
                 const availabilityStr =
@@ -4339,12 +4362,18 @@ export default function AdminDashboard() {
               <Label htmlFor="tutor-email">Email (provided by admin)</Label>
               <Input
                 id="tutor-email"
-                type="email"
+                type="text"
+                inputMode="email"
+                autoComplete="off"
+                aria-invalid={!!getEmailCharacterError(addTutorForm.email)}
                 value={addTutorForm.email}
                 onChange={(e) => handleTutorEmailChange(e.target.value)}
                 placeholder="tutor@beebright.edu.ph"
                 required
               />
+              {getEmailCharacterError(addTutorForm.email) && (
+                <p role="alert" className="text-xs text-destructive">{getEmailCharacterError(addTutorForm.email)}</p>
+              )}
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-muted-foreground">
                   The account will be created immediately using the email and password provided.
@@ -4512,6 +4541,11 @@ export default function AdminDashboard() {
                   toast.error("First name, last name, email, password, and phone are required.");
                   return;
                 }
+                const adminEmailProblem = getEmailError(addAdminForm.email);
+                if (adminEmailProblem) {
+                  toast.error(adminEmailProblem);
+                  return;
+                }
                 setAddAdminSubmitting(true);
                 try {
                   const res = await userService.createAdmin({
@@ -4556,7 +4590,10 @@ export default function AdminDashboard() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="admin-email">Email</Label>
-              <Input id="admin-email" type="email" value={addAdminForm.email} onChange={(e) => handleAdminEmailChange(e.target.value)} placeholder="admin@beebright.com" required />
+              <Input id="admin-email" type="text" inputMode="email" autoComplete="off" aria-invalid={!!getEmailCharacterError(addAdminForm.email)} value={addAdminForm.email} onChange={(e) => handleAdminEmailChange(e.target.value)} placeholder="admin@beebright.com" required />
+              {getEmailCharacterError(addAdminForm.email) && (
+                <p role="alert" className="text-xs text-destructive">{getEmailCharacterError(addAdminForm.email)}</p>
+              )}
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-muted-foreground">
                   The account will be created immediately using the email and password provided.

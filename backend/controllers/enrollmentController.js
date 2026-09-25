@@ -30,6 +30,9 @@ const { getEmailErrorMessage, logEmailError } = require('../utils/emailService')
 const { PROGRAM_POLICIES } = require('../utils/schedulingPolicy');
 const { canTutorHandleSchedule } = require('./scheduleController');
 const { permanentIdOf, findRenewalSource } = require('../utils/studentIdentity');
+const { getEmailError } = require('../utils/emailRules');
+const PendingParentSignup = require('../models/PendingParentSignup');
+const { findPendingFromRequest, assertPendingReady, createUserFromPending, discardPending } = require('../utils/parentSignup');
 
 // ── Constants ────────────────────────────────────────────────────────────
 const PROOF_DIR = path.join(__dirname, '..', 'uploads', 'payments');
@@ -96,8 +99,9 @@ function saveRequirementFromDataUrl(dataUrl, enrollmentId, kind) {
 const sendEnrollmentVerificationCode = async (req, res) => {
   try {
     const normalizedEmail = normalizeEmail(req.body?.email || '');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
-      return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
+    const legacyEmailProblem = getEmailError(normalizedEmail);
+    if (legacyEmailProblem)
+      return res.status(400).json({ success: false, message: legacyEmailProblem });
 
     let v = await EnrollmentVerification.findOne({ email: normalizedEmail })
       .select('+otpHash +otpExpiresAt +otpAttempts +lastSentAt');
@@ -172,6 +176,18 @@ const submitEnrollment = async (req, res) => {
     // ── Resolve parent identity ──
     let parentId = req.user?._id || null;
     let parentUser = req.user || null;
+    let pendingSignup = null;
+
+    // A verified signup that has NOT become an account yet (nothing is in Users). Its
+    // enrollment token carries the pending id; the real User is created below, in this
+    // same request, together with the enrollment and its payment proof.
+    if (!parentId) {
+      pendingSignup = await findPendingFromRequest(req);
+      if (pendingSignup) {
+        await assertPendingReady(pendingSignup);
+        parentId = pendingSignup._id;
+      }
+    }
 
     // Unauthenticated fallback (legacy path): email + OTP window
     if (!parentId) {
@@ -356,8 +372,22 @@ const submitEnrollment = async (req, res) => {
       }
     }
 
-    // ── Create Enrollment ──
-    const enrollment = new Enrollment({
+    // ── Payment proof: arrives WITH the submission, so the account, the enrollment and
+    // the payment proof are all written together at this single point. A bad file fails
+    // the request here, before anything is created. ──
+    const proofUrl = body.proofDataUrl ? saveProofFromDataUrl(body.proofDataUrl, enrollmentId) : null;
+    const payerReference = String(body.payerReference || '').trim() || null;
+
+    // ── Create Account (from the verified pending signup) + Enrollment + Payment ──
+    let createdParent = null;
+    let enrollment = null;
+    let payment = null;
+    try {
+    if (pendingSignup) {
+      createdParent = await createUserFromPending(pendingSignup);
+      parentUser = createdParent;
+    }
+    enrollment = new Enrollment({
       enrollmentId,
       parent: parentId,
       student: renewalSource?.student || null,
@@ -381,19 +411,34 @@ const submitEnrollment = async (req, res) => {
       preEnrollmentAssessment: assessment || undefined,
     });
     pushStatusHistory(enrollment, 'submitted', parentId, 'parent', 'Enrollment wizard submitted');
+    if (proofUrl) {
+      pushStatusHistory(enrollment, 'payment_under_verification', null, 'system', 'Payment proof submitted');
+      enrollment.paymentStatus = 'submitted';
+    }
     await enrollment.save();
 
     // ── Create Payment ──
-    const payment = new Payment({
+    payment = new Payment({
       parent: parentId,
       enrollment: enrollment._id,
       amount: amountDue,
       amountDue,
       paymentType: paymentOption,
       paymentMethod,
-      status: 'pending',
+      status: proofUrl ? 'submitted' : 'pending',
+      proofUrl,
+      payerReference,
+      submittedAt: proofUrl ? new Date() : null,
     });
     await payment.save();
+    } catch (creationErr) {
+      // Nothing may be left half-written: no orphaned enrollment, and no account that
+      // was created for this attempt (the pending signup stays so the parent can retry).
+      if (enrollment?._id) await Enrollment.deleteOne({ _id: enrollment._id }).catch(() => {});
+      if (createdParent) await User.deleteOne({ _id: createdParent._id }).catch(() => {});
+      throw creationErr;
+    }
+    if (pendingSignup) await discardPending(pendingSignup);
 
     // ── Finalize the parent account ──
     // The Step-2 record has been a draft until now. The parent has completed the
@@ -424,9 +469,17 @@ const submitEnrollment = async (req, res) => {
       }).catch(() => {});
     }
 
+    if (proofUrl && email) {
+      require('../utils/emailService').sendEmail({
+        to: email,
+        subject: `Bee Bright — Payment Proof Received (${permanentIdOf(enrollment)})`,
+        html: `<p>Hi ${parentUser?.firstName || 'there'}, we received your payment proof for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+      }, 'proof received notification').catch(() => {});
+    }
+
     logAudit({ req, userId: parentId, action: 'Submit Enrollment', module: 'Enrollment',
-      description: `Enrollment submitted: ${enrollmentId}`, status: 'SUCCESS',
-      metadata: { enrollmentId, paymentMethod, totalFee } }).catch(() => {});
+      description: `Enrollment submitted: ${enrollmentId}${createdParent ? ' (parent account created with the completed enrollment)' : ''}`, status: 'SUCCESS',
+      metadata: { enrollmentId, paymentMethod, totalFee, proofSubmitted: Boolean(proofUrl) } }).catch(() => {});
 
     return res.status(201).json({
       success: true,
@@ -435,6 +488,7 @@ const submitEnrollment = async (req, res) => {
       permanentStudentId: enrollment.permanentStudentId,
       enrollmentDbId: String(enrollment._id),
       paymentId: String(payment._id),
+      proofSubmitted: Boolean(proofUrl),
       amountDue,
       totalFee,
       paymentMethod,
@@ -519,8 +573,17 @@ const adminWalkInEnroll = async (req, res) => {
 
     const parentId = String(body.parentId || '');
     if (!parentId) return res.status(400).json({ success: false, message: 'parentId is required (create the parent account first).' });
-    const parentUser = await User.findOne({ _id: parentId, role: { $in: ['parent', 'student'] } });
-    if (!parentUser) return res.status(404).json({ success: false, message: 'Parent account not found.' });
+    let parentUser = await User.findOne({ _id: parentId, role: { $in: ['parent', 'student'] } });
+    // The parent typed in the Add Student wizard is only a verified PENDING signup until
+    // this walk-in is completed; the real account is created together with the enrollment.
+    let pendingSignup = null;
+    if (!parentUser) {
+      pendingSignup = mongoose.Types.ObjectId.isValid(parentId)
+        ? await PendingParentSignup.findById(parentId).select('+passwordHash')
+        : null;
+      if (!pendingSignup) return res.status(404).json({ success: false, message: 'Parent account not found.' });
+      await assertPendingReady(pendingSignup);
+    }
 
     // ── Validate packages (same resolution as the parent-facing wizard) ──
     const packages = Array.isArray(body.packages) ? body.packages : [];
@@ -613,7 +676,16 @@ const adminWalkInEnroll = async (req, res) => {
     const enrollmentId = await generateEnrollmentId();
     const now = new Date();
 
-    const enrollment = new Enrollment({
+    let createdParent = null;
+    let enrollment = null;
+    let payment = null;
+    try {
+    if (pendingSignup) {
+      createdParent = await createUserFromPending(pendingSignup);
+      parentUser = createdParent;
+    }
+
+    enrollment = new Enrollment({
       enrollmentId,
       parent: parentUser._id,
       studentId: enrollmentId,
@@ -641,7 +713,7 @@ const adminWalkInEnroll = async (req, res) => {
     pushStatusHistory(enrollment, 'approved', req.user._id, 'admin', 'Walk-in enrollment — payment collected on-site');
     await enrollment.save();
 
-    const payment = new Payment({
+    payment = new Payment({
       parent: parentUser._id,
       enrollment: enrollment._id,
       amount: amountPaid,
@@ -655,6 +727,12 @@ const adminWalkInEnroll = async (req, res) => {
       notes: 'Walk-in — collected on-site by admin.',
     });
     await payment.save();
+    } catch (creationErr) {
+      if (enrollment?._id) await Enrollment.deleteOne({ _id: enrollment._id }).catch(() => {});
+      if (createdParent) await User.deleteOne({ _id: createdParent._id }).catch(() => {});
+      throw creationErr;
+    }
+    if (pendingSignup) await discardPending(pendingSignup);
 
     await User.findByIdAndUpdate(parentUser._id, {
       $set: { isActive: true, enrollmentStatus: 'active', enrollmentDraft: false },
