@@ -161,3 +161,13 @@ export function getRequiredDaysForPackage(programCode: string, sessionCount: num
   if (sessionCount == null) return null;
   return PACKAGE_DAYS_LOCK[programCode]?.[sessionCount] ?? null;
 }
+
+/**
+ * The Kindergarten/Grade-level pre-enrollment Assessment Form is Academic Tutorial only
+ * (Redundant_Switchers_Settings_Rules_EnrollmentBugs.pdf, item G/H) — Examination Preparation
+ * and Toddlers Playgroup never show or require it. Single source of truth for every place that
+ * decides whether to show the Assessment step: the main enrollment wizard (EnrollmentWizard.tsx),
+ * StepAssessment.tsx's own skip logic, RenewProgramModal.tsx and AddChildModal.tsx. Mirrors
+ * backend/utils/ensureAssessmentTemplates.js's resolveAcademicProgramCodes().
+ */
+export const ASSESSMENT_ELIGIBLE_PROGRAM_CODES = new Set(['ACT102']);

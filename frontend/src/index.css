@@ -160,6 +160,19 @@
   }
 }
 
+/* Every password field in the app renders its own show/hide "eye" icon (PasswordInput,
+   Login.tsx, AdminLogin.tsx) — but Edge/IE also inject their OWN native reveal ("eye")
+   and clear ("x") controls into any type="password" input once it has text, at the same
+   top-right corner our custom icon sits in. The two icons then overlap/fight for the same
+   pixels — which is what read as "the eye icon renders distorted after typing" (only after
+   the field has a value, and inconsistently, matching exactly when the native icon appears).
+   Suppressing the native ones is the standard fix and has no effect in Chrome/Firefox/Safari,
+   which never had them. */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+}
+
 @layer components {
   /* Bee pattern background */
   .bee-pattern {

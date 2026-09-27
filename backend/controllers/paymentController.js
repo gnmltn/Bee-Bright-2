@@ -770,6 +770,14 @@ const verifyPayment = async (req, res) => {
     // later) — a 'remaining' payment must never be treated as "the whole enrollment
     // just became fully paid and active" the way a down payment is.
     const isRemainingBalance = payment.paymentType === 'remaining';
+    // `payment.student` is a legacy field from the old direct-student-login flow and
+    // is never populated by the current parent-account enrollment wizard (Payment is
+    // created with only `parent` set — see enrollmentController.js's submitEnrollment).
+    // Using it here silently no-ops the User update below, which is exactly why
+    // "Verify" on the Payments tab previously left the Users tab / login gate stuck
+    // on "inactive — pending payment" even though Enrollments tab + tracker showed
+    // active. Resolve the real account the same way adminApproveEnrollment does.
+    const targetUserId = payment.parent || enrollment?.parent || payment.student;
 
     if (verified) {
       if (!enrollment) {
@@ -796,11 +804,13 @@ const verifyPayment = async (req, res) => {
         await enrollment.save();
       }
 
-      if (!isRemainingBalance) {
-        await User.findByIdAndUpdate(payment.student, {
-          enrollmentStatus: 'active',
-          paymentStatus: 'verified',
-          isActive: true
+      if (!isRemainingBalance && targetUserId) {
+        // Mirror adminApproveEnrollment's user activation exactly — this is the same
+        // "is this account approved and able to log in" gate the Enrollments tab's
+        // Approve button already updates correctly.
+        await User.findByIdAndUpdate(targetUserId, {
+          $set: { isActive: true, enrollmentStatus: 'active', paymentStatus: 'verified', enrollmentDraft: false },
+          $unset: { draftExpiresAt: 1 },
         });
       }
 
@@ -841,8 +851,8 @@ const verifyPayment = async (req, res) => {
         await enrollment.save();
       }
 
-      if (!isRemainingBalance) {
-        await User.findByIdAndUpdate(payment.student, {
+      if (!isRemainingBalance && targetUserId) {
+        await User.findByIdAndUpdate(targetUserId, {
           enrollmentStatus: 'payment_rejected',
           paymentStatus: 'rejected',
           isActive: false
@@ -883,7 +893,7 @@ const getPendingBalances = async (req, res) => {
   try {
     const outstanding = await listOutstandingBalances();
     const byParent = new Map();
-    for (const { enrollment, remaining } of outstanding) {
+    for (const { enrollment, remaining, paid } of outstanding) {
       const parent = enrollment.parent;
       const key = String(parent?._id || 'unknown');
       if (!byParent.has(key)) {
@@ -893,10 +903,21 @@ const getPendingBalances = async (req, res) => {
           parentEmail: parent?.email || '',
           remaining: 0,
           children: [],
+          bills: [],
         });
       }
       const row = byParent.get(key);
       row.remaining += remaining;
+      // One itemized line per child enrollment - what the parent's bill(s) are made of.
+      row.bills.push({
+        enrollmentId: enrollment.enrollmentId,
+        studentId: enrollment.permanentStudentId || enrollment.studentId || enrollment.enrollmentId || '',
+        childName: [enrollment.studentSnapshot?.firstName, enrollment.studentSnapshot?.lastName].filter(Boolean).join(' ').trim() || 'Child',
+        programs: (enrollment.packages || []).map((pkg) => pkg.displayName || pkg.programCode).filter(Boolean),
+        totalFee: Math.round(Number(enrollment.totalFee) || 0),
+        paid,
+        remaining,
+      });
       const child = [enrollment.studentSnapshot?.firstName, enrollment.studentSnapshot?.lastName].filter(Boolean).join(' ').trim();
       if (child && !row.children.includes(child)) row.children.push(child);
     }

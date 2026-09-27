@@ -48,6 +48,8 @@ export type SelectedChildContextValue = {
   setActiveChildId: (id: string) => void;
   /** Reflect a just-uploaded child picture everywhere without a refetch. */
   setChildPhoto: (childKey: string, path: string) => void;
+  /** Reflect a just-saved child name everywhere without a refetch. */
+  setChildName: (childKey: string, firstName: string, middleName: string, lastName: string) => void;
 };
 
 export const SelectedChildContext = createContext<SelectedChildContextValue | undefined>(undefined);
@@ -120,11 +122,21 @@ export function SelectedChildProvider({ children }: { children: ReactNode }) {
     setEnrollments((prev) => prev.map((e) => ((e.permanentStudentId || e._id) === childKey ? { ...e, studentProfileImage: path } : e)));
   }, []);
 
+  // Every enrollment sharing this child's permanent Student ID gets the new name — the backend
+  // updates them all together, so the local copy stays consistent with it.
+  const setChildName = useCallback((childKey: string, firstName: string, middleName: string, lastName: string) => {
+    setEnrollments((prev) => prev.map((e) => (
+      (e.permanentStudentId || e._id) === childKey
+        ? { ...e, studentSnapshot: { ...e.studentSnapshot, firstName, middleName, lastName } }
+        : e
+    )));
+  }, []);
+
   const activeChild = isParent ? childList.find((c) => c.key === activeChildId) : undefined;
 
   const value = useMemo<SelectedChildContextValue>(
-    () => ({ enrollments, setEnrollments, loading, refresh, childList, activeChildId, activeChild, setActiveChildId, setChildPhoto }),
-    [enrollments, loading, refresh, childList, activeChildId, activeChild, setActiveChildId, setChildPhoto]
+    () => ({ enrollments, setEnrollments, loading, refresh, childList, activeChildId, activeChild, setActiveChildId, setChildPhoto, setChildName }),
+    [enrollments, loading, refresh, childList, activeChildId, activeChild, setActiveChildId, setChildPhoto, setChildName]
   );
 
   return <SelectedChildContext.Provider value={value}>{children}</SelectedChildContext.Provider>;

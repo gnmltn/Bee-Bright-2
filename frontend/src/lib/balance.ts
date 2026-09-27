@@ -2,6 +2,8 @@
 export type BalanceEnrollment = {
   status?: string;
   totalFee?: number;
+  /** ISO date the remaining 50% falls due (halfway session), or null until the schedule reaches it. */
+  remainingDueDate?: string | null;
   payments?: { status?: string; paymentType?: string; amount?: number; amountDue?: number; amountPaid?: number }[];
 };
 
@@ -29,3 +31,20 @@ export function expectedRemainingAfterDown(e: BalanceEnrollment): number {
 }
 
 export const peso = (n: number) => `₱${n.toLocaleString("en-PH")}`;
+
+/** How many days before the due date the reminder starts appearing. */
+export const REMINDER_LEAD_DAYS = 3;
+
+/** True from REMINDER_LEAD_DAYS before the due date onwards (including overdue). No due date yet → false. */
+export function isReminderDue(dueDate: string | null | undefined, now: Date = new Date()): boolean {
+  if (!dueDate) return false;
+  const due = new Date(dueDate);
+  if (Number.isNaN(due.getTime())) return false;
+  return due.getTime() - now.getTime() <= REMINDER_LEAD_DAYS * 24 * 60 * 60 * 1000;
+}
+
+export function formatDueDate(dueDate: string | null | undefined): string {
+  if (!dueDate) return "";
+  const due = new Date(dueDate);
+  return Number.isNaN(due.getTime()) ? "" : due.toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" });
+}

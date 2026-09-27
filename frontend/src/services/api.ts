@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { clearAuthSession, getAuthToken } from '@/utils/authStorage';
 import { notifySessionActivity, shouldTrackApiActivity } from '@/utils/sessionActivity';
+import type { PreEnrollmentAssessment } from '@/components/enrollment/assessment-types';
 
 // Create axios instance - FIXED: Use correct environment variable
 const api = axios.create({
@@ -90,7 +91,7 @@ export const parentAuthService = {
     api.post<{ success: boolean; valid: boolean; available: boolean; message: string | null }>(
       '/auth/check-mobile', { mobile }
     ),
-  register: (data: { name: string; email: string; mobile: string; password: string; draftId?: string | null }) =>
+  register: (data: { name?: string; firstName?: string; middleName?: string; lastName?: string; email: string; mobile: string; password: string; draftId?: string | null }) =>
     api.post<{ success: boolean; message: string; verificationSentTo: string; parentId: string }>(
       '/auth/register-parent', data
     ),
@@ -301,6 +302,11 @@ export const enrollmentService = {
   /** Parent sets the profile picture of one of their children (key = the child's permanent Student ID). */
   setChildPhoto: (childKey: string, image: string) =>
     api.put<{ success: boolean; message?: string; studentProfileImage?: string }>('/enrollments/child-photo', { childKey, image }),
+  /** Parent edits one of their children's name (Settings → Student Information). Student ID stays locked. */
+  setChildName: (childKey: string, firstName: string, middleName: string, lastName: string) =>
+    api.put<{ success: boolean; message?: string; firstName?: string; middleName?: string; lastName?: string }>(
+      '/enrollments/child-name', { childKey, firstName, middleName, lastName }
+    ),
   getPricing: () => api.get<{ success: boolean; pricing: {
     programCode: string; packageSlug: string; displayName: string;
     durationDesc?: string; priceFull: number; priceDown?: number | null;
@@ -382,7 +388,9 @@ export const enrollmentService = {
     }>('/enrollments/availability', { params: { date, programCode } }),
 
   getMyEnrollments: () => api.get('/enrollments/my-enrollments'),
-  getTutorAssessments: () => api.get('/enrollments/tutor/assessments'),
+  /** Tutor Dashboard "Assessments" preview — completed pre-enrollment assessment forms of this tutor's own Academic Tutorial students. */
+  getTutorAssessments: () =>
+    api.get<{ success: boolean; enrollments: TutorAssessmentEnrollment[] }>('/enrollments/tutor/assessments'),
 
   // ── Legacy ────────────────────────────────────────────────────────────
   submitEnrollment: (data: {
@@ -434,6 +442,21 @@ export const enrollmentService = {
     paymentId: string; totalFee: number; amountDue: number; amountPaid: number;
   }>('/enrollments/admin/walk-in', data),
 };
+
+/** One row of GET /enrollments/tutor/assessments — a student's completed pre-enrollment assessment. */
+export interface TutorAssessmentEnrollment {
+  _id: string;
+  enrollmentId: string;
+  studentId?: string;
+  permanentStudentId?: string;
+  student?: string;
+  studentSnapshot?: { firstName?: string; middleName?: string; lastName?: string; birthdate?: string };
+  packages?: { programCode: string; displayName?: string }[];
+  status: string;
+  preEnrollmentAssessment: PreEnrollmentAssessment;
+  parent?: { firstName?: string; lastName?: string; email?: string; phone?: string };
+  createdAt?: string;
+}
 
 export interface AdminEnrollment {
   _id: string;
@@ -495,9 +518,9 @@ export interface AdminEnrollment {
 export const userService = {
   /** Admin: get all users from database */
   getAllUsers: () => api.get('/users'),
-  /** Admin: every parent's children (name + permanent Student ID), keyed by parent user id. */
+  /** Admin: every parent's children (name, permanent Student ID, enrolled programs), keyed by parent user id. */
   getParentChildren: () =>
-    api.get<{ success: boolean; children: Record<string, { name: string; studentId: string }[]> }>('/users/parent-children'),
+    api.get<{ success: boolean; children: Record<string, ParentChild[]> }>('/users/parent-children'),
   /** Admin: create tutor with employment type and availability. */
   createTutor: (data: {
     firstName: string;
@@ -555,6 +578,16 @@ export interface PublicDashboardStats {
   monthlyNewStudents: number;
 }
 
+/** One child of a parent as listed in the admin Users tab. */
+export interface ParentChild {
+  name: string;
+  studentId: string;
+  /** Display names of the programs/packages the child is enrolled in. */
+  programs?: string[];
+  /** The child's own student User id, when an account exists for them. */
+  studentUserId?: string | null;
+}
+
 export interface AdminUser {
   _id: string;
   firstName: string;
@@ -582,6 +615,8 @@ export interface AdminSchedule {
   startTime: string;
   endTime: string;
   sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
+  /** Toddlers Playgroup roster this session belongs to. */
+  group?: string | null;
   maxCapacity?: number;
   students?: Array<{ _id: string; firstName?: string; middleName?: string; lastName?: string; profileImage?: string; email?: string }>;
   tutors?: Array<{ _id: string; firstName?: string; middleName?: string; lastName?: string; email?: string }>;
@@ -663,6 +698,29 @@ export const subjectService = {
 };
 
 // Schedule Service – admin list; tutor my-sessions; student my-classes
+/** Body of POST /schedules/monthly (and /monthly/check). A day may carry its own tutor. */
+export interface MonthlyScheduleRequest {
+  studentId?: string;
+  enrollmentId?: string;
+  /** Default tutor — optional when every daySlot names its own. */
+  tutorId?: string;
+  subjectId: string;
+  /** YYYY-MM-DD the month of sessions starts on (defaults to the parent's preferred start date). */
+  startDate?: string;
+  daySlots: { dayOfWeek: number; startTime: string; endTime: string; tutorId?: string }[];
+}
+
+export interface MonthlyScheduleCheck {
+  success: boolean;
+  ok: boolean;
+  startDate: string;
+  conflicts: { date: string; dayOfWeek: number; startTime: string; tutorId: string; reason: string }[];
+  conflictCount: number;
+  /** Next starting dates (YYYY-MM-DD) on which the whole month is available. */
+  suggestions: string[];
+  slotCap: number;
+}
+
 export const scheduleService = {
   getOptions: () => api.get('/schedules/options'),
   getTutorsBySubject: (subjectId: string) => api.get('/schedules/tutors', { params: { subjectId } }),
@@ -695,13 +753,11 @@ export const scheduleService = {
   create: (data: { studentId?: string; students?: string[]; tutorId?: string; tutorIds?: string[]; subjectId: string; date: string; startTime: string; endTime: string; sessionType?: 'one-on-one' | 'small-group' | 'playgroup' }) =>
     api.post('/schedules', data),
   /** Provide either studentId (existing student User) or enrollmentId (resolves/lazily creates the student User from the enrollment). */
-  createMonthly: (data: {
-    studentId?: string;
-    enrollmentId?: string;
-    tutorId: string;
-    subjectId: string;
-    daySlots: { dayOfWeek: number; startTime: string; endTime: string }[];
-  }) => api.post('/schedules/monthly', data),
+  createMonthly: (data: MonthlyScheduleRequest) => api.post('/schedules/monthly', data),
+  /** Preview a 1-on-1 monthly schedule for a Starting Date without creating anything (blocked dates + next open starting dates). */
+  checkMonthly: (data: MonthlyScheduleRequest) => api.post<MonthlyScheduleCheck>('/schedules/monthly/check', data),
+  /** Delete many sessions in a single server-side operation. */
+  bulkDelete: (ids: string[]) => api.post<{ success: boolean; deleted: number; message?: string }>('/schedules/bulk-delete', { ids }),
   /** List active Toddlers Playgroup groups, optionally filtered to an exact day-set + time-window match. */
   listPlaygroupGroups: (params?: { daysOfWeek?: number[]; startTime?: string; endTime?: string }) =>
     api.get<{ success: boolean; groups: PlaygroupGroupOption[] }>('/schedules/playgroup-groups', {
@@ -721,6 +777,10 @@ export const scheduleService = {
     name?: string;
     studentId?: string;
     enrollmentId?: string;
+    /** Several children at once - validated together, all-or-nothing. */
+    enrollmentIds?: string[];
+    /** YYYY-MM-DD the month of sessions starts on (defaults to the parent's preferred start date). */
+    startDate?: string;
     subjectId: string;
   }) => api.post('/schedules/playgroup-groups', data),
   markTutorUnavailability: (data: {
@@ -857,6 +917,16 @@ export type PendingBalanceItem = {
   /** Sum of the remaining 50% across this parent's enrollments. */
   remaining: number;
   children: string[];
+  /** One itemized bill per child enrollment. */
+  bills?: {
+    enrollmentId: string;
+    studentId: string;
+    childName: string;
+    programs: string[];
+    totalFee: number;
+    paid: number;
+    remaining: number;
+  }[];
 };
 
 export type TutorStudentCard = {

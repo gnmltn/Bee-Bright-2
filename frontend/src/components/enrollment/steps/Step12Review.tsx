@@ -59,7 +59,9 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         medications: data.medications || undefined,
         specialNeeds: data.specialNeeds,
         specialNeedsDetails: data.specialNeedsDetails || undefined,
-        emergencyContact: data.emergencyContact || undefined,
+        // The Emergency Contact field is hidden from Step 9 (the parent's own
+        // registered mobile number serves as the emergency contact, same as AddChildModal).
+        emergencyContact: data.emergencyContact || data.parentMobile || undefined,
         consentVersion: data.consentVersion,
         consentItems: data.consentItems,
         // The payment proof is submitted WITH the enrollment: the parent account, the
@@ -128,6 +130,18 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
           <Row label="Name" value={`${data.studentFirstName} ${data.studentMiddleName || ''} ${data.studentLastName}`.replace(/\s+/g, ' ').trim()} />
           <Row label="Birthdate" value={data.birthdate ? new Date(data.birthdate).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'} />
           <Row label="Age" value={data.birthdate ? formatAge(data.birthdate) : '—'} />
+        </Section>
+
+        <Section title="Documents">
+          <Row label="Birth Certificate" value={data.docBirthCertificate ? data.docBirthCertificate.fileName : 'Not uploaded'} />
+          <Row label="2×2 Student Photo" value={data.docStudentPhoto ? data.docStudentPhoto.fileName : 'Not uploaded'} />
+          <Row label="Guardian Valid ID" value={data.docGuardianId ? data.docGuardianId.fileName : 'Not uploaded'} />
+        </Section>
+
+        <Section title="Health & Learning">
+          <Row label="Allergies" value={data.allergies || 'None'} />
+          <Row label="Medications" value={data.medications || 'None'} />
+          <Row label="Special Learning Needs" value={data.specialNeeds ? (data.specialNeedsDetails || 'Yes') : 'No'} />
         </Section>
 
         <Section title="Selected Programs">

@@ -102,7 +102,7 @@ export default function AdminEscalations() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="container mx-auto px-4 py-8 space-y-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="font-display text-2xl font-bold text-foreground">Support Requests</h1>
@@ -148,32 +148,30 @@ export default function AdminEscalations() {
                     <button
                       type="button"
                       onClick={() => setExpanded(isOpen ? null : e._id)}
-                      className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-muted/50"
+                      className="flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-muted/50"
                     >
-                      {isOpen ? <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
-                        : <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {isSafety && <ShieldAlert className="h-4 w-4 text-destructive" />}
-                          <span className="font-medium text-foreground">{categoryLabel(e.category)}</span>
-                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[e.status]}`}>
-                            {STATUS_LABEL[e.status]}
+                      {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+                        {isSafety && <ShieldAlert className="h-4 w-4 text-destructive" />}
+                        <span className="text-sm font-medium text-foreground">{categoryLabel(e.category)}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_TONE[e.status]}`}>
+                          {STATUS_LABEL[e.status]}
+                        </span>
+                        {e.severity === 'urgent' && !isSafety && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-destructive">
+                            <AlertTriangle className="h-3 w-3" /> Urgent
                           </span>
-                          {e.severity === 'urgent' && !isSafety && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-destructive">
-                              <AlertTriangle className="h-3 w-3" /> Urgent
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        )}
+                        <span className="min-w-0 truncate text-xs text-muted-foreground">
                           {requesterName(e)}{e.role ? ` · ${e.role}` : ''} · {formatWhen(e.createdAt)}
-                        </p>
+                        </span>
                       </div>
                     </button>
 
                     {isOpen && (
-                      <div className="space-y-4 border-t border-border bg-muted/30 px-4 py-4 pl-11">
-                        <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5 border-t border-border bg-muted/30 px-4 py-2 pl-10" data-testid="support-request-detail">
+                        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-xs">
                           <Field label="Requester" value={requesterName(e)} />
                           <Field label="Email" value={e.user?.email || e.userIdentifier || '—'} copyable />
                           {e.user?.phone && <Field label="Phone" value={e.user.phone} copyable />}
@@ -187,56 +185,47 @@ export default function AdminEscalations() {
                           )}
                         </div>
 
-                        {(e.concernReason || e.concernExplanation) && (
-                          <div className="space-y-2">
-                            {e.concernReason && (
-                              <div>
-                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Reason</p>
-                                <p className="mt-1 text-sm text-foreground">{e.concernReason}</p>
-                              </div>
-                            )}
-                            {e.concernExplanation && (
-                              <div>
-                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Explanation</p>
-                                <p className="mt-1 whitespace-pre-wrap rounded-lg border border-border bg-card p-3 text-sm text-foreground">
-                                  {e.concernExplanation}
-                                </p>
-                              </div>
-                            )}
-                          </div>
+                        {e.concernReason && (
+                          <p className="text-xs text-foreground">
+                            <span className="font-semibold uppercase tracking-wide text-muted-foreground">Reason </span>
+                            {e.concernReason}
+                          </p>
                         )}
-
+                        {e.concernExplanation && (
+                          <p className="max-h-16 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground">
+                            {e.concernExplanation}
+                          </p>
+                        )}
                         {e.conversationSnippet && !e.concernExplanation && (
-                          <div>
-                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                              Conversation snippet
-                            </p>
-                            <p className="mt-1 whitespace-pre-wrap rounded-lg border border-border bg-card p-3 text-sm text-foreground">
-                              {e.conversationSnippet}
-                            </p>
-                          </div>
+                          <p className="max-h-16 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground">
+                            <span className="font-semibold uppercase tracking-wide text-muted-foreground">Conversation snippet </span>
+                            {e.conversationSnippet}
+                          </p>
                         )}
 
-                        <p className="text-xs text-muted-foreground">
-                          Follow up with the requester by email yourself, then update the status here.
-                        </p>
-
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busyId === e._id || e.status === 'acknowledged' || e.status === 'resolved'}
-                            onClick={() => setRowStatus(e._id, 'acknowledged')}
-                          >
-                            Mark as acknowledged
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={busyId === e._id || e.status === 'resolved'}
-                            onClick={() => setRowStatus(e._id, 'resolved')}
-                          >
-                            {busyId === e._id ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Mark as resolved'}
-                          </Button>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[11px] text-muted-foreground">
+                            Follow up with the requester by email yourself, then update the status here.
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              disabled={busyId === e._id || e.status === 'acknowledged' || e.status === 'resolved'}
+                              onClick={() => setRowStatus(e._id, 'acknowledged')}
+                            >
+                              Mark as acknowledged
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              disabled={busyId === e._id || e.status === 'resolved'}
+                              onClick={() => setRowStatus(e._id, 'resolved')}
+                            >
+                              {busyId === e._id ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Mark as resolved'}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -254,8 +243,8 @@ export default function AdminEscalations() {
 function Field({ label, value, copyable }: { label: string; value: string; copyable?: boolean }) {
   const { toast } = useToast();
   return (
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+    <span className="inline-flex max-w-full items-baseline gap-1">
+      <span className="font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
       <button
         type={copyable ? 'button' : undefined}
         onClick={copyable ? () => {
@@ -264,11 +253,11 @@ function Field({ label, value, copyable }: { label: string; value: string; copya
             () => undefined,
           );
         } : undefined}
-        className={`mt-0.5 block max-w-full truncate text-sm text-foreground ${copyable ? 'hover:text-primary hover:underline' : 'cursor-default'}`}
+        className={`block max-w-full truncate text-xs text-foreground ${copyable ? 'hover:text-primary hover:underline' : 'cursor-default'}`}
         title={copyable ? 'Click to copy' : undefined}
       >
         {value}
       </button>
-    </div>
+    </span>
   );
 }

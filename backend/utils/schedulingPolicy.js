@@ -13,6 +13,15 @@ const OPERATING_END_MINUTES = 17 * 60;
 // session. There is NO upper cap on tutors — staff may assign more than the
 // computed minimum at any time (e.g. based on the toddlers' behavior that day),
 // and the system must never block that; it only blocks going BELOW the minimum.
+// ─── 1-on-1 tutoring-area capacity ─────────────────────────────────────────────
+// The physical Main Tutoring Area only fits roughly 10-12 tutor-student pairs at once. This is
+// a SYSTEM-WIDE cap per hour slot (not per tutor), shared by Academic Tutorial and Examination
+// Preparation together — once an hour already has this many concurrent 1-on-1 sessions, no more
+// can be scheduled into it regardless of tutor availability. Toddlers Playgroup has its own
+// ratio-based room rule and is not counted here. Override with ONE_ON_ONE_SLOT_CAP if the
+// center's floor plan changes.
+const ONE_ON_ONE_SLOT_CAP = Math.max(1, parseInt(process.env.ONE_ON_ONE_SLOT_CAP, 10) || 12);
+
 const PLAYGROUP_MIN_CHILDREN = 2;
 const PLAYGROUP_MAX_CHILDREN = 12;
 
@@ -180,6 +189,7 @@ module.exports = {
   OPERATING_END_MINUTES,
   PLAYGROUP_MIN_CHILDREN,
   PLAYGROUP_MAX_CHILDREN,
+  ONE_ON_ONE_SLOT_CAP,
   resolveProgramCode,
   getProgramPolicy,
   validateTimeWindow,

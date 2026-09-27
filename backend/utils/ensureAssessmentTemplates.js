@@ -7,6 +7,10 @@ const RATING_SCALE = [
   { value: 'needs_improvement', label: 'Needs Improvement' },
 ];
 
+// A plain printed-name text field — the form never captured an actual signature.
+const ASSESSED_BY_LABEL = 'Assessed by (Printed Name)';
+const LEGACY_SIGNATURE_LABEL = /signature/i;
+
 const SHARED_INFO_FIELDS = [
   { key: 'referredCondition', label: 'Referred Condition/Diagnosis (if any)', type: 'text' },
   { key: 'previousSchoolTherapy', label: 'Previous School/Therapy (if applicable)', type: 'text' },
@@ -136,17 +140,16 @@ function grade1Sections() {
   ];
 }
 
+// The Kindergarten/Grade-level Assessment Form is Academic Tutorial only
+// (Redundant_Switchers_Settings_Rules_EnrollmentBugs.pdf, item H) — Examination
+// Preparation was previously matched here too (stale, from an earlier task) and is
+// deliberately excluded now.
 async function resolveAcademicProgramCodes() {
   const packages = await Pricing.find({ active: true }).select('programCode displayName').lean();
   const codes = new Set();
   for (const pkg of packages) {
     const haystack = `${pkg.displayName || ''} ${pkg.programCode || ''}`.toLowerCase();
-    if (
-      haystack.includes('academic') ||
-      haystack.includes('examination') ||
-      haystack.includes('exam prep') ||
-      haystack.includes('exam preparation')
-    ) {
+    if (haystack.includes('academic')) {
       codes.add(pkg.programCode);
     }
   }
@@ -165,14 +168,15 @@ function baseTemplateFields(programCodes) {
     goalsTitle: 'Learning Goals and Proposed Timeline',
     goalColumnLabel: 'Learning Goals',
     timelineColumnLabel: 'Proposed Timeline',
-    assessedByLabel: 'Assessed by (Teacher Signature Over Printed Name)',
+    assessedByLabel: ASSESSED_BY_LABEL,
     notApplicableLabel: 'This form does not apply — the child is not Kindergarten or Grade 1.',
   };
 }
 
 /**
- * Inserts evaluation templates for Academic Tutorial and Examination Preparation programs if missing.
- * Existing templates are not overwritten so later admin edits stay intact.
+ * Inserts evaluation templates for Academic Tutorial if missing. Existing templates are not
+ * overwritten so later admin edits stay intact — except the stale Examination Preparation
+ * eligibility left over from an earlier task, which is corrected in place every startup (item H).
  */
 async function ensureAssessmentTemplates() {
   const programCodes = await resolveAcademicProgramCodes();
@@ -209,7 +213,19 @@ async function ensureAssessmentTemplates() {
     if ((!existing.programCodes || existing.programCodes.length === 0) && programCodes.length > 0) {
       await AssessmentTemplate.updateOne({ slug: def.slug }, { $set: { programCodes } });
     }
+    // Templates created before the signature wording was dropped: relabel in place (idempotent).
+    await AssessmentTemplate.updateOne(
+      { slug: def.slug, assessedByLabel: LEGACY_SIGNATURE_LABEL },
+      { $set: { assessedByLabel: ASSESSED_BY_LABEL } }
+    );
+    // Templates already marked eligible for Examination Preparation from before this fix:
+    // pull the stale code out in place (idempotent) — Academic Tutorial and any other
+    // already-resolved code are left untouched.
+    await AssessmentTemplate.updateOne(
+      { slug: def.slug, programCodes: 'EXP106' },
+      { $pull: { programCodes: 'EXP106' } }
+    );
   }
 }
 
-module.exports = { ensureAssessmentTemplates, resolveAcademicProgramCodes };
+module.exports = { ensureAssessmentTemplates, resolveAcademicProgramCodes, ASSESSED_BY_LABEL };

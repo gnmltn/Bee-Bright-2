@@ -25,6 +25,7 @@ import {
   INITIAL_WIZARD_DATA, WizardData,
 } from '@/components/enrollment/wizard-types';
 import { assessmentService, enrollmentService } from '@/services/api';
+import { ASSESSMENT_ELIGIBLE_PROGRAM_CODES } from '@/constants/programs';
 
 import Step1Requirements   from '@/components/enrollment/steps/Step1Requirements';
 import Step2ParentAccount  from '@/components/enrollment/steps/Step2ParentAccount';
@@ -178,11 +179,10 @@ export default function EnrollmentWizard() {
   const currentStepId = steps[step - 1]?.id || 'requirements';
 
   const selectedProgramCodes = data.selectedPackages.map((p) => p.programCode);
-  const relevantAssessmentCodes = new Set(['ACT102', 'EXP106']);
   const programCodesKey = selectedProgramCodes.sort().join(',');
 
   useEffect(() => {
-    const applicableCodes = selectedProgramCodes.filter((code) => relevantAssessmentCodes.has(code));
+    const applicableCodes = selectedProgramCodes.filter((code) => ASSESSMENT_ELIGIBLE_PROGRAM_CODES.has(code));
     if (applicableCodes.length === 0) {
       setIncludeAssessment(false);
       setData((prev) => {
@@ -372,7 +372,7 @@ export default function EnrollmentWizard() {
                 {currentStepId === 'programs' && <Step6Programs       {...stepProps} />}
                 {currentStepId === 'assessment' && <StepAssessment      {...stepProps} />}
                 {currentStepId === 'schedule' && <Step7Schedule       {...stepProps} />}
-                {currentStepId === 'health' && <Step9Health         {...stepProps} />}
+                {currentStepId === 'health' && <Step9Health         {...stepProps} hideEmergencyContact />}
                 {currentStepId === 'billing' && <Step10Billing       {...stepProps} />}
                 {currentStepId === 'agreement' && <Step11Consent       {...stepProps} />}
                 {currentStepId === 'review' && <Step12Review        {...stepProps} />}

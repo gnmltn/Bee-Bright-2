@@ -46,6 +46,11 @@ const TIME_WINDOWS = [
   { startTime: "13:00", endTime: "15:00", label: "1:00 PM - 3:00 PM" },
 ];
 
+/** Local calendar date as YYYY-MM-DD (never the UTC date, which is "yesterday" early morning in the Philippines). */
+function toDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function personDisplayName(person?: { firstName?: string; middleName?: string; lastName?: string } | null) {
   if (!person) return "";
   return [person.firstName, person.middleName, person.lastName].filter(Boolean).join(" ");
@@ -154,7 +159,11 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
       }));
   }, [enrollments, schedules]);
 
-  const [selectedKey, setSelectedKey] = useState("");
+  // Several children can be scheduled in one go (removable chips, like the Tutors picker).
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  // The date the month of sessions starts on - staggers new enrollees who share the same
+  // preferred day/time instead of everyone landing on the same day.
+  const [startDate, setStartDate] = useState("");
   // Bumped on reset to force StudentSearchSelect to remount and clear its own search text.
   const [studentPickerResetKey, setStudentPickerResetKey] = useState(0);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
@@ -168,20 +177,38 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedOption = studentOptions.find((option) => option.key === selectedKey) || null;
+  const selectedOptions = useMemo(
+    () => selectedKeys.map((key) => studentOptions.find((option) => option.key === key)).filter((option): option is StudentOption => Boolean(option)),
+    [selectedKeys, studentOptions]
+  );
+  // Children still available to add (already-chosen ones drop out of the picker).
+  const remainingOptions = useMemo(
+    () => studentOptions.filter((option) => !selectedKeys.includes(option.key)),
+    [studentOptions, selectedKeys]
+  );
 
-  // The exact-count day lock (Admin_Popup_Package_and_DayLock_Fix.pdf) — null means no
+  // The exact-count day lock (Admin_Popup_Package_and_DayLock_Fix.pdf) - null means no
   // lock applies (pricing hasn't loaded yet, or the package/sessionCount isn't recognized).
-  const requiredDays = selectedOption
-    ? getRequiredDaysForPackage(PLAYGROUP_CODE, matchedPricing(selectedOption.enrollment, pricing)?.sessionCount ?? null)
-    : null;
+  // Children who are scheduled together share one day pattern, so their packages must agree.
+  const locks = selectedOptions.map((option) => getRequiredDaysForPackage(PLAYGROUP_CODE, matchedPricing(option.enrollment, pricing)?.sessionCount ?? null));
+  const mixedLocks = new Set(locks.map((lock) => String(lock))).size > 1;
+  const requiredDays = mixedLocks ? null : (locks[0] ?? null);
 
-  // Reset downstream steps whenever the student changes — including any day selection
-  // made for a previous student, since it may not fit this one's lock.
+  const todayKey = toDateKey(new Date());
+
+  // Reset downstream steps whenever the set of students changes - including any day selection
+  // made for a previous choice, since it may not fit the new lock. The starting date defaults to
+  // the earliest parent-preferred start date (never in the past).
   useEffect(() => {
     setSelectedDays([]);
     setError(null);
-  }, [selectedKey]);
+    const preferred = selectedOptions
+      .map((option) => (option.enrollment.preferredStartDate ? toDateKey(new Date(option.enrollment.preferredStartDate)) : ""))
+      .filter(Boolean)
+      .sort()[0] || "";
+    setStartDate(selectedOptions.length === 0 ? "" : preferred && preferred >= todayKey ? preferred : todayKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKeys.join(",")]);
 
   // Whenever the day pattern or time window changes, look up matching groups.
   useEffect(() => {
@@ -213,7 +240,7 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
     };
   }, [selectedDays, selectedWindow]);
 
-  const dayCountMatchesLock = requiredDays === null || selectedDays.length === requiredDays;
+  const dayCountMatchesLock = !mixedLocks && (requiredDays === null || selectedDays.length === requiredDays);
 
   const toggleDay = (day: number) => {
     setSelectedDays((prev) => {
@@ -228,7 +255,8 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
   };
 
   const resetWizard = () => {
-    setSelectedKey("");
+    setSelectedKeys([]);
+    setStartDate("");
     setStudentPickerResetKey((k) => k + 1);
     setSelectedDays([]);
     setSelectedWindow(TIME_WINDOWS[0]);
@@ -241,22 +269,25 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
   };
 
   const canGenerate =
-    Boolean(selectedOption) &&
+    selectedOptions.length > 0 &&
+    Boolean(startDate) && startDate >= todayKey &&
     Boolean(playgroupSubject) &&
     selectedDays.length > 0 &&
     dayCountMatchesLock &&
     ((Boolean(selectedGroupId)) || (creatingNewGroup && newGroupTutorIds.length > 0));
 
   const handleGenerate = async () => {
-    if (!selectedOption || !playgroupSubject || !canGenerate) return;
+    if (selectedOptions.length === 0 || !playgroupSubject || !canGenerate) return;
     setSubmitting(true);
     setError(null);
     try {
       const res = await scheduleService.createOrJoinPlaygroupGroup({
-        enrollmentId: selectedOption.enrollment._id,
+        enrollmentIds: selectedOptions.map((option) => option.enrollment._id),
+        startDate,
         subjectId: playgroupSubject._id,
         ...(selectedGroupId
-          ? { groupId: selectedGroupId }
+          // Joining: only the days chosen in Step 2 are touched, never other days of the group.
+          ? { groupId: selectedGroupId, daysOfWeek: selectedDays }
           : {
               tutorIds: newGroupTutorIds,
               daysOfWeek: selectedDays,
@@ -289,56 +320,65 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
         </p>
       </div>
 
-      {/* Step 1: Choose Student */}
-      <div className="space-y-1 w-fit">
-        <Label>Step 1: Student</Label>
+      {/* Step 1: Choose Students - multi-select, shown as removable chips like the Tutors picker */}
+      <div className="space-y-1 w-fit max-w-full">
+        <Label>Step 1: Students ({selectedOptions.length} selected)</Label>
         <StudentSearchSelect
           key={studentPickerResetKey}
-          options={studentOptions}
-          value={selectedKey}
-          onChange={setSelectedKey}
-          placeholder="Select a student"
-          emptyMessage="No schedulable Playgroup enrollments yet"
-          disabled={studentOptions.length === 0}
+          options={remainingOptions}
+          value=""
+          onChange={(key) => setSelectedKeys((prev) => (prev.includes(key) ? prev : [...prev, key]))}
+          placeholder={selectedOptions.length > 0 ? "Add another student" : "Select a student"}
+          emptyMessage={studentOptions.length === 0 ? "No schedulable Playgroup enrollments yet" : "All schedulable children are already selected"}
+          disabled={remainingOptions.length === 0}
         />
 
-        {selectedOption && (
-          <div className="relative w-full mt-2 rounded-md border border-border bg-background p-3 pr-7 text-xs text-muted-foreground space-y-1">
-            <button
-              type="button"
-              onClick={() => setSelectedKey("")}
-              className="absolute top-2 right-2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Clear selected student"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-            <div className="flex items-center gap-1 text-foreground font-medium">
-              <Info className="h-3.5 w-3.5" /> Enrollment details
-            </div>
-            <p>
-              Program: Toddlers Playgroup
-              {(() => {
-                const label = packageLabel(selectedOption.enrollment, pricing);
-                return label ? ` — Package: ${label}` : "";
-              })()}
-            </p>
-            <p>
-              Preferred start:{" "}
-              {selectedOption.enrollment.preferredStartDate
-                ? new Date(selectedOption.enrollment.preferredStartDate).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })
-                : "Any date"}
-            </p>
-            <p>Time Slot Availability: {preferredSlotLabel(selectedOption.enrollment)}</p>
-            <p>Available Days: {preferredDaysLabel(selectedOption.enrollment)}</p>
-            <p>
-              Guardian: {personDisplayName(selectedOption.enrollment.parent) || "—"}
-              {selectedOption.enrollment.parent?.email ? ` • ${selectedOption.enrollment.parent.email}` : ""}
-              {selectedOption.enrollment.parent?.phone ? ` • ${selectedOption.enrollment.parent.phone}` : ""}
-            </p>
+        {selectedOptions.length > 0 && (
+          <div className="mt-2 space-y-2" data-testid="selected-students">
+            {selectedOptions.map((option) => (
+              <div key={option.key} className="relative w-full rounded-md border border-border bg-background p-3 pr-7 text-xs text-muted-foreground space-y-1" data-testid="selected-student-chip">
+                <button
+                  type="button"
+                  onClick={() => setSelectedKeys((prev) => prev.filter((key) => key !== option.key))}
+                  className="absolute top-2 right-2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label={`Remove ${option.label}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+                <div className="flex items-center gap-1 text-foreground font-medium">
+                  <Info className="h-3.5 w-3.5" /> {option.label}
+                </div>
+                <p>
+                  Program: Toddlers Playgroup
+                  {(() => {
+                    const label = packageLabel(option.enrollment, pricing);
+                    return label ? ` \u2014 Package: ${label}` : "";
+                  })()}
+                </p>
+                <p>
+                  Preferred start:{" "}
+                  {option.enrollment.preferredStartDate
+                    ? new Date(option.enrollment.preferredStartDate).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })
+                    : "Any date"}
+                </p>
+                <p>Time Slot Availability: {preferredSlotLabel(option.enrollment)}</p>
+                <p>Available Days: {preferredDaysLabel(option.enrollment)}</p>
+                <p>
+                  Guardian: {personDisplayName(option.enrollment.parent) || "\u2014"}
+                  {option.enrollment.parent?.email ? ` \u2022 ${option.enrollment.parent.email}` : ""}
+                  {option.enrollment.parent?.phone ? ` \u2022 ${option.enrollment.parent.phone}` : ""}
+                </p>
+              </div>
+            ))}
+            {mixedLocks && (
+              <p className="text-xs text-destructive">
+                These children have packages with different sessions per week, so they cannot share one day pattern. Schedule them separately.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -392,6 +432,22 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
             ))}
           </SelectContent>
         </Select>
+
+        <div className="mt-3 space-y-1">
+          <Label htmlFor="playgroup-start-date">Starting date</Label>
+          <Input
+            id="playgroup-start-date"
+            type="date"
+            min={todayKey}
+            value={startDate}
+            disabled={selectedOptions.length === 0}
+            onChange={(event) => setStartDate(event.target.value)}
+            className="w-56"
+          />
+          <p className="text-xs text-muted-foreground">
+            The month of sessions begins on the first chosen weekday on or after this date. If it cannot be booked, pick a different starting date.
+          </p>
+        </div>
       </div>
 
       {/* Step 3: Group Assignment */}

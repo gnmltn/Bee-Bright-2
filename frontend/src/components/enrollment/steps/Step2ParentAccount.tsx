@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { User, Mail, Phone, Lock, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -39,11 +39,41 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
   // Final "is everything correct?" review before the verification code is sent.
   const [showConfirm, setShowConfirm] = useState(false);
 
+  type NamePart = 'parentFirstName' | 'parentMiddleName' | 'parentLastName';
+  const NAME_LABELS: Record<NamePart, string> = { parentFirstName: 'First name', parentMiddleName: 'Middle name', parentLastName: 'Last name' };
+  const joinName = (first: string, middle: string, last: string) => [first, middle, last].map((p) => p.trim()).filter(Boolean).join(' ');
+
+  // A draft saved before the name was split only has the combined parentName — split it once.
+  useEffect(() => {
+    if (data.parentName && !data.parentFirstName && !data.parentLastName) {
+      const parts = data.parentName.trim().split(/\s+/).filter(Boolean);
+      update({
+        parentFirstName: parts[0] || '',
+        parentMiddleName: parts.length > 2 ? parts.slice(1, -1).join(' ') : '',
+        parentLastName: parts.length > 1 ? parts[parts.length - 1] : '',
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setNamePart = (part: NamePart, value: string) => {
+    const next = { parentFirstName: data.parentFirstName, parentMiddleName: data.parentMiddleName, parentLastName: data.parentLastName, [part]: value };
+    update({ [part]: value, parentName: joinName(next.parentFirstName, next.parentMiddleName, next.parentLastName) });
+    setErrors((p) => ({ ...p, [part]: '' }));
+  };
+
+  const validateNamePart = (part: NamePart, value: string) => {
+    const r = validateFullName(value, NAME_LABELS[part], { minParts: 1, required: part !== 'parentMiddleName' });
+    return r.valid ? '' : r.error!;
+  };
+
   const validate = () => {
     const e: Record<string, string> = {};
 
-    const nameRes = validateFullName(data.parentName, 'Full name', { minParts: 2 });
-    if (!nameRes.valid) e.parentName = nameRes.error!;
+    (['parentFirstName', 'parentMiddleName', 'parentLastName'] as NamePart[]).forEach((part) => {
+      const problem = validateNamePart(part, data[part]);
+      if (problem) e[part] = problem;
+    });
 
     const emailProblem = getEmailError(data.parentEmail);
     if (emailProblem) e.parentEmail = emailProblem;
@@ -75,7 +105,9 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
     setLoading(true);
     try {
       const res = await parentAuthService.register({
-        name: toTitleCase(data.parentName),
+        firstName: toTitleCase(data.parentFirstName),
+        middleName: data.parentMiddleName.trim() ? toTitleCase(data.parentMiddleName) : '',
+        lastName: toTitleCase(data.parentLastName),
         email: data.parentEmail.trim().toLowerCase(),
         mobile: normalizeMobile(data.parentMobile),
         password: data.parentPassword,
@@ -120,25 +152,32 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
 
       <div className="grid md:grid-cols-2 gap-4">
 
-        {/* Full Name */}
-        <div className="space-y-1.5">
-          <Label htmlFor="parentName">Full Name *</Label>
-          <div className="relative">
-            <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              id="parentName" type="text" placeholder="Maria Santos"
-              className={`pl-10 ${errors.parentName ? 'border-destructive' : ''}`}
-              value={data.parentName}
-              onChange={(e) => { update({ parentName: e.target.value }); setErrors((p) => ({ ...p, parentName: '' })); }}
-              onBlur={(e) => {
-                const cleaned = toTitleCase(e.target.value);
-                if (cleaned && cleaned !== e.target.value) update({ parentName: cleaned });
-                const r = validateFullName(cleaned || e.target.value, 'Full name', { minParts: 2 });
-                setErrors((p) => ({ ...p, parentName: r.valid ? '' : r.error! }));
-              }}
-            />
-          </div>
-          {errors.parentName && <p className="text-xs text-destructive">{errors.parentName}</p>}
+        {/* First / Middle / Last name */}
+        <div className="md:col-span-2 grid gap-4 md:grid-cols-3">
+          {([
+            { part: 'parentFirstName', id: 'parentFirstName', label: 'First Name *', placeholder: 'Maria', icon: true },
+            { part: 'parentMiddleName', id: 'parentMiddleName', label: 'Middle Name', placeholder: 'Reyes (optional)', icon: false },
+            { part: 'parentLastName', id: 'parentLastName', label: 'Last Name *', placeholder: 'Santos', icon: false },
+          ] as { part: NamePart; id: string; label: string; placeholder: string; icon: boolean }[]).map(({ part, id, label, placeholder, icon }) => (
+            <div key={part} className="space-y-1.5">
+              <Label htmlFor={id}>{label}</Label>
+              <div className="relative">
+                {icon && <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />}
+                <Input
+                  id={id} type="text" placeholder={placeholder} autoComplete={part === 'parentFirstName' ? 'given-name' : part === 'parentLastName' ? 'family-name' : 'additional-name'}
+                  className={`${icon ? 'pl-10' : ''} ${errors[part] ? 'border-destructive' : ''}`}
+                  value={data[part]}
+                  onChange={(e) => setNamePart(part, e.target.value)}
+                  onBlur={(e) => {
+                    const cleaned = toTitleCase(e.target.value);
+                    if (cleaned && cleaned !== e.target.value) setNamePart(part, cleaned);
+                    setErrors((p) => ({ ...p, [part]: validateNamePart(part, cleaned || e.target.value) }));
+                  }}
+                />
+              </div>
+              {errors[part] && <p className="text-xs text-destructive">{errors[part]}</p>}
+            </div>
+          ))}
         </div>
 
         {/* Email */}
@@ -214,8 +253,13 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
           {errors.parentPassword && <p className="text-xs text-destructive">{errors.parentPassword}</p>}
         </div>
 
-        {/* Confirm Password — spans full width so it sits cleanly below */}
-        <div className="space-y-1.5 md:col-span-2">
+        {/* Confirm Password — sits beside Password in the same row, same width, via normal
+            grid auto-flow (no explicit column), matching how Email/Mobile and the three name
+            fields are already paired. An earlier fix (Redundant_Switchers...pdf item F) forced
+            `md:col-start-1` to fix this field's WIDTH, but that also forced it onto a new row
+            of its own — this drops that override so it just falls into column 2 next to
+            Password, the way any other unconstrained grid item would. */}
+        <div className="space-y-1.5">
           <Label htmlFor="confirmPassword">Confirm Password *</Label>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -282,8 +326,16 @@ export default function Step2ParentAccount({ data, update, onNext, onBack, toast
 
           <div className="rounded-lg border border-border bg-muted/30 divide-y divide-border text-sm">
             <div className="flex justify-between gap-4 px-3 py-2">
-              <span className="text-muted-foreground">Full Name</span>
-              <span className="font-medium text-right break-words">{toTitleCase(data.parentName) || '—'}</span>
+              <span className="text-muted-foreground">First Name</span>
+              <span className="font-medium text-right break-words">{toTitleCase(data.parentFirstName) || '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 px-3 py-2">
+              <span className="text-muted-foreground">Middle Name</span>
+              <span className="font-medium text-right break-words">{toTitleCase(data.parentMiddleName) || '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4 px-3 py-2">
+              <span className="text-muted-foreground">Last Name</span>
+              <span className="font-medium text-right break-words">{toTitleCase(data.parentLastName) || '—'}</span>
             </div>
             <div className="flex justify-between gap-4 px-3 py-2">
               <span className="text-muted-foreground">Email Address</span>

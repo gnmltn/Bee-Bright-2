@@ -1,14 +1,13 @@
 const User = require('../models/User');
 const Enrollment = require('../models/Enrollment');
-const Payment = require('../models/Payment');
-const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const UserArchiveRecord = require('../models/UserArchiveRecord');
-const { validateName, validatePhoneNoLetters } = require('../utils/validation');
+const { validateFullName, validatePhMobile } = require('../utils/validation');
 const { logAudit } = require('../utils/auditService');
 const { normalizeEmailAddress, buildEmailLookupFilter } = require('../utils/email');
 const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { getEmailError } = require('../utils/emailRules');
+const { hardDeleteUser } = require('../utils/hardDeleteUser');
+const { runTransactionSafe } = require('../utils/runTransactionSafe');
 
 const loadAdminUser = async (userId) => (
   User.findById(userId)
@@ -34,8 +33,11 @@ const createArchiveRecord = async ({
   archivedAt = null,
   unarchivedAt = null,
   deletedAt = null,
+  session = null,
 }) => {
-  await UserArchiveRecord.create({
+  // A snapshot record — it never depends on the User row still existing afterwards, which is
+  // exactly why permanentlyDeleteUser can create it in the same transaction as the hard delete.
+  await UserArchiveRecord.create([{
     user: user._id,
     action,
     performedBy: performedBy || null,
@@ -49,7 +51,7 @@ const createArchiveRecord = async ({
     archivedAt,
     unarchivedAt,
     deletedAt,
-  });
+  }], session ? { session } : undefined);
 };
 
 // @desc    Get all users (admin only)
@@ -119,13 +121,13 @@ const createTutor = async (req, res) => {
         message: 'First name, last name, email, password, and phone are required'
       });
     }
-    let nameErr = validateName(firstName, 'First name');
+    let nameErr = validateFullName(firstName, 'First name', { minParts: 1, required: true });
     if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(middleName, 'Middle name');
+    nameErr = validateFullName(middleName, 'Middle name', { minParts: 1, required: false });
     if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(lastName, 'Last name');
+    nameErr = validateFullName(lastName, 'Last name', { minParts: 1, required: true });
     if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    const phoneErr = validatePhoneNoLetters(phone);
+    const phoneErr = validatePhMobile(phone, 'Phone number');
     if (phoneErr) return res.status(400).json({ success: false, message: phoneErr });
 
     const emailProblem = getEmailError(email);
@@ -141,15 +143,6 @@ const createTutor = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Password must contain at least 8 characters, one uppercase, one lowercase, one number and one special character (@$!%*?&)'
-      });
-    }
-
-    const phPhoneRegex = /^(0?9|639)\d{9}$/;
-    const phoneDigits = (phone || '').replace(/\D/g, '');
-    if (!phPhoneRegex.test(phoneDigits)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid Philippine mobile number (e.g. 09XX XXX XXXX)'
       });
     }
 
@@ -227,13 +220,13 @@ const createAdmin = async (req, res) => {
         message: 'First name, last name, email, password, and phone are required'
       });
     }
-    let nameErr = validateName(firstName, 'First name');
+    let nameErr = validateFullName(firstName, 'First name', { minParts: 1, required: true });
     if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(middleName, 'Middle name');
+    nameErr = validateFullName(middleName, 'Middle name', { minParts: 1, required: false });
     if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    nameErr = validateName(lastName, 'Last name');
+    nameErr = validateFullName(lastName, 'Last name', { minParts: 1, required: true });
     if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    const phoneErr = validatePhoneNoLetters(phone);
+    const phoneErr = validatePhMobile(phone, 'Phone number');
     if (phoneErr) return res.status(400).json({ success: false, message: phoneErr });
 
     const emailProblem = getEmailError(email);
@@ -249,15 +242,6 @@ const createAdmin = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Password must contain at least 8 characters, one uppercase, one lowercase, one number and one special character (@$!%*?&)'
-      });
-    }
-
-    const phPhoneRegex = /^(0?9|639)\d{9}$/;
-    const phoneDigits = (phone || '').replace(/\D/g, '');
-    if (!phPhoneRegex.test(phoneDigits)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please enter a valid Philippine mobile number (e.g. 09XX XXX XXXX)'
       });
     }
 
@@ -502,22 +486,23 @@ const permanentlyDeleteUser = async (req, res) => {
       });
     }
 
-      // If a tutor is removed entirely, remove their schedule records from the system.
-      if (userToDelete.role === 'tutor') {
-        await Schedule.deleteMany({ tutor: userToDelete._id });
-      }
-
+    // A real hard delete — the account and every record that only exists because of it
+    // (enrollments, payments, sessions, remarks, and for a parent, their children's own
+    // student accounts) are removed together. The archive-record snapshot is written in the
+    // SAME transaction, before the row it snapshots is gone, so a mid-way failure rolls back
+    // everything: no half-deleted data, and no account left soft-deleted-but-still-in-the-DB.
     const deletedAt = new Date();
-    userToDelete.deletedAt = deletedAt;
-    userToDelete.isActive = false;
-    await userToDelete.save();
-    await createArchiveRecord({
-      user: userToDelete,
-      action: 'permanently_deleted',
-      performedBy: req.user.id,
-      performedByRole: req.user.role,
-      archivedAt: userToDelete.archivedAt,
-      deletedAt,
+    await runTransactionSafe(async (session) => {
+      await createArchiveRecord({
+        user: userToDelete,
+        action: 'deleted',
+        performedBy: req.user.id,
+        performedByRole: req.user.role,
+        archivedAt: userToDelete.archivedAt,
+        deletedAt,
+        session,
+      });
+      await hardDeleteUser(userToDelete, session);
     });
 
     logAudit({
@@ -525,14 +510,17 @@ const permanentlyDeleteUser = async (req, res) => {
       userId: req.user.id,
       action: 'Delete Archived User',
       module: 'User Management',
-      description: `Deleted archived ${userToDelete.role} account from admin records`,
+      description: `Permanently deleted archived ${userToDelete.role} account and its linked records`,
       status: 'SUCCESS',
       metadata: { deletedUserId: userId, deletedUserRole: userToDelete.role }
     }).catch(() => {});
 
+    // The transaction only resolves once every deletion has committed, so by the time this
+    // response goes out the account is actually gone — the frontend removes the row on this
+    // response alone, no page refresh needed.
     res.status(200).json({
       success: true,
-      message: 'Archived user deleted successfully.',
+      message: 'Archived user permanently deleted.',
       userId,
     });
   } catch (error) {
@@ -552,21 +540,28 @@ const getParentChildren = async (req, res) => {
       parent: { $ne: null },
       status: { $nin: ['cancelled', 'rejected', 'draft'] },
     })
-      .select('parent enrollmentId permanentStudentId studentId studentSnapshot createdAt')
+      .select('parent student enrollmentId permanentStudentId studentId studentSnapshot packages createdAt')
       .sort({ createdAt: -1 })
       .lean();
 
-    // parentId -> childKey -> { name, studentId }: one entry per CHILD, so Renew / Add
-    // Program enrollments (same permanent Student ID) never list a child twice.
+    // parentId -> childKey -> { name, studentId, programs }: one entry per CHILD, so Renew / Add
+    // Program enrollments (same permanent Student ID) never list a child twice — their programs
+    // are merged onto the one entry instead.
     const byParent = {};
     for (const e of enrollments) {
       const parentId = String(e.parent);
       const studentId = e.permanentStudentId || e.studentId || e.enrollmentId || '';
       const key = studentId || String(e._id);
       byParent[parentId] = byParent[parentId] || new Map();
-      if (byParent[parentId].has(key)) continue;
+      const programs = (e.packages || []).map((p) => p.displayName || p.programCode).filter(Boolean);
+      const existing = byParent[parentId].get(key);
+      if (existing) {
+        for (const program of programs) if (!existing.programs.includes(program)) existing.programs.push(program);
+        if (!existing.studentUserId && e.student) existing.studentUserId = String(e.student);
+        continue;
+      }
       const name = [e.studentSnapshot?.firstName, e.studentSnapshot?.lastName].filter(Boolean).join(' ') || 'Child';
-      byParent[parentId].set(key, { name, studentId });
+      byParent[parentId].set(key, { name, studentId, programs: [...new Set(programs)], studentUserId: e.student ? String(e.student) : null });
     }
 
     const children = {};

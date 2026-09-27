@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { FileText, Maximize2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertTriangle, FileText, Loader2, Maximize2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
 type PreviewSource =
@@ -8,6 +8,8 @@ type PreviewSource =
   | undefined;
 
 function isPdf(src: { dataUrl: string; fileName: string }): boolean {
+  // blob: URLs (Remarks' attachment viewer) never encode a MIME type in the URL string
+  // itself, so for those this always falls through to the fileName check.
   return /^data:application\/pdf/i.test(src.dataUrl) || /\.pdf$/i.test(src.fileName);
 }
 
@@ -15,8 +17,8 @@ function isPdf(src: { dataUrl: string; fileName: string }): boolean {
  * Inline preview of an uploaded enrollment document (image or PDF), with a
  * "click to view full size" action that opens it in a modal.
  *
- * Reused by Step 1 (Requirements), Step 10 (Proof of Payment) and the
- * Student Dashboard "Add Child" modal — do not fork this.
+ * Reused by Step 1 (Requirements), Step 10 (Proof of Payment), the Student Dashboard
+ * "Add Child" modal, and the Remarks attachment viewers — do not fork this.
  */
 export default function FilePreview({
   src,
@@ -28,9 +30,49 @@ export default function FilePreview({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [pdfEmbedUrl, setPdfEmbedUrl] = useState<string | null>(null);
+  const [imgFailed, setImgFailed] = useState(false);
+  const pdf = src?.dataUrl ? isPdf(src) : false;
+
+  // A plain http(s) URL (enrollment documents / payment proofs, served from the backend's
+  // own origin/port — a different origin than the frontend dev server) gets silently
+  // blocked when embedded directly in <object>: the backend sends
+  // `X-Frame-Options: SAMEORIGIN`, which forbids cross-origin framing, so the browser
+  // renders this component's own "Preview not supported here" fallback even though the
+  // file is completely fine (confirmed: downloading the same URL works). A `data:`/`blob:`
+  // URL (already same-origin — this is exactly how the Remarks attachment viewer, which
+  // never had this bug, fetches its file: as a blob, then `URL.createObjectURL`) embeds
+  // without issue. So: fetch a cross-origin http(s) PDF into a blob first, same as Remarks
+  // already does, then embed THAT.
+  useEffect(() => {
+    if (open) setImgFailed(false);
+    if (!open || !pdf || !src?.dataUrl) { setPdfEmbedUrl(null); return; }
+    if (/^(?:data|blob):/i.test(src.dataUrl)) { setPdfEmbedUrl(src.dataUrl); return; }
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setPdfEmbedUrl(null);
+    fetch(src.dataUrl, { credentials: 'include' })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to load file (${res.status})`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPdfEmbedUrl(objectUrl);
+      })
+      .catch(() => {
+        // Fall back to the raw URL — worst case is the pre-existing behavior, never worse.
+        if (!cancelled) setPdfEmbedUrl(src.dataUrl);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [open, pdf, src?.dataUrl]);
+
   if (!src?.dataUrl) return null;
 
-  const pdf = isPdf(src);
   const sizeKb = src.fileSize ? `${(src.fileSize / 1024).toFixed(0)} KB` : '';
 
   return (
@@ -71,29 +113,42 @@ export default function FilePreview({
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl p-0">
-          <DialogTitle className="flex items-center justify-between border-b px-4 py-2 text-sm">
-            <span className="truncate pr-2">{label || src.fileName}</span>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="rounded p-1 text-muted-foreground hover:bg-muted"
-              aria-label="Close preview"
-            >
-              <X className="h-4 w-4" />
-            </button>
+          {/* DialogContent already renders its own close "X" (@/components/ui/dialog) —
+              this header only needs the title, not a second close button on top of it. */}
+          <DialogTitle className="border-b px-4 py-2 pr-10 text-sm">
+            <span className="truncate">{label || src.fileName}</span>
           </DialogTitle>
           <div className="max-h-[80vh] overflow-auto bg-muted/30 p-2">
             {pdf ? (
-              <object data={src.dataUrl} type="application/pdf" className="h-[75vh] w-full rounded">
-                <div className="p-6 text-center text-sm text-muted-foreground">
-                  Preview not supported here.{' '}
-                  <a href={src.dataUrl} download={src.fileName} className="text-amber-600 underline">
-                    Download {src.fileName}
-                  </a>
+              pdfEmbedUrl ? (
+                <object data={pdfEmbedUrl} type="application/pdf" className="h-[75vh] w-full rounded">
+                  <div className="p-6 text-center text-sm text-muted-foreground">
+                    Preview not supported here.{' '}
+                    <a href={src.dataUrl} download={src.fileName} className="text-amber-600 underline">
+                      Download {src.fileName}
+                    </a>
+                  </div>
+                </object>
+              ) : (
+                <div className="flex h-[75vh] items-center justify-center text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
                 </div>
-              </object>
+              )
+            ) : imgFailed ? (
+              <div className="flex h-[50vh] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+                <AlertTriangle className="h-8 w-8 text-destructive" />
+                <p>This file failed to load — it may be missing or moved.</p>
+                <a href={src.dataUrl} download={src.fileName} className="text-amber-600 underline">
+                  Download {src.fileName}
+                </a>
+              </div>
             ) : (
-              <img src={src.dataUrl} alt={label || src.fileName} className="mx-auto max-h-[75vh] w-auto" />
+              <img
+                src={src.dataUrl}
+                alt={label || src.fileName}
+                onError={() => setImgFailed(true)}
+                className="mx-auto max-h-[75vh] w-auto"
+              />
             )}
           </div>
         </DialogContent>

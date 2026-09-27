@@ -13,6 +13,7 @@ vi.mock("@/services/api", () => ({
   enrollmentService: {
     getMyEnrollments: vi.fn(),
     setChildPhoto: vi.fn(),
+    setChildName: vi.fn(),
   },
   notificationService: { getBadges: vi.fn(), markSeen: vi.fn() },
 }));
@@ -87,28 +88,63 @@ describe("ParentStudentInfoCard", () => {
     vi.mocked(enrollmentService.getMyEnrollments).mockResolvedValue({ data: { success: true, enrollments: ENROLLMENTS } } as never);
   });
 
-  it("shows the selected child's name and permanent Student ID, and follows the child selector", async () => {
+  // item A: no "switch child" dropdown here anymore — this card just displays whichever
+  // child is selected via the one true switcher elsewhere (SelectedChildContext).
+  it("shows the selected child's editable name fields and locked Student ID, and follows the child selector", async () => {
     sessionStorage.setItem("bb-active-child-id", "BB-20260924-0006");
     render(<SelectedChildProvider><ParentStudentInfoCard /></SelectedChildProvider>);
-    await waitFor(() => expect(screen.getByTestId("student-info-name").textContent).toBe("Leo Soriano"));
+    await waitFor(() => expect((screen.getByTestId("student-info-firstname") as HTMLInputElement).value).toBe("Leo"));
+    expect((screen.getByTestId("student-info-lastname") as HTMLInputElement).value).toBe("Soriano");
     expect(screen.getByTestId("student-info-id").textContent).toBe("BB-20260924-0006");
     expect(screen.getByText("Student Information")).toBeTruthy();
+    // No switch-child dropdown inside this card (only the plain Student ID text, no combobox).
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 
   it("defaults to the first child when nothing was selected", async () => {
     render(<SelectedChildProvider><ParentStudentInfoCard /></SelectedChildProvider>);
-    await waitFor(() => expect(screen.getByTestId("student-info-name").textContent).toBe("Mia Soriano"));
+    await waitFor(() => expect((screen.getByTestId("student-info-firstname") as HTMLInputElement).value).toBe("Mia"));
     expect(screen.getByTestId("student-info-id").textContent).toBe("BB-20260924-0008");
   });
 
-  it("uploading a picture sends it for the ACTIVE child's key", async () => {
+  // item B: name fields are editable (same rules as the parent's own Personal Information);
+  // Student ID is never one of the fields sent to the server.
+  it("editing the name and pressing Save sends the new name for the ACTIVE child's key — nothing before Save", async () => {
+    sessionStorage.setItem("bb-active-child-id", "BB-20260924-0006");
+    vi.mocked(enrollmentService.setChildName).mockResolvedValue({ data: { success: true, firstName: "Leon", middleName: "", lastName: "Soriano" } } as never);
+    render(<SelectedChildProvider><ParentStudentInfoCard /></SelectedChildProvider>);
+    const firstNameInput = await screen.findByTestId("student-info-firstname") as HTMLInputElement;
+    await waitFor(() => expect(firstNameInput.value).toBe("Leo"));
+
+    // item C: no auto-save — typing alone must not call the API.
+    fireEvent.change(firstNameInput, { target: { value: "Leon" } });
+    expect(enrollmentService.setChildName).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("student-info-save"));
+    await waitFor(() => expect(enrollmentService.setChildName).toHaveBeenCalled());
+    expect(vi.mocked(enrollmentService.setChildName).mock.calls[0]).toEqual(["BB-20260924-0006", "Leon", "", "Soriano"]);
+  });
+
+  // item D: picture changes go through preview -> confirm -> save; nothing uploads on pick alone.
+  it("picking a picture shows a preview; only confirming actually uploads it, for the ACTIVE child's key", async () => {
     sessionStorage.setItem("bb-active-child-id", "BB-20260924-0006");
     vi.mocked(enrollmentService.setChildPhoto).mockResolvedValue({ data: { success: true, studentProfileImage: "/uploads/student-avatars/x.png" } } as never);
     render(<SelectedChildProvider><ParentStudentInfoCard /></SelectedChildProvider>);
-    await waitFor(() => expect(screen.getByTestId("student-info-name").textContent).toBe("Leo Soriano"));
+    await waitFor(() => expect((screen.getByTestId("student-info-firstname") as HTMLInputElement).value).toBe("Leo"));
+
     const input = screen.getByLabelText("Change student profile picture") as HTMLInputElement;
     const file = new File([new Uint8Array([137, 80, 78, 71])], "leo.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
+
+    // Preview shown; nothing sent to the server yet.
+    await screen.findByText("Preview picture");
+    expect(enrollmentService.setChildPhoto).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Change profile picture?");
+    expect(enrollmentService.setChildPhoto).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(enrollmentService.setChildPhoto).toHaveBeenCalled());
     expect(vi.mocked(enrollmentService.setChildPhoto).mock.calls[0][0]).toBe("BB-20260924-0006");
   });

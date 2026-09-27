@@ -25,10 +25,15 @@ function getEmailConfig() {
     process.env.GMAIL_APP_PASSWORD ||
     '';
   const host = process.env.SMTP_HOST || process.env.EMAIL_HOST || '';
-  const serviceFromEnv = process.env.SMTP_SERVICE || process.env.EMAIL_SERVICE || '';
-  const service =
-    serviceFromEnv ||
-    (host.toLowerCase().includes('gmail') ? 'gmail' : '');
+  // Item E (2nd report) — root cause of "Unable to send email right now": this used to also
+  // infer `service: 'gmail'` whenever the host merely CONTAINED "gmail" (e.g. smtp.gmail.com).
+  // nodemailer's "gmail" shorthand service dials its own fixed host/port (465, secure) and
+  // silently ignores SMTP_PORT/SMTP_SECURE — so an operator who deliberately configured port
+  // 587/STARTTLS (the more firewall-friendly option, and what .env actually sets) was overridden
+  // into port 465 without realizing it, and every send failed with a connect timeout on 465.
+  // The service shorthand is now used ONLY when explicitly requested via SMTP_SERVICE/
+  // EMAIL_SERVICE — an explicit host+port+secure always wins.
+  const service = process.env.SMTP_SERVICE || process.env.EMAIL_SERVICE || '';
   const port = Number(process.env.SMTP_PORT || process.env.EMAIL_PORT || 587);
   const secure = normalizeBoolean(process.env.SMTP_SECURE || process.env.EMAIL_SECURE, port === 465);
   const from = process.env.EMAIL_FROM || process.env.SMTP_FROM || user;
@@ -103,13 +108,22 @@ function isSmtpAuthError(error) {
   );
 }
 
+/** True for a failed/timed-out TCP connection to the SMTP server — nodemailer wraps the raw
+ * connect timeout (whose own error.code is ETIMEDOUT) inside an outer error with code
+ * ESOCKET, so ETIMEDOUT alone misses it; this catches both shapes. */
+function isSmtpConnectionError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const msg = String(error?.message || '').toLowerCase();
+  return code === 'ETIMEDOUT' || code === 'ESOCKET' || code === 'ECONNREFUSED' || msg.includes('etimedout') || msg.includes('econnrefused');
+}
+
 function getEmailErrorMessage(error) {
   if (isSmtpAuthError(error)) {
     return 'Email service authentication failed. Re-check the mailbox credentials or refresh the provider app password.';
   }
 
-  if (String(error?.code || '').toUpperCase() === 'ETIMEDOUT') {
-    return 'Email service timed out while contacting the SMTP server.';
+  if (isSmtpConnectionError(error)) {
+    return 'Could not reach the email server right now. Please try again in a moment.';
   }
 
   return 'Unable to send email right now. Please try again later.';
@@ -181,23 +195,72 @@ async function sendEmail(message, context = 'email send') {
   }
 }
 
+// ── Shared branded template ("polishing prompt (1).pdf", Group H) ──────────────────────────
+// Every outgoing email is wrapped in this SAME visual frame (logo header banner, styled
+// content box) — only the accent color (semantic: orange=default/info, green=success,
+// red=rejection/warning) and the body content vary per email. Previously each
+// email-sending function in this file, services/enrollmentService.js, and
+// controllers/{authController,parentAuthController,adminInviteController,scheduleController,
+// enrollmentController}.js built its own ad-hoc inline HTML (or, for most of
+// scheduleController.js's notifications, no HTML at all — text-only), so the same product
+// sent visually inconsistent emails depending on which code path triggered it.
+const EMAIL_BRAND_ACCENTS = {
+  orange: { from: '#f59e0b', to: '#d97706', bg: '#fffbeb', border: '#fde68a', heading: '#92400e', text: '#78350f', subtle: '#b45309' },
+  green: { from: '#10b981', to: '#059669', bg: '#ecfdf5', border: '#a7f3d0', heading: '#065f46', text: '#064e3b', subtle: '#047857' },
+  red: { from: '#374151', to: '#374151', bg: '#fef9f9', border: '#fca5a5', heading: '#991b1b', text: '#7f1d1d', subtle: '#b91c1c' },
+};
+
+/**
+ * Wraps `bodyHtml` in the standard Bee Bright header banner + styled content box.
+ * @param {{ title?: string, bodyHtml: string, accent?: 'orange'|'green'|'red', ctaLabel?: string, ctaUrl?: string }} opts
+ */
+function buildBrandedEmailHtml({ title, bodyHtml, accent = 'orange', ctaLabel, ctaUrl }) {
+  const c = EMAIL_BRAND_ACCENTS[accent] || EMAIL_BRAND_ACCENTS.orange;
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <div style="background:linear-gradient(135deg,${c.from},${c.to});padding:28px;text-align:center;border-radius:8px 8px 0 0;">
+        <h1 style="color:#fff;margin:0;font-size:24px;">🐝 Bee Bright</h1>
+        <p style="color:#fef3c7;margin:6px 0 0;font-size:14px;">Tutorial Center</p>
+      </div>
+      <div style="padding:32px;background:${c.bg};border:1px solid ${c.border};border-top:none;border-radius:0 0 8px 8px;">
+        ${title ? `<h2 style="color:${c.heading};margin:0 0 12px;">${title}</h2>` : ''}
+        <div style="color:${c.text};line-height:1.6;">${bodyHtml}</div>
+        ${ctaLabel && ctaUrl ? `
+        <div style="text-align:center;margin:28px 0;">
+          <a href="${ctaUrl}" style="background:linear-gradient(135deg,${c.from},${c.to});color:#fff;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:700;display:inline-block;">${ctaLabel}</a>
+        </div>` : ''}
+      </div>
+    </div>`;
+}
+
+/** Same branded frame, plus the large bordered OTP code box every verification-code email uses. */
+function buildOtpEmailHtml({ title, introHtml, otp, expiresMinutes, accent = 'orange' }) {
+  const c = EMAIL_BRAND_ACCENTS[accent] || EMAIL_BRAND_ACCENTS.orange;
+  const bodyHtml = `
+    ${introHtml || ''}
+    <div style="text-align:center;margin:28px 0;">
+      <div style="display:inline-block;background:#fff;border:2px solid ${c.from};border-radius:12px;padding:16px 40px;">
+        <span style="font-size:36px;font-weight:700;letter-spacing:8px;color:${c.heading};">${otp}</span>
+      </div>
+    </div>
+    <p style="color:${c.text};font-size:14px;text-align:center;">This code expires in <strong>${expiresMinutes} minutes</strong>.</p>
+    <p style="color:${c.subtle};font-size:13px;text-align:center;margin-top:20px;">If you did not request this, you can safely ignore this email.</p>
+  `;
+  return buildBrandedEmailHtml({ title, bodyHtml, accent });
+}
+
 async function sendOtpEmail(to, otp, expiresMinutes = 5) {
   return sendEmail(
     {
       to,
       subject: `Bee Bright Password Reset OTP (valid for ${expiresMinutes} minutes)`,
       text: `Your Bee Bright password reset OTP is ${otp}. It expires in ${expiresMinutes} minutes.`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-          <h2>Bee Bright Password Reset</h2>
-          <p>Your OTP code is:</p>
-          <div style="font-size:28px;font-weight:bold;letter-spacing:4px;padding:12px 16px;background:#f3f3f3;border-radius:8px;display:inline-block;">
-            ${otp}
-          </div>
-          <p style="margin-top:16px;">This code will expire in <b>${expiresMinutes} minutes</b>.</p>
-          <p>If you did not request this, ignore this email.</p>
-        </div>
-      `,
+      html: buildOtpEmailHtml({
+        title: 'Password Reset',
+        introHtml: '<p>Use the code below to reset your Bee Bright account password.</p>',
+        otp,
+        expiresMinutes,
+      }),
     },
     'password reset OTP'
   );
@@ -209,14 +272,12 @@ async function sendEnrollmentVerificationEmail(to, otp, expiresMinutes = 5) {
       to,
       subject: 'Bee Bright enrollment verification code',
       text: `Your Bee Bright enrollment verification code is ${otp}. It expires in ${expiresMinutes} minutes.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 600px; margin: 0 auto;">
-          <h2 style="margin-bottom: 8px;">Bee Bright enrollment verification</h2>
-          <p>Your verification code is:</p>
-          <p style="font-size: 28px; font-weight: 700; letter-spacing: 4px; margin: 16px 0;">${otp}</p>
-          <p>This code expires in ${expiresMinutes} minutes.</p>
-        </div>
-      `,
+      html: buildOtpEmailHtml({
+        title: 'Enrollment Verification',
+        introHtml: '<p>Enter the code below to verify your email and continue with enrollment.</p>',
+        otp,
+        expiresMinutes,
+      }),
     },
     'enrollment verification OTP'
   );
@@ -228,33 +289,23 @@ const sendPaymentApprovalEmail = async (to, studentName) => {
       {
         to,
         subject: 'Your Bee Bright Enrollment is Approved!',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;">
-              <h1 style="color: white; margin: 0;">Bee Bright</h1>
+        html: buildBrandedEmailHtml({
+          title: `Welcome to Bee Bright, ${studentName}!`,
+          accent: 'green',
+          bodyHtml: `
+            <p>We're excited to inform you that your payment has been verified and your enrollment is now active.</p>
+            <div style="background:#fff;border-radius:10px;padding:20px;margin:20px 0;border-left:4px solid #10b981;">
+              <h3 style="color:#065f46;margin-top:0;">Account Details:</h3>
+              <ul>
+                <li><strong>Status:</strong> Active Enrollment</li>
+                <li><strong>Access:</strong> Full access to tutorials</li>
+                <li><strong>Start Learning:</strong> Login now to begin</li>
+              </ul>
             </div>
-            <div style="padding: 30px; background: #f9f9f9;">
-              <h2 style="color: #333;">Welcome to Bee Bright, ${studentName}!</h2>
-              <p style="color: #666; line-height: 1.6;">
-                We're excited to inform you that your payment has been verified and your enrollment is now active.
-              </p>
-              <div style="background: white; border-radius: 10px; padding: 20px; margin: 20px 0; border-left: 4px solid #4CAF50;">
-                <h3 style="color: #333; margin-top: 0;">Account Details:</h3>
-                <ul style="color: #666;">
-                  <li><strong>Status:</strong> Active Enrollment</li>
-                  <li><strong>Access:</strong> Full access to tutorials</li>
-                  <li><strong>Start Learning:</strong> Login now to begin</li>
-                </ul>
-              </div>
-              <div style="text-align: center; margin: 30px 0;">
-                <a href="${process.env.FRONTEND_URL}/login"
-                   style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                  Login to Your Dashboard
-                </a>
-              </div>
-            </div>
-          </div>
-        `,
+          `,
+          ctaLabel: 'Login to Your Dashboard',
+          ctaUrl: `${process.env.FRONTEND_URL}/login`,
+        }),
       },
       'payment approval email'
     );
@@ -273,21 +324,17 @@ const sendEnrollmentRejectionEmail = async (to, studentName, reason) => {
       {
         to,
         subject: 'Bee Bright - Enrollment Not Approved',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: #333; padding: 24px; text-align: center;">
-              <h1 style="color: white; margin: 0;">Bee Bright</h1>
+        html: buildBrandedEmailHtml({
+          title: 'Enrollment Not Approved',
+          accent: 'red',
+          bodyHtml: `
+            <p>Hello ${studentName},</p>
+            <p>We regret to inform you that your enrollment has not been approved.</p>
+            <div style="background:#fff;border-left:4px solid #ef4444;padding:16px;margin:20px 0;border-radius:4px;">
+              <p style="margin:0;">${reasonText}</p>
             </div>
-            <div style="padding: 30px; background: #f9f9f9;">
-              <h2 style="color: #333;">Enrollment Not Approved</h2>
-              <p style="color: #666; line-height: 1.6;">Hello ${studentName},</p>
-              <p style="color: #666; line-height: 1.6;">We regret to inform you that your enrollment has not been approved.</p>
-              <div style="background: #fff3cd; border-left: 4px solid #856404; padding: 16px; margin: 20px 0; border-radius: 4px;">
-                <p style="color: #856404; margin: 0; line-height: 1.6;">${reasonText}</p>
-              </div>
-            </div>
-          </div>
-        `,
+          `,
+        }),
       },
       'enrollment rejection email'
     );
@@ -318,25 +365,18 @@ const sendAnnouncementEmail = async (to, recipientName, title, body, category = 
       {
         to,
         subject: `[Bee Bright] ${title}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: #333; padding: 24px; text-align: center;">
-              <h1 style="color: white; margin: 0;">Bee Bright</h1>
+        html: buildBrandedEmailHtml({
+          bodyHtml: `
+            <p>Hello ${recipientName},</p>
+            <p>You have a new ${label.toLowerCase()}:</p>
+            <div style="background:#fff;border-radius:8px;padding:20px;margin:16px 0;border-left:4px solid #f59e0b;">
+              <span style="font-size:12px;color:#b45309;">${label}</span>
+              <h2 style="color:#92400e;margin:8px 0;">${(title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h2>
+              <div style="color:#78350f;line-height:1.6;">${safeBody}</div>
             </div>
-            <div style="padding: 30px; background: #f9f9f9;">
-              <p style="color: #666;">Hello ${recipientName},</p>
-              <p style="color: #666;">You have a new ${label.toLowerCase()}:</p>
-              <div style="background: white; border-radius: 8px; padding: 20px; margin: 16px 0; border-left: 4px solid #667eea;">
-                <span style="font-size: 12px; color: #888;">${label}</span>
-                <h2 style="color: #333; margin: 8px 0;">${(title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h2>
-                <div style="color: #555; line-height: 1.6;">${safeBody}</div>
-              </div>
-              <p style="color: #666; font-size: 14px;">
-                Log in to your dashboard to view all announcements.
-              </p>
-            </div>
-          </div>
-        `,
+            <p style="font-size:14px;">Log in to your dashboard to view all announcements.</p>
+          `,
+        }),
       },
       'announcement email'
     );
@@ -355,7 +395,11 @@ module.exports = {
   sendPaymentApprovalEmail,
   sendEnrollmentRejectionEmail,
   sendAnnouncementEmail,
+  buildBrandedEmailHtml,
+  buildOtpEmailHtml,
   isSmtpAuthError,
+  isSmtpConnectionError,
   getEmailErrorMessage,
   logEmailError,
+  getEmailConfig,
 };

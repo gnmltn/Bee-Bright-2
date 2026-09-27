@@ -25,6 +25,7 @@ const {
   sendPaymentVerifiedEmail,
 } = require('../services/enrollmentService');
 const { validateAndBuildAssessment } = require('../utils/validateAssessment');
+const { attachRemainingDueDates } = require('../utils/remainingDueDate');
 const Schedule = require('../models/Schedule');
 const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
 const { PROGRAM_POLICIES } = require('../utils/schedulingPolicy');
@@ -314,6 +315,15 @@ const submitEnrollment = async (req, res) => {
 
     // ── Preferred schedule ──
     const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
+    if (preferredStartDate && !Number.isNaN(preferredStartDate.getTime())) {
+      // The date picker already blocks past dates; this stops a hand-crafted request. One day of
+      // grace so a client in a different time zone than the server isn't wrongly rejected.
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      yesterday.setHours(0, 0, 0, 0);
+      if (preferredStartDate < yesterday) {
+        return res.status(400).json({ success: false, message: 'The preferred start date cannot be in the past.' });
+      }
+    }
 
     // Available Days, kept per program (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf
     // #4b) — a parent enrolled in more than one program picks a separate day pattern
@@ -470,10 +480,14 @@ const submitEnrollment = async (req, res) => {
     }
 
     if (proofUrl && email) {
-      require('../utils/emailService').sendEmail({
+      const { sendEmail: sendProofEmail, buildBrandedEmailHtml: buildProofEmailHtml } = require('../utils/emailService');
+      sendProofEmail({
         to: email,
         subject: `Bee Bright — Payment Proof Received (${permanentIdOf(enrollment)})`,
-        html: `<p>Hi ${parentUser?.firstName || 'there'}, we received your payment proof for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+        html: buildProofEmailHtml({
+          title: 'Payment Proof Received',
+          bodyHtml: `<p>Hi ${parentUser?.firstName || 'there'}, we received your payment proof for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+        }),
       }, 'proof received notification').catch(() => {});
     }
 
@@ -557,6 +571,58 @@ const setChildProfilePhoto = async (req, res) => {
   } catch (err) {
     console.error('setChildProfilePhoto error:', err);
     return res.status(500).json({ success: false, message: 'Failed to update the profile picture.' });
+  }
+};
+
+// PUT /api/enrollments/child-name  body: { childKey, firstName, middleName, lastName }
+// Settings → Student Information: the child's name is editable, same validation as the
+// parent's own Personal Information (authController.updateProfile's validateName) — never
+// the Student ID, which stays locked. Updates every enrollment sharing this permanent Student
+// ID (so admin/tutor views of the same child never show a stale name) and the linked student
+// User account, if one has been created yet.
+const updateChildName = async (req, res) => {
+  try {
+    if (req.user?.role !== 'parent') {
+      return res.status(403).json({ success: false, message: "Only a parent can update a child's name." });
+    }
+    const childKey = String(req.body?.childKey || '').trim();
+    if (!childKey) return res.status(400).json({ success: false, message: 'childKey is required.' });
+
+    const firstName = String(req.body?.firstName ?? '').trim();
+    const middleName = String(req.body?.middleName ?? '').trim();
+    const lastName = String(req.body?.lastName ?? '').trim();
+
+    if (!firstName) return res.status(400).json({ success: false, message: 'First name is required.' });
+    if (!lastName) return res.status(400).json({ success: false, message: 'Last name is required.' });
+    let nameErr = validateName(firstName, 'First name');
+    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
+    nameErr = validateName(middleName, 'Middle name');
+    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
+    nameErr = validateName(lastName, 'Last name');
+    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
+
+    const childFilter = { parent: req.user._id, $or: [{ permanentStudentId: childKey }] };
+    if (mongoose.Types.ObjectId.isValid(childKey)) childFilter.$or.push({ _id: childKey });
+    const enrollments = await Enrollment.find(childFilter).select('_id student').lean();
+    if (enrollments.length === 0) return res.status(404).json({ success: false, message: 'Child not found on your account.' });
+
+    await Enrollment.updateMany(
+      { _id: { $in: enrollments.map((e) => e._id) } },
+      { $set: { 'studentSnapshot.firstName': firstName, 'studentSnapshot.middleName': middleName, 'studentSnapshot.lastName': lastName } }
+    );
+
+    const studentUserIds = [...new Set(enrollments.map((e) => e.student && String(e.student)).filter(Boolean))];
+    if (studentUserIds.length > 0) {
+      await User.updateMany({ _id: { $in: studentUserIds } }, { $set: { firstName, middleName, lastName } });
+    }
+
+    logAudit({ req, userId: req.user._id, action: 'Child Name Update', module: 'Enrollment',
+      description: `Parent updated name for child ${childKey}`, status: 'SUCCESS' }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: "Student's name updated.", firstName, middleName, lastName });
+  } catch (err) {
+    console.error('updateChildName error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update the name.' });
   }
 };
 
@@ -840,11 +906,14 @@ const submitPaymentProof = async (req, res) => {
 
     const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
     if (parentUser?.email) {
-      const { sendEmail } = require('../utils/emailService');
+      const { sendEmail, buildBrandedEmailHtml } = require('../utils/emailService');
       sendEmail({
         to: parentUser.email,
         subject: `Bee Bright — Payment Proof Received (${permanentIdOf(enrollment)})`,
-        html: `<p>Hi ${parentUser.firstName}, we received your payment proof for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+        html: buildBrandedEmailHtml({
+          title: 'Payment Proof Received',
+          bodyHtml: `<p>Hi ${parentUser.firstName}, we received your payment proof for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+        }),
       }, 'proof received notification').catch(() => {});
     }
 
@@ -916,11 +985,14 @@ const submitRemainingPaymentProof = async (req, res) => {
 
     const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
     if (parentUser?.email) {
-      const { sendEmail } = require('../utils/emailService');
+      const { sendEmail, buildBrandedEmailHtml } = require('../utils/emailService');
       sendEmail({
         to: parentUser.email,
         subject: `Bee Bright — Remaining Balance Proof Received (${permanentIdOf(enrollment)})`,
-        html: `<p>Hi ${parentUser.firstName}, we received your proof of payment for the remaining balance for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+        html: buildBrandedEmailHtml({
+          title: 'Remaining Balance Proof Received',
+          bodyHtml: `<p>Hi ${parentUser.firstName}, we received your proof of payment for the remaining balance for student ${permanentIdOf(enrollment)}. Our team will verify it within 1–2 business days.</p>`,
+        }),
       }, 'remaining proof received notification').catch(() => {});
     }
 
@@ -953,7 +1025,9 @@ const getMyEnrollments = async (req, res) => {
         return { ...e, payments };
       })
     );
-    return res.status(200).json({ success: true, enrollments: withPayments });
+    // When the remaining 50% falls due (halfway session) — null until the schedule reaches it.
+    const withDueDates = await attachRemainingDueDates(withPayments);
+    return res.status(200).json({ success: true, enrollments: withDueDates });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message || 'Failed to fetch enrollments.' });
   }
@@ -1097,29 +1171,34 @@ const getEnrollmentById = async (req, res) => {
 };
 
 // GET /api/enrollments/tutor/assessments
+// Tutor Dashboard "Assessments" preview panel (BeeBright backlog item 25) — the pre-enrollment
+// Kindergarten/Grade-level Assessment Form the parent filled out, for the tutor's own students.
+// Only Academic Tutorial has this form; and it only shows for a student whose parent actually
+// answered it (`applicable: true`) — a parent who marked it "not applicable" (still stamps
+// `completedAt`, since that's also a completed step) or never reached it shows nothing.
 const getTutorAssessments = async (req, res) => {
   try {
-    const sessions = await Schedule.find({ tutor: req.user._id }).select('student students').lean();
+    const sessions = await Schedule.find({ $or: [{ tutor: req.user._id }, { tutors: req.user._id }] })
+      .select('student students')
+      .lean();
     const userIds = [];
     for (const session of sessions) {
       if (session.student) userIds.push(session.student);
       if (Array.isArray(session.students)) userIds.push(...session.students);
     }
-
-    const filter = {
-      'preEnrollmentAssessment.completedAt': { $ne: null },
-    };
-    if (userIds.length > 0) {
-      filter.$or = [{ parent: { $in: userIds } }, { student: { $in: userIds } }];
-    } else {
+    if (userIds.length === 0) {
       // No assigned sessions yet — still allow tutor to see nothing rather than all enrollments
       return res.status(200).json({ success: true, enrollments: [] });
     }
 
-    const enrollments = await Enrollment.find(filter)
+    const enrollments = await Enrollment.find({
+      student: { $in: userIds },
+      'packages.programCode': 'ACT102',
+      'preEnrollmentAssessment.applicable': true,
+    })
       .sort({ createdAt: -1 })
       .populate('parent', 'firstName lastName email phone')
-      .select('enrollmentId studentId studentSnapshot packages status preEnrollmentAssessment parent createdAt')
+      .select('enrollmentId studentId permanentStudentId student studentSnapshot packages status preEnrollmentAssessment parent createdAt')
       .lean();
 
     return res.status(200).json({ success: true, enrollments });
@@ -1463,5 +1542,6 @@ module.exports = {
   adminAddStudent,
   adminWalkInEnroll,
   setChildProfilePhoto,
+  updateChildName,
   getPaymentInstructions,
 };

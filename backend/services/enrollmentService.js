@@ -5,7 +5,7 @@
  */
 const mongoose = require('mongoose');
 const EnrollmentCounter = require('../models/EnrollmentCounter');
-const { sendEmail, logEmailError } = require('../utils/emailService');
+const { sendEmail, logEmailError, buildBrandedEmailHtml } = require('../utils/emailService');
 
 // ── Enrollment ID ──────────────────────────────────────────────────────────
 
@@ -71,31 +71,23 @@ async function sendEnrollmentConfirmationEmail(to, { parentName, studentName, en
     {
       to,
       subject: `Bee Bright — Enrollment Received (${enrollmentId})`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:linear-gradient(135deg,#f59e0b,#d97706);padding:28px;text-align:center;border-radius:8px 8px 0 0;">
-            <h1 style="color:#fff;margin:0;font-size:24px;">🐝 Bee Bright Tutorial Center</h1>
+      html: buildBrandedEmailHtml({
+        title: 'Enrollment Received!',
+        bodyHtml: `
+          <p>Hi <strong>${parentName}</strong>,</p>
+          <p>We've received the enrollment application for <strong>${studentName}</strong>.</p>
+          <div style="background:#fff;border:1px solid #fde68a;border-radius:8px;padding:20px;margin:20px 0;">
+            <p style="margin:0 0 8px;"><strong>Student ID:</strong> ${enrollmentId}</p>
+            <p style="margin:0 0 8px;"><strong>Amount Due:</strong> ₱${Number(amountDue).toLocaleString()}</p>
+            <p style="margin:0;"><strong>Payment Method:</strong> ${methodLabel}</p>
           </div>
-          <div style="padding:32px;background:#fffbeb;border:1px solid #fde68a;border-top:none;border-radius:0 0 8px 8px;">
-            <h2 style="color:#92400e;">Enrollment Received!</h2>
-            <p style="color:#78350f;line-height:1.6;">Hi <strong>${parentName}</strong>,</p>
-            <p style="color:#78350f;line-height:1.6;">
-              We've received the enrollment application for <strong>${studentName}</strong>.
-            </p>
-            <div style="background:#fff;border:1px solid #fde68a;border-radius:8px;padding:20px;margin:20px 0;">
-              <p style="margin:0 0 8px;"><strong>Student ID:</strong> ${enrollmentId}</p>
-              <p style="margin:0 0 8px;"><strong>Amount Due:</strong> ₱${Number(amountDue).toLocaleString()}</p>
-              <p style="margin:0;"><strong>Payment Method:</strong> ${methodLabel}</p>
-            </div>
-            <p style="color:#78350f;line-height:1.6;">
-              Our team will review your enrollment and payment proof within <strong>1–2 business days</strong>.
-              You will receive an email once your enrollment is approved.
-            </p>
-            <p style="color:#b45309;font-size:14px;margin-top:24px;">
-              You can track your enrollment status at any time using your Enrollment ID and registered email.
-            </p>
-          </div>
-        </div>`,
+          <p>Our team will review your enrollment and payment proof within <strong>1–2 business days</strong>.
+             You will receive an email once your enrollment is approved.</p>
+          <p style="color:#b45309;font-size:14px;margin-top:24px;">
+            You can track your enrollment status at any time using your Enrollment ID and registered email.
+          </p>
+        `,
+      }),
     },
     'enrollment confirmation'
   ).catch((err) => logEmailError('enrollment confirmation email', err, { to, enrollmentId }));
@@ -107,31 +99,21 @@ async function sendEnrollmentApprovedEmail(to, { parentName, studentName, enroll
     {
       to,
       subject: `Bee Bright — Enrollment Approved! Welcome, ${studentName}`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:linear-gradient(135deg,#10b981,#059669);padding:28px;text-align:center;border-radius:8px 8px 0 0;">
-            <h1 style="color:#fff;margin:0;font-size:24px;">🐝 Bee Bright Tutorial Center</h1>
+      html: buildBrandedEmailHtml({
+        title: 'Enrollment Approved!',
+        accent: 'green',
+        bodyHtml: `
+          <p>Hi <strong>${parentName}</strong>,</p>
+          <p>Great news! The enrollment for <strong>${studentName}</strong> has been <strong>approved</strong>.</p>
+          <div style="background:#fff;border:1px solid #a7f3d0;border-radius:8px;padding:20px;margin:20px 0;">
+            <p style="margin:0 0 8px;"><strong>Enrollment ID:</strong> ${enrollmentId}</p>
+            <p style="margin:0;"><strong>Student ID:</strong> ${studentId}</p>
           </div>
-          <div style="padding:32px;background:#ecfdf5;border:1px solid #a7f3d0;border-top:none;border-radius:0 0 8px 8px;">
-            <h2 style="color:#065f46;">Enrollment Approved!</h2>
-            <p style="color:#064e3b;line-height:1.6;">Hi <strong>${parentName}</strong>,</p>
-            <p style="color:#064e3b;line-height:1.6;">
-              Great news! The enrollment for <strong>${studentName}</strong> has been <strong>approved</strong>.
-            </p>
-            <div style="background:#fff;border:1px solid #a7f3d0;border-radius:8px;padding:20px;margin:20px 0;">
-              <p style="margin:0 0 8px;"><strong>Enrollment ID:</strong> ${enrollmentId}</p>
-              <p style="margin:0;"><strong>Student ID:</strong> ${studentId}</p>
-            </div>
-            <p style="color:#064e3b;line-height:1.6;">
-              Our scheduling team will reach out to arrange your child's class schedule based on your preferred start date and time.
-            </p>
-            <div style="text-align:center;margin:28px 0;">
-              <a href="${loginUrl}" style="background:linear-gradient(135deg,#10b981,#059669);color:#fff;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:700;display:inline-block;">
-                Log In to Your Dashboard
-              </a>
-            </div>
-          </div>
-        </div>`,
+          <p>Our scheduling team will reach out to arrange your child's class schedule based on your preferred start date and time.</p>
+        `,
+        ctaLabel: 'Log In to Your Dashboard',
+        ctaUrl: loginUrl,
+      }),
     },
     'enrollment approved'
   ).catch((err) => logEmailError('enrollment approved email', err, { to, enrollmentId }));
@@ -142,30 +124,23 @@ async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enroll
     {
       to,
       subject: `Bee Bright — Enrollment Update (${enrollmentId})`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:#374151;padding:28px;text-align:center;border-radius:8px 8px 0 0;">
-            <h1 style="color:#fff;margin:0;font-size:24px;">🐝 Bee Bright Tutorial Center</h1>
-          </div>
-          <div style="padding:32px;background:#fef9f9;border:1px solid #fca5a5;border-top:none;border-radius:0 0 8px 8px;">
-            <h2 style="color:#991b1b;">Enrollment Not Approved</h2>
-            <p style="color:#7f1d1d;line-height:1.6;">Hi <strong>${parentName}</strong>,</p>
-            <p style="color:#7f1d1d;line-height:1.6;">
-              Unfortunately, the enrollment for <strong>${studentName}</strong> (${enrollmentId}) was not approved.
-            </p>
-            ${reason ? `
-            <div style="background:#fff;border-left:4px solid #ef4444;border-radius:4px;padding:16px;margin:16px 0;">
-              <p style="color:#7f1d1d;margin:0;"><strong>Reason:</strong> ${reason}</p>
-            </div>` : ''}
-            ${allowResubmission ? `
-            <p style="color:#7f1d1d;line-height:1.6;">
-              You may upload new payment proof and resubmit your application. Log in to your parent dashboard to do so.
-            </p>` : ''}
-            <p style="color:#b91c1c;font-size:14px;margin-top:20px;">
-              If you have questions, please contact us at beebrightph@gmail.com
-            </p>
-          </div>
-        </div>`,
+      html: buildBrandedEmailHtml({
+        title: 'Enrollment Not Approved',
+        accent: 'red',
+        bodyHtml: `
+          <p>Hi <strong>${parentName}</strong>,</p>
+          <p>Unfortunately, the enrollment for <strong>${studentName}</strong> (${enrollmentId}) was not approved.</p>
+          ${reason ? `
+          <div style="background:#fff;border-left:4px solid #ef4444;border-radius:4px;padding:16px;margin:16px 0;">
+            <p style="margin:0;"><strong>Reason:</strong> ${reason}</p>
+          </div>` : ''}
+          ${allowResubmission ? `
+          <p>You may upload new payment proof and resubmit your application. Log in to your parent dashboard to do so.</p>` : ''}
+          <p style="color:#b91c1c;font-size:14px;margin-top:20px;">
+            If you have questions, please contact us at beebrightph@gmail.com
+          </p>
+        `,
+      }),
     },
     'enrollment rejected'
   ).catch((err) => logEmailError('enrollment rejected email', err, { to, enrollmentId }));
@@ -176,20 +151,14 @@ async function sendPaymentVerifiedEmail(to, { parentName, studentName, enrollmen
     {
       to,
       subject: `Bee Bright — Payment Verified (${enrollmentId})`,
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:linear-gradient(135deg,#f59e0b,#d97706);padding:28px;text-align:center;border-radius:8px 8px 0 0;">
-            <h1 style="color:#fff;margin:0;">🐝 Bee Bright</h1>
-          </div>
-          <div style="padding:32px;background:#fffbeb;border:1px solid #fde68a;border-top:none;border-radius:0 0 8px 8px;">
-            <h2 style="color:#92400e;">Payment Verified</h2>
-            <p style="color:#78350f;">Hi <strong>${parentName}</strong>,</p>
-            <p style="color:#78350f;line-height:1.6;">
-              Your payment for <strong>${studentName}</strong>'s enrollment (${enrollmentId}) has been verified.
-              The enrollment is now pending final approval — we'll notify you once it's confirmed.
-            </p>
-          </div>
-        </div>`,
+      html: buildBrandedEmailHtml({
+        title: 'Payment Verified',
+        bodyHtml: `
+          <p>Hi <strong>${parentName}</strong>,</p>
+          <p>Your payment for <strong>${studentName}</strong>'s enrollment (${enrollmentId}) has been verified.
+             The enrollment is now pending final approval — we'll notify you once it's confirmed.</p>
+        `,
+      }),
     },
     'payment verified'
   ).catch((err) => logEmailError('payment verified email', err, { to, enrollmentId }));

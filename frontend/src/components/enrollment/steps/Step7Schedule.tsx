@@ -48,10 +48,13 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   // in sequence (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #4b), not all at once.
   const [activeDayStepIndex, setActiveDayStepIndex] = useState(0);
 
-  const today = new Date().toISOString().split('T')[0];
+  // Local calendar dates (toISOString would be UTC — in the Philippines that is "yesterday"
+  // until 8 AM, which left a past date selectable).
+  const toLocalISODate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const today = toLocalISODate(new Date());
   const maxDate = new Date();
   maxDate.setMonth(maxDate.getMonth() + 6);
-  const maxDateStr = maxDate.toISOString().split('T')[0];
+  const maxDateStr = toLocalISODate(maxDate);
 
   const setDaysForProgram = (programCode: string, days: string[]) => {
     const rest = data.preferredDaysByProgram.filter((p) => p.programCode !== programCode);
@@ -102,6 +105,8 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
     const errs: Record<string, string> = {};
     if (!data.preferredStartDate) {
       errs.preferredStartDate = 'Please choose a preferred start date.';
+    } else if (data.preferredStartDate < today) {
+      errs.preferredStartDate = 'The start date cannot be in the past. Please choose today or a later date.';
     }
     const firstUnmetIndex = selectedProgramCodes.findIndex((code) => !programDaysSatisfied(code));
     if (firstUnmetIndex !== -1) {
@@ -190,7 +195,8 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
           className={errors.preferredStartDate ? 'border-destructive' : ''}
           onChange={(e) => {
             update({ preferredStartDate: e.target.value });
-            setErrors((prev) => ({ ...prev, preferredStartDate: '' }));
+            // Typing a past date by hand bypasses the picker's `min` — flag it (validate() blocks Continue).
+            setErrors((prev) => ({ ...prev, preferredStartDate: e.target.value && e.target.value < today ? 'The start date cannot be in the past. Please choose today or a later date.' : '' }));
           }}
         />
         {errors.preferredStartDate && (

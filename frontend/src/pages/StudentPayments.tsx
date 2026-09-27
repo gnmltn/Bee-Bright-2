@@ -417,10 +417,10 @@ export default function StudentPayments() {
                         </tr>
                         {status !== "paid" && (
                           <tr>
-                            <td colSpan={2} className="pt-1 text-sm text-muted-foreground">
+                            <td colSpan={2} className="pt-1 text-sm text-destructive">
                               Remaining Balance
                             </td>
-                            <td className="pt-1 text-right text-sm font-semibold text-foreground">
+                            <td className="pt-1 text-right text-sm font-semibold text-destructive">
                               ₱{(currentInvoice?.remainingBalance ?? 0).toLocaleString()}
                             </td>
                           </tr>

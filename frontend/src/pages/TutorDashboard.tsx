@@ -52,6 +52,7 @@ import {
   remarkService,
   announcementService,
   auditLogService,
+  enrollmentService,
   uploadsBaseUrl,
   type GradeItem,
   type RemarkItem,
@@ -60,8 +61,11 @@ import {
   type AnnouncementItem,
   type AuditLogItem,
   type TutorStudentCard,
+  type TutorAssessmentEnrollment,
 } from "@/services/api";
-import { PROGRAM_CATEGORIES } from "@/constants/programs";
+import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
+import { displayStudentId } from "@/lib/children";
+import { PROGRAM_CATEGORIES, PROGRAM_LABELS, type ActiveProgramCode } from "@/constants/programs";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
 import { RemarkForm } from "@/components/tutor/RemarkForm";
 import { RemarkDetailDialog } from "@/components/tutor/RemarkDetailDialog";
@@ -261,6 +265,11 @@ export default function TutorDashboard() {
   const [announcementSubmitting, setAnnouncementSubmitting] = useState(false);
   const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<AnnouncementItem | null>(null);
+  // Assessments Preview (Overview / Assessments tab) — completed pre-enrollment assessment forms
+  // for this tutor's own Academic Tutorial students (BeeBright backlog item 25).
+  const [tutorAssessments, setTutorAssessments] = useState<TutorAssessmentEnrollment[]>([]);
+  const [tutorAssessmentsLoading, setTutorAssessmentsLoading] = useState(false);
+  const [selectedAssessmentEnrollment, setSelectedAssessmentEnrollment] = useState<TutorAssessmentEnrollment | null>(null);
   const [weekStart, setWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
 
   // ─── Schedule view controls ────────────────────────────────────────────────────
@@ -321,6 +330,15 @@ export default function TutorDashboard() {
       .finally(() => setAnnouncementsLoading(false));
   };
 
+  const fetchTutorAssessments = () => {
+    setTutorAssessmentsLoading(true);
+    enrollmentService
+      .getTutorAssessments()
+      .then((res) => setTutorAssessments(res.data?.success && Array.isArray(res.data.enrollments) ? res.data.enrollments : []))
+      .catch(() => setTutorAssessments([]))
+      .finally(() => setTutorAssessmentsLoading(false));
+  };
+
   const announcementCategoryLabel = (category: string) => {
     return {
       sick_leave: "Sick Leave",
@@ -355,6 +373,12 @@ export default function TutorDashboard() {
   useEffect(() => {
     if (!location.hash || location.hash === "#students" || location.hash === "#assessments" || location.hash === "#announcements") {
       fetchAnnouncements();
+    }
+  }, [location.hash]);
+
+  useEffect(() => {
+    if (!location.hash || location.hash === "#assessments") {
+      fetchTutorAssessments();
     }
   }, [location.hash]);
 
@@ -1288,8 +1312,53 @@ export default function TutorDashboard() {
                   )}
                   </div>
   );
+  const assessmentsPreview = (
+    <div className="bg-card rounded-xl border border-border overflow-hidden" data-testid="assessments-preview">
+      <div className="p-4 border-b border-border">
+        <h3 className="font-display font-bold text-lg text-foreground">Assessments Preview</h3>
+        <p className="text-sm text-muted-foreground">Pre-enrollment assessment forms parents completed for Academic Tutorial.</p>
+      </div>
+      <div className="divide-y divide-border">
+        {tutorAssessmentsLoading ? (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : tutorAssessments.length === 0 ? (
+          <p className="p-6 text-center text-muted-foreground">No completed assessment forms yet.</p>
+        ) : (
+          tutorAssessments.map((enrollment) => {
+            const studentName = [enrollment.studentSnapshot?.firstName, enrollment.studentSnapshot?.middleName, enrollment.studentSnapshot?.lastName].filter(Boolean).join(" ") || "Student";
+            return (
+              <div
+                key={enrollment._id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedAssessmentEnrollment(enrollment)}
+                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedAssessmentEnrollment(enrollment); } }}
+                className="p-4 flex items-center justify-between gap-4 cursor-pointer transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                data-testid="assessment-preview-row"
+              >
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">Academic Tutorial</span>
+                    <span className="font-mono text-xs text-muted-foreground">{displayStudentId(enrollment)}</span>
+                  </div>
+                  <p className="font-semibold text-foreground">{studentName}</p>
+                  <p className="text-sm text-muted-foreground">{enrollment.preEnrollmentAssessment.templateTitle || "Assessment Form"}</p>
+                </div>
+                {enrollment.preEnrollmentAssessment.completedAt ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">{new Date(enrollment.preEnrollmentAssessment.completedAt).toLocaleDateString("en-US", { dateStyle: "medium" })}</span>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
   const announcementsPreview = (
     <>
+                  {assessmentsPreview}
                   {/* Announcements preview — Overview / Assessment */}
                   <div className="bg-card rounded-xl border border-border overflow-hidden">
                     <div className="p-4 border-b border-border flex items-center justify-between gap-3">
@@ -2246,7 +2315,8 @@ export default function TutorDashboard() {
                                   className={remarkTypeProgramCode === p.programCode ? "btn-glow" : ""}
                                   onClick={() => setRemarkTypeProgramCode(p.programCode as RemarkProgramCode)}
                                 >
-                                  {p.label}
+                                  {/* Plain program name - p.label carries a decorative emoji (kept as-is for legacy grade matching). */}
+                                  {PROGRAM_LABELS[p.programCode as ActiveProgramCode] ?? p.label.replace(/^\P{L}+/u, "")}
                                 </Button>
                               ))}
                             </div>
@@ -2695,6 +2765,24 @@ export default function TutorDashboard() {
                   {selectedAnnouncement.scheduledDate && <span>When: {new Date(selectedAnnouncement.scheduledDate).toLocaleDateString("en-US", { dateStyle: "medium" })}</span>}
                 </div>
               </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!selectedAssessmentEnrollment} onOpenChange={(open) => { if (!open) setSelectedAssessmentEnrollment(null); }}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          {selectedAssessmentEnrollment && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {[selectedAssessmentEnrollment.studentSnapshot?.firstName, selectedAssessmentEnrollment.studentSnapshot?.middleName, selectedAssessmentEnrollment.studentSnapshot?.lastName].filter(Boolean).join(" ") || "Student"}
+                </DialogTitle>
+                <DialogDescription>
+                  Academic Tutorial · Student ID {displayStudentId(selectedAssessmentEnrollment)}
+                </DialogDescription>
+              </DialogHeader>
+              <EnrollmentAssessmentView assessment={selectedAssessmentEnrollment.preEnrollmentAssessment} />
             </>
           )}
         </DialogContent>

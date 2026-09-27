@@ -11,7 +11,7 @@ const { normalizeEmailAddress, buildEmailLookupFilter, getEmailLookupCandidates 
 const { PASSWORD_EXPIRY_DAYS, getPasswordSecurityState, isPasswordExpired } = require('../utils/passwordPolicy');
 const { getMaintenanceEnabled } = require('./settingsController');
 const { createCaptchaChallenge, verifyCaptchaAnswer } = require('../utils/captchaService');
-const { sendEmail, getEmailErrorMessage, logEmailError } = require('../utils/emailService');
+const { sendEmail, getEmailErrorMessage, logEmailError, buildOtpEmailHtml } = require('../utils/emailService');
 const { setAuthCookie, clearAuthCookie, getAuthTokenFromCookies } = require('../utils/authCookie');
 const {
   validateTrustedDevice,
@@ -304,18 +304,12 @@ async function sendLoginOtpEmail({ email, code, firstName, role }) {
         `This code expires in ${LOGIN_OTP_TTL_MINUTES} minutes.`,
         'If you did not attempt to sign in, you can ignore this email.',
       ].join('\n'),
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827; max-width: 560px; margin: 0 auto;">
-          <h2 style="margin-bottom: 12px;">Bee Bright login verification</h2>
-          <p>Hello ${firstName || 'Bee Bright user'},</p>
-          <p>Use this one-time verification code to finish signing in:</p>
-          <div style="font-size: 28px; font-weight: 700; letter-spacing: 6px; padding: 16px 20px; background: #f3f4f6; border-radius: 12px; display: inline-block;">
-            ${code}
-          </div>
-          <p style="margin-top: 16px;">This code expires in ${LOGIN_OTP_TTL_MINUTES} minutes.</p>
-          <p style="color: #6b7280;">If you did not attempt to sign in, you can ignore this email.</p>
-        </div>
-      `,
+      html: buildOtpEmailHtml({
+        title: 'Login Verification',
+        introHtml: `<p>Hello ${firstName || 'Bee Bright user'},</p><p>Use this one-time verification code to finish signing in:</p>`,
+        otp: code,
+        expiresMinutes: LOGIN_OTP_TTL_MINUTES,
+      }),
     },
     `${roleLabel} login OTP`
   );

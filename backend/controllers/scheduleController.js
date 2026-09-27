@@ -12,7 +12,7 @@ const ScheduleSubstitutionLog = require('../models/ScheduleSubstitutionLog');
 const PlaygroupGroup = require('../models/PlaygroupGroup');
 const Suspension = require('../models/Suspension');
 const EmergencyReschedule = require('../models/EmergencyReschedule');
-const { sendEmail, logEmailError } = require('../utils/emailService');
+const { sendEmail, logEmailError, buildBrandedEmailHtml } = require('../utils/emailService');
 const { parseAvailability, getSlotsForDay, getSlotsByDayOfWeek, SLOT_MINUTES_2HR, SLOT_MINUTES_1HR } = require('../utils/availability');
 const {
   getSessionType,
@@ -30,11 +30,12 @@ const {
   calculatePlaygroupTutorRequirement,
   enrollmentCoversSubject,
   PLAYGROUP_MAX_CHILDREN,
+  ONE_ON_ONE_SLOT_CAP,
 } = require('../utils/schedulingPolicy');
 const { matchesParentPreference, resolvePreferredDays } = require('../utils/schedulePreferences');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
 const { permanentIdOf } = require('../utils/studentIdentity');
-const { isRoomDoubleBooked } = require('../utils/weeklySchedulingUtils');
+const { isRoomDoubleBooked, isOneOnOneHourFull, filterLiveSessions } = require('../utils/weeklySchedulingUtils');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
 
@@ -107,6 +108,17 @@ function buildFullName(person) {
   return [person.firstName, person.middleName, person.lastName].filter(Boolean).join(' ').trim() || 'Unknown';
 }
 
+/** Renders the "Subject / Date / Time / Reason / ..." pairs every scheduling notification
+ * email already builds as a plain-text block, as the same styled detail box the branded
+ * template uses elsewhere (e.g. enrollmentService.js's Student ID/Amount Due box). */
+function buildEmailDetailRowsHtml(pairs) {
+  const rows = pairs
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([label, value]) => `<p style="margin:0 0 8px;"><strong>${label}:</strong> ${value}</p>`)
+    .join('');
+  return `<div style="background:#fff;border:1px solid #fde68a;border-radius:8px;padding:20px;margin:16px 0;">${rows}</div>`;
+}
+
 function normalizeTime(value = '') {
   const raw = String(value || '').trim();
   const [h, m] = raw.split(':');
@@ -121,7 +133,8 @@ function normalizeDaySlots(daySlotsRaw) {
     const startTime = normalizeTime(entry?.startTime);
     const endTime = normalizeTime(entry?.endTime);
     if (!(dayOfWeek >= 0 && dayOfWeek <= 6) || !startTime || !endTime) continue;
-    map.set(`${dayOfWeek}|${startTime}|${endTime}`, { dayOfWeek, startTime, endTime });
+    const tutorId = entry?.tutorId ? String(entry.tutorId) : null;
+    map.set(`${dayOfWeek}|${startTime}|${endTime}`, { dayOfWeek, startTime, endTime, tutorId });
   }
   return Array.from(map.values());
 }
@@ -169,7 +182,11 @@ async function hasTutorScheduleConflict({ tutorId, date, startTime, endTime, exc
   if (excludeScheduleId) {
     query._id = { $ne: excludeScheduleId };
   }
-  const existingSchedules = await Schedule.find(query).select('startTime endTime').lean();
+  // Ghost sessions (tutor/child account gone) can never actually run, so they must not
+  // falsely block a real new booking of the same slot.
+  const existingSchedules = await filterLiveSessions(
+    await Schedule.find(query).select('startTime endTime tutor student').lean()
+  );
   const targetStart = normalizeTime(startTime);
   const targetEnd = normalizeTime(getSessionEndTime(startTime, endTime));
   return existingSchedules.some((existing) => timeRangesOverlap(targetStart, targetEnd, existing.startTime, existing.endTime || getSessionEndTime(existing.startTime, existing.endTime)));
@@ -255,6 +272,33 @@ async function ensureStudentUserForEnrollment(enrollmentDoc) {
   return user;
 }
 
+// Same lookup chain as ensureStudentUserForEnrollment, but read-only — used by preview
+// endpoints (e.g. checkMonthlySchedule) that must not create the student account as a
+// side effect. Returns null when no student account exists for this enrollment yet, in
+// which case there is nothing on record it could conflict with anyway.
+async function resolveExistingStudentId(enrollmentDoc) {
+  if (enrollmentDoc.student) {
+    const existing = await User.findOne({ _id: enrollmentDoc.student, role: 'student', deletedAt: null }).select('_id').lean();
+    if (existing) return String(existing._id);
+  }
+  const permanentId = permanentIdOf(enrollmentDoc);
+  if (permanentId && enrollmentDoc.parent) {
+    const sibling = await Enrollment.findOne({
+      _id: { $ne: enrollmentDoc._id },
+      parent: enrollmentDoc.parent,
+      permanentStudentId: permanentId,
+      student: { $ne: null },
+    }).select('student').lean();
+    if (sibling?.student) {
+      const siblingUser = await User.findOne({ _id: sibling.student, role: 'student', deletedAt: null }).select('_id').lean();
+      if (siblingUser) return String(siblingUser._id);
+    }
+  }
+  const email = `child.${enrollmentDoc._id}@students.beebright.internal`;
+  const existingByEmail = await User.findOne({ email }).select('_id').lean();
+  return existingByEmail ? String(existingByEmail._id) : null;
+}
+
 async function findCompatibleOpenSlots({ subjectId, programCode, sessionType, enrollment, excludeScheduleId }) {
   const query = {
     subject: subjectId,
@@ -312,6 +356,10 @@ async function notifyAssignmentSaved({ schedule, enrollment, studentUser }) {
       to: parent.email,
       subject: `Bee Bright schedule confirmed: ${subjectName}`,
       text: `Hello ${parent.firstName || 'parent'}, ${studentName} is scheduled for ${subjectName} on ${when}.`,
+      html: buildBrandedEmailHtml({
+        title: 'Schedule Confirmed',
+        bodyHtml: `<p>Hello ${parent.firstName || 'parent'},</p><p><strong>${studentName}</strong> is scheduled for <strong>${subjectName}</strong> on <strong>${when}</strong>.</p>`,
+      }),
     }, 'schedule assignment parent').catch((error) => logEmailError('schedule assignment parent', error, { to: parent.email })));
   }
   for (const tutor of tutorDocs) {
@@ -320,6 +368,10 @@ async function notifyAssignmentSaved({ schedule, enrollment, studentUser }) {
       to: tutor.email,
       subject: `Bee Bright: ${studentName} assigned to ${subjectName}`,
       text: `Hello ${tutor.firstName || 'tutor'}, ${studentName} was assigned to ${subjectName} on ${when}.`,
+      html: buildBrandedEmailHtml({
+        title: 'New Student Assignment',
+        bodyHtml: `<p>Hello ${tutor.firstName || 'tutor'},</p><p><strong>${studentName}</strong> was assigned to <strong>${subjectName}</strong> on <strong>${when}</strong>.</p>`,
+      }),
     }, 'schedule assignment tutor').catch((error) => logEmailError('schedule assignment tutor', error, { to: tutor.email })));
   }
   await Promise.allSettled(emails);
@@ -384,7 +436,11 @@ async function hasStudentScheduleConflict({ studentId, date, startTime, endTime,
     query._id = { $ne: excludeScheduleId };
   }
 
-  const existingSchedules = await Schedule.find(query).select('startTime endTime').lean();
+  // Ghost sessions (tutor/child account gone) can never actually run, so they must not
+  // falsely block a real new booking of the same slot.
+  const existingSchedules = await filterLiveSessions(
+    await Schedule.find(query).select('startTime endTime tutor student').lean()
+  );
   const targetStart = normalizeTime(startTime);
   const targetEnd = normalizeTime(getSessionEndTime(startTime, endTime));
 
@@ -533,7 +589,16 @@ async function notifyNoSubstituteAlert({ schedule, reason }) {
     await Promise.allSettled(admins.map((admin) => sendEmail({
       to: admin.email,
       subject: 'Bee Bright alert: substitute tutor required',
-      text: `Hello ${buildFullName(admin)},\n\nNo qualified substitute tutor is currently available for the class below.\n\n${baseText}\n\nPlease assign manually.`
+      text: `Hello ${buildFullName(admin)},\n\nNo qualified substitute tutor is currently available for the class below.\n\n${baseText}\n\nPlease assign manually.`,
+      html: buildBrandedEmailHtml({
+        title: 'Substitute Tutor Required',
+        bodyHtml: `
+          <p>Hello ${buildFullName(admin)},</p>
+          <p>No qualified substitute tutor is currently available for the class below.</p>
+          ${buildEmailDetailRowsHtml([['Subject', subjectLabel], ['Date', dateLabel], ['Time', `${schedule?.startTime} - ${schedule?.endTime}`], ['Reason', reason || 'Tutor unavailable'], ['Status', 'Substitute Required']])}
+          <p>Please assign manually.</p>
+        `,
+      }),
     }, 'schedule substitution alert (admin)')));
   } catch (error) {
     logEmailError('schedule substitution alert failed', error, { scheduleId: schedule?._id });
@@ -741,26 +806,40 @@ async function notifyScheduleSubstitution({ schedule, previousTutor, replacement
   const timeLabel = `${schedule.startTime} - ${schedule.endTime}`;
   const baseText = `Subject: ${subject?.name || 'Class'}\nDate: ${dateLabel}\nTime: ${timeLabel}\nReason: ${reason || 'Tutor unavailable'}`;
 
+  const detailRows = [['Subject', subject?.name || 'Class'], ['Date', dateLabel], ['Time', timeLabel], ['Reason', reason || 'Tutor unavailable']];
+
   const emails = [];
   if (student?.email) {
     emails.push(sendEmail({
       to: student.email,
       subject: 'Bee Bright schedule update: substitute tutor assigned',
-      text: `Hello ${buildFullName(student)},\n\nYour schedule has been updated with a substitute tutor.\n\n${baseText}\nNew tutor: ${buildFullName(replacementTutor)}\n\nThank you.`
+      text: `Hello ${buildFullName(student)},\n\nYour schedule has been updated with a substitute tutor.\n\n${baseText}\nNew tutor: ${buildFullName(replacementTutor)}\n\nThank you.`,
+      html: buildBrandedEmailHtml({
+        title: 'Substitute Tutor Assigned',
+        bodyHtml: `<p>Hello ${buildFullName(student)},</p><p>Your schedule has been updated with a substitute tutor.</p>${buildEmailDetailRowsHtml([...detailRows, ['New tutor', buildFullName(replacementTutor)]])}<p>Thank you.</p>`,
+      }),
     }, 'schedule substitution notification (student)'));
   }
   if (previousTutor?.email) {
     emails.push(sendEmail({
       to: previousTutor.email,
       subject: 'Bee Bright schedule update: substitution recorded',
-      text: `Hello ${buildFullName(previousTutor)},\n\nYou were marked unavailable and this session was reassigned.\n\n${baseText}\nSubstitute tutor: ${buildFullName(replacementTutor)}\n\nThank you.`
+      text: `Hello ${buildFullName(previousTutor)},\n\nYou were marked unavailable and this session was reassigned.\n\n${baseText}\nSubstitute tutor: ${buildFullName(replacementTutor)}\n\nThank you.`,
+      html: buildBrandedEmailHtml({
+        title: 'Substitution Recorded',
+        bodyHtml: `<p>Hello ${buildFullName(previousTutor)},</p><p>You were marked unavailable and this session was reassigned.</p>${buildEmailDetailRowsHtml([...detailRows, ['Substitute tutor', buildFullName(replacementTutor)]])}<p>Thank you.</p>`,
+      }),
     }, 'schedule substitution notification (old tutor)'));
   }
   if (replacementTutor?.email) {
     emails.push(sendEmail({
       to: replacementTutor.email,
       subject: 'Bee Bright schedule update: you were assigned as substitute tutor',
-      text: `Hello ${buildFullName(replacementTutor)},\n\nYou have been assigned as a substitute tutor.\n\n${baseText}\nStudent: ${buildFullName(student)}\n\nPlease check your dashboard schedule.`
+      text: `Hello ${buildFullName(replacementTutor)},\n\nYou have been assigned as a substitute tutor.\n\n${baseText}\nStudent: ${buildFullName(student)}\n\nPlease check your dashboard schedule.`,
+      html: buildBrandedEmailHtml({
+        title: 'You Were Assigned as Substitute Tutor',
+        bodyHtml: `<p>Hello ${buildFullName(replacementTutor)},</p><p>You have been assigned as a substitute tutor.</p>${buildEmailDetailRowsHtml([...detailRows, ['Student', buildFullName(student)]])}<p>Please check your dashboard schedule.</p>`,
+      }),
     }, 'schedule substitution notification (new tutor)'));
   }
 
@@ -1696,10 +1775,14 @@ const getAvailableSlotsMonthly = async (req, res) => {
       d.setUTCDate(d.getUTCDate() + 1);
     }
 
-    const existingTutor = await Schedule.find({
-      tutor: tutorId,
-      date: { $in: datesInMonth }
-    }).select('date startTime').lean();
+    // Ghost sessions (tutor/child account gone) can never actually run, so they must not
+    // falsely mark a real slot as booked.
+    const existingTutor = await filterLiveSessions(
+      await Schedule.find({
+        tutor: tutorId,
+        date: { $in: datesInMonth }
+      }).select('date startTime tutor student').lean()
+    );
 
     const bookedByStart = new Set();
     for (const s of existingTutor) {
@@ -1707,10 +1790,12 @@ const getAvailableSlotsMonthly = async (req, res) => {
     }
 
     if (studentId) {
-      const existingStudent = await Schedule.find({
-        student: studentId,
-        date: { $in: datesInMonth }
-      }).select('startTime').lean();
+      const existingStudent = await filterLiveSessions(
+        await Schedule.find({
+          student: studentId,
+          date: { $in: datesInMonth }
+        }).select('startTime tutor student').lean()
+      );
       for (const s of existingStudent) {
         bookedByStart.add(s.startTime);
       }
@@ -1741,7 +1826,7 @@ const getAvailableSlotsMonthly = async (req, res) => {
 // @access  Private (Admin)
 const getAvailableSlotsByDay = async (req, res) => {
   try {
-    const { tutorId, monthStart: monthStartStr, studentId } = req.query;
+    const { tutorId, monthStart: monthStartStr } = req.query;
     if (!tutorId || !monthStartStr) {
       return res.status(400).json({
         success: false,
@@ -1779,13 +1864,31 @@ const getAvailableSlotsByDay = async (req, res) => {
       }
       if (datesThisDay.length === 0) continue;
 
-      // One room: exclude any startTime already booked on any of these dates (by anyone)
-      const existingBooked = await Schedule.find({
-        date: { $in: datesThisDay }
-      }).select('startTime').lean();
-      const bookedStartTimes = new Set(existingBooked.map(s => s.startTime));
+      // (a) This tutor's own bookings — a tutor can't be in two places at once.
+      const tutorRows = await filterLiveSessions(
+        await Schedule.find({ $or: [{ tutor: tutorId }, { tutors: tutorId }], date: { $in: datesThisDay } })
+          .select('startTime tutor student').lean()
+      );
+      const tutorBooked = new Set(tutorRows.map((s) => s.startTime));
 
-      const free = possibleSlots.filter(s => !bookedStartTimes.has(s.startTime));
+      // (b) System-wide hour capacity: the center only fits ONE_ON_ONE_SLOT_CAP concurrent 1-on-1
+      // sessions (Academic Tutorial + Examination Preparation together), whichever tutor they use.
+      // Sessions whose tutor/child account no longer exists are ghosts and never count.
+      const oneOnOneRows = await filterLiveSessions(
+        await Schedule.find({ sessionType: 'one-on-one', date: { $in: datesThisDay } })
+          .select('date startTime tutor student').lean()
+      );
+      const perDateHour = new Map();
+      for (const s of oneOnOneRows) {
+        const key = `${new Date(s.date).toISOString().slice(0, 10)}|${s.startTime}`;
+        perDateHour.set(key, (perDateHour.get(key) || 0) + 1);
+      }
+      const fullHours = new Set();
+      for (const [key, count] of perDateHour) {
+        if (count >= ONE_ON_ONE_SLOT_CAP) fullHours.add(key.split('|')[1]);
+      }
+
+      const free = possibleSlots.filter((s) => !tutorBooked.has(s.startTime) && !fullHours.has(s.startTime));
       if (free.length > 0) {
         free.sort((a, b) => a.startTime.localeCompare(b.startTime));
         slotsByDay[String(dayOfWeek)] = free;
@@ -1794,7 +1897,8 @@ const getAvailableSlotsByDay = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      slotsByDay
+      slotsByDay,
+      slotCap: ONE_ON_ONE_SLOT_CAP
     });
   } catch (error) {
     res.status(500).json({
@@ -1804,139 +1908,155 @@ const getAvailableSlotsByDay = async (req, res) => {
   }
 };
 
-// @desc    Create monthly schedules (1hr sessions) – 1 month from enrollment date; per-day times via daySlots
+// ── 1-on-1 monthly scheduling: shared planning ─────────────────────────────────────────────
+
+const dateKeyOf = (d) => new Date(d).toISOString().slice(0, 10);
+
+// Validates ONE generated session: operating hours / duration, tutor availability and
+// double-booking, then the system-wide hour capacity of the tutoring area.
+async function checkMonthlySlot({ tutorId, studentId, subjectId, date, startTime, endTime, policy, tutoringAreaId }) {
+  const timeError = validateTimeWindow({ date, startTime, endTime, policy });
+  if (timeError) return { ok: false, reason: timeError };
+  const tutorCheck = await canTutorHandleSchedule({ tutorId, subjectId, date, startTime, endTime });
+  if (!tutorCheck.ok) return { ok: false, reason: tutorCheck.reason };
+  if (studentId) {
+    const studentConflict = await hasStudentScheduleConflict({ studentId, date, startTime, endTime });
+    if (studentConflict) {
+      return { ok: false, reason: 'Student already has a conflicting session at this time.' };
+    }
+  }
+  const full = (await isOneOnOneHourFull(date, startTime))
+    || (tutoringAreaId ? await isRoomDoubleBooked(tutoringAreaId, date, startTime) : false);
+  if (full) {
+    return { ok: false, reason: `This hour is full — the center fits at most ${ONE_ON_ONE_SLOT_CAP} one-on-one sessions at the same time. Choose a different time or starting date.` };
+  }
+  return { ok: true };
+}
+
+// The month of sessions starts on the admin's chosen Starting Date when given (never in the
+// past); otherwise on the parent's preferred start date, as before.
+function resolveMonthlyWindow(enrollment, startDateRaw) {
+  let anchor;
+  if (startDateRaw) {
+    anchor = new Date(`${String(startDateRaw).slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(anchor.getTime())) return { error: 'The starting date is not a valid date.' };
+    if (anchor < utcTodayStart()) return { error: 'The starting date cannot be in the past.' };
+  } else {
+    // The parent's chosen Preferred Start Date is the real anchor for generated sessions
+    // (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #2).
+    anchor = new Date(enrollment.preferredStartDate || enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt);
+  }
+  const subscriptionStart = new Date(anchor);
+  subscriptionStart.setUTCHours(0, 0, 0, 0);
+  const subscriptionEnd = new Date(subscriptionStart);
+  subscriptionEnd.setUTCMonth(subscriptionEnd.getUTCMonth() + 1);
+  subscriptionEnd.setUTCDate(subscriptionEnd.getUTCDate() - 1);
+  subscriptionEnd.setUTCHours(23, 59, 59, 999);
+  const generationStart = new Date(Math.max(subscriptionStart.getTime(), utcTodayStart().getTime()));
+  if (generationStart > subscriptionEnd) {
+    return { error: 'No schedulable dates remain in this enrollment window. Please renew or choose a new enrollment period.' };
+  }
+  return { subscriptionStart, subscriptionEnd, generationStart };
+}
+
+// Everything a monthly create/check needs, or { status, message } describing what's wrong.
+// Does NOT create the student account (a preview must not have side effects).
+async function loadMonthlyContext(body) {
+  const { studentId: studentIdRaw, enrollmentId, tutorId, subjectId, daySlots: daySlotsRaw, startDate } = body || {};
+  const daySlots = normalizeDaySlots(daySlotsRaw);
+  // A tutor may be chosen per day (Tutor A Mon/Wed, Tutor B Thu) — a top-level tutorId is then
+  // only the default for days without their own.
+  const tutorForSlot = (slot) => String(slot.tutorId || tutorId || '');
+  if ((!studentIdRaw && !enrollmentId) || !subjectId || (daySlots.length > 0 && daySlots.some((slot) => !tutorForSlot(slot)))
+    || (daySlots.length === 0 && !tutorId)) {
+    return { status: 400, message: 'studentId (or enrollmentId), subjectId and a tutor for every selected day are required' };
+  }
+
+  const subject = await Subject.findById(subjectId).select('name code').lean();
+  if (!subject) return { status: 404, message: 'Subject or program not found' };
+  const policy = getProgramPolicy(subject);
+  if (policy?.sessionType !== 'one-on-one') {
+    return { status: 400, message: 'Monthly recurring schedules currently support one-on-one programs only.' };
+  }
+  if (daySlots.length === 0) {
+    return { status: 400, message: 'Select at least one day with a time (daySlots: [{ dayOfWeek, startTime, endTime }, ...])' };
+  }
+
+  const enrollment = await Enrollment.findOne(enrollmentId ? { _id: enrollmentId } : { student: studentIdRaw })
+    .sort({ createdAt: -1 })
+    .populate('selectedSubjects')
+    .lean();
+  if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
+    return { status: 400, message: 'Student has no active enrollment' };
+  }
+  // enrollmentCoversSubject checks both the legacy selectedSubjects ref AND the current
+  // packages[].programCode field.
+  if (!enrollmentCoversSubject(enrollment, subject)) {
+    return { status: 400, message: 'Student is not enrolled in this subject' };
+  }
+
+  const window = resolveMonthlyWindow(enrollment, startDate);
+  if (window.error) return { status: 400, message: window.error };
+
+  const tutorIds = [...new Set(daySlots.map(tutorForSlot))];
+  for (const id of tutorIds) {
+    const tutor = await User.findOne({ _id: id, role: 'tutor', isActive: true, deletedAt: null });
+    if (!tutor) return { status: 400, message: 'Tutor cannot teach this subject or not found' };
+  }
+
+  const tutoringAreaId = await getDefaultTutoringAreaId('one-on-one');
+  if (!tutoringAreaId) {
+    return { status: 400, message: 'Tutoring Area is not configured yet. Please add an active tutoring area before scheduling.' };
+  }
+
+  // A preview must not create the student account, so only an already-existing one (if
+  // any) is available to check for conflicts against.
+  const existingStudentId = await resolveExistingStudentId(enrollment);
+
+  return { subject, policy, enrollment, daySlots, tutorForSlot, tutoringAreaId, existingStudentId, ...window };
+}
+
+const datesForWeekday = (from, to, dayOfWeek) => {
+  const out = [];
+  const d = new Date(from);
+  while (d <= to) {
+    if (d.getUTCDay() === dayOfWeek) out.push(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+};
+
+// @desc    Create monthly schedules (1hr sessions) – 1 month from the starting date; per-day times
+//          (and optionally per-day tutors) via daySlots
 // @route   POST /api/schedules/monthly
 // @access  Private (Admin)
-// Body: studentId, tutorId, subjectId, daySlots: [{ dayOfWeek, startTime, endTime }, ...]
+// Body: enrollmentId|studentId, tutorId, subjectId, startDate?, daySlots: [{ dayOfWeek, startTime, endTime, tutorId? }, ...]
 const createMonthlySchedules = async (req, res) => {
   try {
-    const { studentId: studentIdRaw, enrollmentId, tutorId, subjectId, daySlots: daySlotsRaw } = req.body;
-    if ((!studentIdRaw && !enrollmentId) || !tutorId || !subjectId) {
-      return res.status(400).json({
-        success: false,
-        message: 'studentId (or enrollmentId), tutorId, and subjectId are required'
-      });
-    }
-
-    const daySlots = normalizeDaySlots(daySlotsRaw);
-
-    const subject = await Subject.findById(subjectId).select('name code').lean();
-    if (!subject) return res.status(404).json({ success: false, message: 'Subject or program not found' });
-    const policy = getProgramPolicy(subject);
-    if (policy?.sessionType !== 'one-on-one') {
-      return res.status(400).json({ success: false, message: 'Monthly recurring schedules currently support one-on-one programs only.' });
-    }
-
-    if (daySlots.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Select at least one day with a time (daySlots: [{ dayOfWeek, startTime, endTime }, ...])'
-      });
-    }
-
-    // Duration/operating-hours/lunch validation happens once per generated date via
-    // validateTimeWindow() below (policy.durationMinutes-driven) — this used to also be
-    // checked here with a hardcoded, stale "must be exactly 2 hours" message; removed as
-    // a redundant duplicate now that duration is 1 hour for one-on-one sessions.
-
-    const enrollment = await Enrollment.findOne(enrollmentId ? { _id: enrollmentId } : { student: studentIdRaw })
-      .sort({ createdAt: -1 })
-      .populate('selectedSubjects')
-      .lean();
-    if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
-      return res.status(400).json({ success: false, message: 'Student has no active enrollment' });
-    }
-    // enrollmentCoversSubject checks both the legacy selectedSubjects ref AND the
-    // current packages[].programCode field — selectedSubjects is never populated by the
-    // current enrollment wizard, so the old selectedSubjects-only check here was dead
-    // code for every enrollment created through the live system.
-    if (!enrollmentCoversSubject(enrollment, subject)) {
-      return res.status(400).json({ success: false, message: 'Student is not enrolled in this subject' });
-    }
+    const ctx = await loadMonthlyContext(req.body);
+    if (ctx.status) return res.status(ctx.status).json({ success: false, message: ctx.message });
+    const { subject, policy, enrollment, daySlots, tutorForSlot, tutoringAreaId, generationStart, subscriptionEnd } = ctx;
+    const subjectId = String(subject._id);
 
     // Resolve (or lazily create) the student User account behind this enrollment — a
-    // freshly approved enrollment has no linked User until first scheduled. Same
-    // lazy-creation ensureStudentUserForEnrollment already used by enrollStudentInSession.
+    // freshly approved enrollment has no linked User until first scheduled.
     const studentUser = await ensureStudentUserForEnrollment(enrollment);
     const studentId = String(studentUser._id);
 
-    // The parent's chosen Preferred Start Date is the real anchor for generated
-    // sessions (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #2) — the previous
-    // fallback chain here never actually included it, so generated schedules always
-    // landed in whatever week enrollment.startDate/paymentVerifiedAt/enrollmentDate
-    // happened to fall in (submission/approval time), ignoring what the parent picked.
-    const officialEnrollmentDate = enrollment.preferredStartDate || enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
-    const subscriptionStart = new Date(officialEnrollmentDate);
-    subscriptionStart.setUTCHours(0, 0, 0, 0);
-    const subscriptionEnd = new Date(subscriptionStart);
-    subscriptionEnd.setUTCMonth(subscriptionEnd.getUTCMonth() + 1);
-    subscriptionEnd.setUTCDate(subscriptionEnd.getUTCDate() - 1);
-    subscriptionEnd.setUTCHours(23, 59, 59, 999);
-
-    const generationStart = new Date(Math.max(subscriptionStart.getTime(), utcTodayStart().getTime()));
-    if (generationStart > subscriptionEnd) {
-      return res.status(400).json({
-        success: false,
-        message: 'No schedulable dates remain in this enrollment window. Please renew or choose a new enrollment period.'
-      });
-    }
-
-    const tutor = await User.findOne({
-      _id: tutorId,
-      role: 'tutor',
-      isActive: true,
-      deletedAt: null
-    });
-    if (!tutor) {
-      return res.status(400).json({ success: false, message: 'Tutor cannot teach this subject or not found' });
-    }
-
-    const tutoringAreaId = await getDefaultTutoringAreaId('one-on-one');
-    if (!tutoringAreaId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tutoring Area is not configured yet. Please add an active tutoring area before scheduling.'
-      });
-    }
-
     const toInsert = [];
-    for (const { dayOfWeek, startTime, endTime } of daySlots) {
-      const datesThisDay = [];
-      const d = new Date(generationStart);
-      while (d <= subscriptionEnd) {
-        if (d.getUTCDay() === dayOfWeek) {
-          datesThisDay.push(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())));
-        }
-        d.setUTCDate(d.getUTCDate() + 1);
-      }
-      for (const date of datesThisDay) {
-        const timeError = validateTimeWindow({ date, startTime, endTime, policy });
-        if (timeError) return res.status(400).json({ success: false, message: timeError });
-        const tutorCheck = await canTutorHandleSchedule({
-          tutorId,
-          subjectId,
-          date,
-          startTime,
-          endTime
-        });
-        if (!tutorCheck.ok) {
-          return res.status(400).json({
-            success: false,
-            message: tutorCheck.reason
-          });
-        }
-        const roomConflict = await isRoomDoubleBooked(tutoringAreaId, date, startTime);
-        if (roomConflict) {
-          return res.status(400).json({
-            success: false,
-            message: 'A time slot is already booked. Please choose another time.'
-          });
+    for (const slot of daySlots) {
+      const { dayOfWeek, startTime, endTime } = slot;
+      const slotTutorId = tutorForSlot(slot);
+      for (const date of datesForWeekday(generationStart, subscriptionEnd, dayOfWeek)) {
+        const check = await checkMonthlySlot({ tutorId: slotTutorId, studentId, subjectId, date, startTime, endTime, policy, tutoringAreaId });
+        if (!check.ok) {
+          return res.status(400).json({ success: false, message: check.reason, conflictDate: dateKeyOf(date) });
         }
         toInsert.push({
           student: studentId,
           students: [],
-          tutor: tutorId,
-          tutors: [tutorId],
+          tutor: slotTutorId,
+          tutors: [slotTutorId],
           subject: subjectId,
           date,
           startTime: normalizeTime(startTime),
@@ -1957,7 +2077,7 @@ const createMonthlySchedules = async (req, res) => {
       module: 'Academic',
       description: `Admin created ${created.length} session slots`,
       status: 'SUCCESS',
-      metadata: { count: created.length, studentId, tutorId }
+      metadata: { count: created.length, studentId, tutorIds: [...new Set(daySlots.map(tutorForSlot))] }
     }).catch(() => {});
 
     const populated = await Schedule.find({ _id: { $in: created.map(c => c._id) } })
@@ -1984,6 +2104,74 @@ const createMonthlySchedules = async (req, res) => {
       success: false,
       message: error.message || 'Failed to create monthly schedules'
     });
+  }
+};
+
+// @desc    Preview a monthly schedule for a Starting Date WITHOUT creating anything: which dates (if
+//          any) are blocked, and — when some are — the next starting dates that ARE fully available,
+//          so the admin can pick a different date instead of being silently blocked.
+// @route   POST /api/schedules/monthly/check
+// @access  Private (Admin)
+// Body: same as POST /monthly (startDate, daySlots with optional per-day tutorId, ...)
+const checkMonthlySchedule = async (req, res) => {
+  try {
+    const ctx = await loadMonthlyContext(req.body);
+    if (ctx.status) return res.status(ctx.status).json({ success: false, message: ctx.message });
+    const { subject, policy, daySlots, tutorForSlot, tutoringAreaId, existingStudentId, generationStart, subscriptionEnd } = ctx;
+    const subjectId = String(subject._id);
+
+    const memo = new Map();
+    const slotOk = async (slot, date) => {
+      const key = `${slot.dayOfWeek}|${slot.startTime}|${tutorForSlot(slot)}|${dateKeyOf(date)}`;
+      if (!memo.has(key)) {
+        memo.set(key, await checkMonthlySlot({ tutorId: tutorForSlot(slot), studentId: existingStudentId, subjectId, date, startTime: slot.startTime, endTime: slot.endTime, policy, tutoringAreaId }));
+      }
+      return memo.get(key);
+    };
+
+    const conflicts = [];
+    for (const slot of daySlots) {
+      for (const date of datesForWeekday(generationStart, subscriptionEnd, slot.dayOfWeek)) {
+        const check = await slotOk(slot, date);
+        if (!check.ok) conflicts.push({ date: dateKeyOf(date), dayOfWeek: slot.dayOfWeek, startTime: slot.startTime, tutorId: tutorForSlot(slot), reason: check.reason });
+      }
+    }
+    conflicts.sort((a, b) => a.date.localeCompare(b.date));
+
+    const suggestions = [];
+    if (conflicts.length > 0) {
+      const weekdays = new Set(daySlots.map((s) => s.dayOfWeek));
+      const MAX_LOOKAHEAD_DAYS = 42;
+      for (let offset = 1; offset <= MAX_LOOKAHEAD_DAYS && suggestions.length < 4; offset++) {
+        const candidate = new Date(generationStart);
+        candidate.setUTCDate(candidate.getUTCDate() + offset);
+        if (!weekdays.has(candidate.getUTCDay())) continue;
+        const end = new Date(candidate);
+        end.setUTCMonth(end.getUTCMonth() + 1);
+        end.setUTCDate(end.getUTCDate() - 1);
+        end.setUTCHours(23, 59, 59, 999);
+        let allOk = true;
+        for (const slot of daySlots) {
+          for (const date of datesForWeekday(candidate, end, slot.dayOfWeek)) {
+            if (!(await slotOk(slot, date)).ok) { allOk = false; break; }
+          }
+          if (!allOk) break;
+        }
+        if (allOk) suggestions.push(dateKeyOf(candidate));
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      ok: conflicts.length === 0,
+      startDate: dateKeyOf(generationStart),
+      conflicts: conflicts.slice(0, 40),
+      conflictCount: conflicts.length,
+      suggestions,
+      slotCap: ONE_ON_ONE_SLOT_CAP
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to check the schedule' });
   }
 };
 
@@ -2068,10 +2256,17 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       name,
       studentId: studentIdRaw,
       enrollmentId,
+      enrollmentIds: enrollmentIdsRaw,
+      startDate: startDateRaw,
       subjectId,
     } = req.body;
 
-    if ((!studentIdRaw && !enrollmentId) || !subjectId) {
+    // One child (enrollmentId / studentId) or several at once (enrollmentIds) — every child is
+    // validated against every date up front, so a batch is all-or-nothing.
+    const enrollmentIdList = [...new Set(
+      (Array.isArray(enrollmentIdsRaw) ? enrollmentIdsRaw : []).concat(enrollmentId ? [enrollmentId] : []).map(String).filter(Boolean)
+    )];
+    if ((enrollmentIdList.length === 0 && !studentIdRaw) || !subjectId) {
       return res.status(400).json({ success: false, message: 'enrollmentId (or studentId) and subjectId are required' });
     }
     if (!groupId && (!Array.isArray(tutorIdsRaw) || tutorIdsRaw.length < 1)) {
@@ -2085,19 +2280,29 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       return res.status(400).json({ success: false, message: 'This endpoint only supports Toddlers Playgroup.' });
     }
 
-    const enrollment = await Enrollment.findOne(enrollmentId ? { _id: enrollmentId } : { student: studentIdRaw })
-      .sort({ createdAt: -1 })
-      .populate('selectedSubjects')
-      .lean();
-    if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
-      return res.status(400).json({ success: false, message: 'Student has no active enrollment' });
+    const enrollmentQueries = enrollmentIdList.length > 0
+      ? enrollmentIdList.map((id) => ({ _id: id }))
+      : [{ student: studentIdRaw }];
+    const enrollments = [];
+    for (const query of enrollmentQueries) {
+      const found = await Enrollment.findOne(query).sort({ createdAt: -1 }).populate('selectedSubjects').lean();
+      if (!found || !isSchedulableEnrollmentStatus(found)) {
+        return res.status(400).json({ success: false, message: 'Student has no active enrollment' });
+      }
+      if (!enrollmentCoversSubject(found, subject)) {
+        return res.status(400).json({ success: false, message: 'Student is not enrolled in this subject' });
+      }
+      enrollments.push(found);
     }
-    if (!enrollmentCoversSubject(enrollment, subject)) {
-      return res.status(400).json({ success: false, message: 'Student is not enrolled in this subject' });
-    }
+    const enrollment = enrollments[0];
 
-    const studentUser = await ensureStudentUserForEnrollment(enrollment);
-    const studentId = String(studentUser._id);
+    const studentIds = [];
+    for (const item of enrollments) {
+      const studentUser = await ensureStudentUserForEnrollment(item);
+      const id = String(studentUser._id);
+      if (!studentIds.includes(id)) studentIds.push(id);
+    }
+    const studentId = studentIds[0];
 
     // For a new group, defer actually persisting the PlaygroupGroup document until
     // every target date has passed pre-validation below — an in-memory "pending"
@@ -2146,21 +2351,11 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
     // fallback chain here never actually included it, so generated schedules always
     // landed in whatever week enrollment.startDate/paymentVerifiedAt/enrollmentDate
     // happened to fall in (submission/approval time), ignoring what the parent picked.
-    const officialEnrollmentDate = enrollment.preferredStartDate || enrollment.startDate || enrollment.paymentVerifiedAt || enrollment.enrollmentDate || enrollment.updatedAt || enrollment.createdAt;
-    const subscriptionStart = new Date(officialEnrollmentDate);
-    subscriptionStart.setUTCHours(0, 0, 0, 0);
-    const subscriptionEnd = new Date(subscriptionStart);
-    subscriptionEnd.setUTCMonth(subscriptionEnd.getUTCMonth() + 1);
-    subscriptionEnd.setUTCDate(subscriptionEnd.getUTCDate() - 1);
-    subscriptionEnd.setUTCHours(23, 59, 59, 999);
-
-    const generationStart = new Date(Math.max(subscriptionStart.getTime(), utcTodayStart().getTime()));
-    if (generationStart > subscriptionEnd) {
-      return res.status(400).json({
-        success: false,
-        message: 'No schedulable dates remain in this enrollment window. Please renew or choose a new enrollment period.'
-      });
-    }
+    // An admin-chosen Starting Date overrides it (never in the past) so several new enrollees with
+    // the same preferred day/time can be staggered onto different start dates.
+    const window = resolveMonthlyWindow(enrollment, startDateRaw);
+    if (window.error) return res.status(400).json({ success: false, message: window.error });
+    const { generationStart, subscriptionEnd } = window;
 
     const tutoringAreaId = await getDefaultTutoringAreaId('playgroup');
     if (!tutoringAreaId) {
@@ -2170,10 +2365,16 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       });
     }
 
+    // Only the days the admin chose are touched — joining a group never adds a child to another
+    // day of the group's pattern that wasn't selected (no cascading into "matching" sessions).
+    const requestedDays = (Array.isArray(daysOfWeekRaw) ? daysOfWeekRaw : []).map(Number).filter((day) => day >= 0 && day <= 6);
+    const joinDays = groupId && requestedDays.length > 0
+      ? group.daysOfWeek.filter((day) => requestedDays.includes(day))
+      : group.daysOfWeek;
     const targetDates = [];
     const cursor = new Date(generationStart);
     while (cursor <= subscriptionEnd) {
-      if (group.daysOfWeek.includes(cursor.getUTCDay())) {
+      if (joinDays.includes(cursor.getUTCDay())) {
         targetDates.push(new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate())));
       }
       cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -2189,11 +2390,31 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       if (timeError) return res.status(400).json({ success: false, message: timeError });
 
       const existing = await Schedule.findOne({ group: group._id, date }).select('students');
-      const alreadyEnrolled = existing ? existing.students.some((id) => String(id) === studentId) : false;
+      const newStudentIds = studentIds.filter((id) => !(existing ? existing.students.some((sid) => String(sid) === id) : false));
+      const alreadyEnrolled = newStudentIds.length === 0;
+
+      // Only newly-joining children need checking — a child already on this exact
+      // session obviously doesn't conflict with itself. Catches a child double-booked
+      // against an existing 1-on-1 session or a different playgroup group at this time.
+      for (const sid of newStudentIds) {
+        const studentConflict = await hasStudentScheduleConflict({
+          studentId: sid,
+          date,
+          startTime: group.startTime,
+          endTime: group.endTime,
+          excludeScheduleId: existing ? existing._id : null,
+        });
+        if (studentConflict) {
+          return res.status(400).json({
+            success: false,
+            message: `A selected child already has a conflicting session at this time on ${date.toISOString().slice(0, 10)}.`
+          });
+        }
+      }
 
       if (!alreadyEnrolled) {
         const currentChildCount = existing ? getCurrentEnrollment(existing.students) : 0;
-        const newChildCount = currentChildCount + 1;
+        const newChildCount = currentChildCount + newStudentIds.length;
         if (newChildCount > PLAYGROUP_MAX_CHILDREN) {
           return res.status(400).json({
             success: false,
@@ -2223,45 +2444,76 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
         }
       }
 
-      plan.push({ date, existing, alreadyEnrolled });
+      plan.push({ date, existing, alreadyEnrolled, newStudentIds });
     }
 
     const hasAnyChange = plan.some((entry) => !entry.existing || !entry.alreadyEnrolled);
     if (!hasAnyChange) {
-      return res.status(400).json({ success: false, message: 'This student is already enrolled in this group for the entire period.' });
+      return res.status(400).json({ success: false, message: studentIds.length > 1 ? 'These children are already enrolled in this group for the entire period.' : 'This student is already enrolled in this group for the entire period.' });
     }
 
-    // All dates passed validation — only now persist a brand-new group.
-    if (pendingNewGroup) {
-      await PlaygroupGroup.create(pendingNewGroup);
-    }
-
+    // All dates passed validation — only now persist a brand-new group and write the
+    // sessions. Wrapped in a transaction (real rollback on a replica set; on this
+    // standalone dev DB it falls back to running un-transacted) PLUS manual
+    // compensating cleanup in the catch below, since the fallback path gives no
+    // rollback of its own — a failure partway through a 12-date batch must not leave
+    // some dates committed and others not.
     let createdCount = 0;
     let updatedCount = 0;
-    for (const { date, existing, alreadyEnrolled } of plan) {
-      if (existing) {
-        if (!alreadyEnrolled) {
-          await Schedule.updateOne({ _id: existing._id }, { $addToSet: { students: studentId } });
-          updatedCount += 1;
+    const createdIds = [];
+    const updatedEntries = []; // { id, addedStudentIds } — to $pull back out on failure
+    let newGroupPersisted = false;
+    try {
+      await runTransactionSafe(async (session) => {
+        const opts = session ? { session } : undefined;
+        createdCount = 0;
+        updatedCount = 0;
+        createdIds.length = 0;
+        updatedEntries.length = 0;
+        newGroupPersisted = false;
+
+        if (pendingNewGroup) {
+          await PlaygroupGroup.create([pendingNewGroup], opts);
+          newGroupPersisted = true;
         }
-      } else {
-        await Schedule.create({
-          group: group._id,
-          sessionType: 'playgroup',
-          student: null,
-          students: [studentId],
-          tutor: group.tutors[0],
-          tutors: group.tutors,
-          maxCapacity: PLAYGROUP_MAX_CHILDREN,
-          subject: subjectId,
-          date,
-          startTime: group.startTime,
-          endTime: group.endTime,
-          tutoringAreaId,
-          isEnrollableByStudents: false,
-        });
-        createdCount += 1;
-      }
+
+        for (const { date, existing, alreadyEnrolled, newStudentIds } of plan) {
+          if (existing) {
+            if (!alreadyEnrolled) {
+              await Schedule.updateOne({ _id: existing._id }, { $addToSet: { students: { $each: newStudentIds } } }, opts);
+              updatedEntries.push({ id: existing._id, addedStudentIds: newStudentIds });
+              updatedCount += 1;
+            }
+          } else {
+            const [createdDoc] = await Schedule.create([{
+              group: group._id,
+              sessionType: 'playgroup',
+              student: null,
+              students: newStudentIds,
+              tutor: group.tutors[0],
+              tutors: group.tutors,
+              maxCapacity: PLAYGROUP_MAX_CHILDREN,
+              subject: subjectId,
+              date,
+              startTime: group.startTime,
+              endTime: group.endTime,
+              tutoringAreaId,
+              isEnrollableByStudents: false,
+            }], opts);
+            createdIds.push(createdDoc._id);
+            createdCount += 1;
+          }
+        }
+      });
+    } catch (writeError) {
+      // No real DB rollback on this standalone dev DB — undo whatever this batch
+      // already wrote before the failure, so it's all-or-nothing either way.
+      await Promise.all([
+        createdIds.length ? Schedule.deleteMany({ _id: { $in: createdIds } }) : Promise.resolve(),
+        ...updatedEntries.map(({ id, addedStudentIds }) => Schedule.updateOne({ _id: id }, { $pull: { students: { $in: addedStudentIds } } })),
+        newGroupPersisted && pendingNewGroup ? PlaygroupGroup.deleteOne({ _id: pendingNewGroup._id }) : Promise.resolve(),
+      ]).catch(() => {});
+      throw writeError;
     }
 
     logAudit({
@@ -2271,7 +2523,7 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       module: 'Academic',
       description: `Admin ${groupId ? 'joined' : 'created'} a Toddlers Playgroup group (${createdCount} new, ${updatedCount} joined sessions)`,
       status: 'SUCCESS',
-      metadata: { groupId: String(group._id), studentId, createdCount, updatedCount }
+      metadata: { groupId: String(group._id), studentId, studentIds, createdCount, updatedCount }
     }).catch(() => {});
 
     const totalSessions = createdCount + updatedCount;
@@ -2293,6 +2545,49 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
   }
 };
 
+// Records that only exist because of a session — removed together with it so nothing is left
+// pointing at a session that no longer exists.
+async function removeScheduleLinks(scheduleIds) {
+  if (!scheduleIds.length) return;
+  await Promise.all([
+    EmergencyReschedule.deleteMany({ schedule: { $in: scheduleIds } }),
+    ScheduleSubstitutionLog.deleteMany({ schedule: { $in: scheduleIds } }),
+    TutorAbsenceAnnouncement.deleteMany({ schedule: { $in: scheduleIds } }),
+  ]);
+}
+
+// @desc    Delete many schedules in ONE server-side operation (admin). The old bulk delete looped
+//          over single deletes from the browser, so any request that failed halfway left "ghost"
+//          sessions behind that still blocked new scheduling.
+// @route   POST /api/schedules/bulk-delete    body: { ids: [scheduleId, ...] }
+// @access  Private (Admin)
+const bulkDeleteSchedules = async (req, res) => {
+  try {
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String))]
+      .filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'Select at least one session to delete.' });
+    }
+    if (ids.length > 5000) {
+      return res.status(400).json({ success: false, message: 'Too many sessions selected at once (limit 5000).' });
+    }
+    const result = await Schedule.deleteMany({ _id: { $in: ids } });
+    await removeScheduleLinks(ids);
+    logAudit({
+      req,
+      userId: req.user.id,
+      action: 'Bulk Delete Schedules',
+      module: 'Academic',
+      description: `Admin deleted ${result.deletedCount} session(s)`,
+      status: 'SUCCESS',
+      metadata: { requested: ids.length, deleted: result.deletedCount }
+    }).catch(() => {});
+    res.status(200).json({ success: true, deleted: result.deletedCount, message: `${result.deletedCount} session(s) deleted.` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to delete sessions' });
+  }
+};
+
 // @desc    Delete a schedule (admin)
 // @route   DELETE /api/schedules/:id
 // @access  Private (Admin)
@@ -2306,6 +2601,7 @@ const deleteSchedule = async (req, res) => {
       });
     }
     await Schedule.findByIdAndDelete(req.params.id);
+    await removeScheduleLinks([schedule._id]);
     res.status(200).json({
       success: true,
       message: 'Schedule deleted'
@@ -2993,12 +3289,18 @@ async function notifyScheduleReschedule({ schedule, fromDate, toDate, reason }) 
     ...(Array.isArray(schedule.tutors) ? schedule.tutors : []),
   ].filter((t, index, arr) => t?.email && arr.findIndex((other) => String(other._id) === String(t._id)) === index);
 
+  const detailRows = [['Subject', schedule?.subject?.name || 'Class'], ['Original date', fromLabel], ['New date', toLabel], ['Time', `${schedule.startTime} - ${schedule.endTime}`], ['Reason', reason || 'Schedule adjustment']];
+
   const emails = [];
   students.forEach((person) => {
     emails.push(sendEmail({
       to: person.email,
       subject: 'Bee Bright schedule update: session rescheduled',
       text: `Hello ${buildFullName(person)},\n\nYour session has been rescheduled.\n\n${baseText}\n\nThank you.`,
+      html: buildBrandedEmailHtml({
+        title: 'Session Rescheduled',
+        bodyHtml: `<p>Hello ${buildFullName(person)},</p><p>Your session has been rescheduled.</p>${buildEmailDetailRowsHtml(detailRows)}<p>Thank you.</p>`,
+      }),
     }, 'schedule reschedule notification (student)').catch((error) => logEmailError('schedule reschedule notification (student)', error, { to: person.email })));
   });
   tutors.forEach((tutor) => {
@@ -3006,6 +3308,10 @@ async function notifyScheduleReschedule({ schedule, fromDate, toDate, reason }) 
       to: tutor.email,
       subject: 'Bee Bright schedule update: session rescheduled',
       text: `Hello ${buildFullName(tutor)},\n\nA session on your calendar has been rescheduled.\n\n${baseText}\n\nThank you.`,
+      html: buildBrandedEmailHtml({
+        title: 'Session Rescheduled',
+        bodyHtml: `<p>Hello ${buildFullName(tutor)},</p><p>A session on your calendar has been rescheduled.</p>${buildEmailDetailRowsHtml(detailRows)}<p>Thank you.</p>`,
+      }),
     }, 'schedule reschedule notification (tutor)').catch((error) => logEmailError('schedule reschedule notification (tutor)', error, { to: tutor.email })));
   });
 
@@ -3029,7 +3335,16 @@ async function notifyUnresolvedSuspension({ schedule, reason }) {
     await Promise.allSettled(admins.map((admin) => sendEmail({
       to: admin.email,
       subject: 'Bee Bright alert: session needs manual rescheduling',
-      text: `Hello ${buildFullName(admin)},\n\nA session could not be automatically rescheduled after a suspension.\n\n${baseText}\n\nPlease use Emergency Adjustment to reschedule it manually.`
+      text: `Hello ${buildFullName(admin)},\n\nA session could not be automatically rescheduled after a suspension.\n\n${baseText}\n\nPlease use Emergency Adjustment to reschedule it manually.`,
+      html: buildBrandedEmailHtml({
+        title: 'Session Needs Manual Rescheduling',
+        bodyHtml: `
+          <p>Hello ${buildFullName(admin)},</p>
+          <p>A session could not be automatically rescheduled after a suspension.</p>
+          ${buildEmailDetailRowsHtml([['Subject', schedule?.subject?.name || 'Class'], ['Original date', dateLabel], ['Time', `${schedule?.startTime} - ${schedule?.endTime}`], ['Reason', reason || 'Suspension'], ['Status', 'No available reschedule date found within the search window']])}
+          <p>Please use Emergency Adjustment to reschedule it manually.</p>
+        `,
+      }),
     }, 'suspension unresolved alert (admin)')));
   } catch (error) {
     logEmailError('suspension unresolved alert failed', error, { scheduleId: schedule?._id });
@@ -3572,6 +3887,8 @@ module.exports = {
   getAvailableSlotsByDay,
   createSchedule,
   createMonthlySchedules,
+  checkMonthlySchedule,
+  bulkDeleteSchedules,
   listPlaygroupGroups,
   createOrJoinPlaygroupGroup,
   enrollStudentInSession,

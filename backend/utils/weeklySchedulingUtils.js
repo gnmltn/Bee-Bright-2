@@ -6,7 +6,9 @@
 
 const Schedule = require('../models/Schedule');
 const TutoringArea = require('../models/TutoringArea');
+const User = require('../models/User');
 const { getMaxCapacity, getCurrentEnrollment, isAtCapacity } = require('./sessionTypeManager');
+const { ONE_ON_ONE_SLOT_CAP } = require('./schedulingPolicy');
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_INDEXES = { 0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday', 4: 'Friday', 5: 'Saturday' };
@@ -55,7 +57,9 @@ async function isTutorDoubleBooked(tutorId, date, startTime, excludeScheduleId =
     query._id = { $ne: excludeScheduleId };
   }
 
-  return Schedule.exists(query);
+  // A leftover ("ghost") session whose tutor/child account no longer exists can never
+  // actually run, so it must not falsely block a real new booking of the same slot.
+  return (await countLiveSessions(query)) > 0;
 }
 
 /**
@@ -72,10 +76,11 @@ async function isRoomDoubleBooked(tutoringAreaId, date, startTime, excludeSchedu
     return true;
   }
 
-  // Tutor-slot capacity per room type.
+  // Tutor-slot capacity per room type. The tutoring area is capped system-wide per hour
+  // (ONE_ON_ONE_SLOT_CAP concurrent 1-on-1 sessions), whatever the area's reference capacity says.
   const slotCapacity = area.areaType === 'toddler_room'
     ? 1
-    : Math.max(1, Number(area.capacity) || 15);
+    : ONE_ON_ONE_SLOT_CAP;
 
   const query = {
     tutoringAreaId,
@@ -87,8 +92,45 @@ async function isRoomDoubleBooked(tutoringAreaId, date, startTime, excludeSchedu
     query._id = { $ne: excludeScheduleId };
   }
 
-  const existingCount = await Schedule.countDocuments(query);
+  // The tutoring area ignores "ghost" sessions (tutor/child account gone); the one-slot toddler
+  // room keeps its plain count.
+  const existingCount = area.areaType === 'toddler_room'
+    ? await Schedule.countDocuments(query)
+    : await countLiveSessions(query);
   return existingCount >= slotCapacity;
+}
+
+/**
+ * Sessions that still belong to a real tutor (and student). A session whose tutor or child account
+ * has since been removed can never actually run, so it must not eat into an hour's capacity
+ * or make a slot look unavailable (a "ghost" session).
+ */
+async function filterLiveSessions(rows) {
+  if (!rows || rows.length === 0) return [];
+  const ids = new Set();
+  for (const r of rows) {
+    if (r.tutor) ids.add(String(r.tutor));
+    if (r.student) ids.add(String(r.student));
+  }
+  const live = new Set(
+    (await User.find({ _id: { $in: [...ids] }, deletedAt: null }).select('_id').lean()).map((u) => String(u._id))
+  );
+  return rows.filter((r) => live.has(String(r.tutor)) && (!r.student || live.has(String(r.student))));
+}
+
+async function countLiveSessions(query) {
+  const rows = await Schedule.find(query).select('tutor student').lean();
+  return (await filterLiveSessions(rows)).length;
+}
+
+/**
+ * True when this hour already has ONE_ON_ONE_SLOT_CAP concurrent 1-on-1 sessions across
+ * Academic Tutorial + Examination Preparation combined.
+ */
+async function isOneOnOneHourFull(date, startTime, excludeScheduleId = null) {
+  const query = { sessionType: 'one-on-one', date, startTime: normalizeTime(startTime) };
+  if (excludeScheduleId) query._id = { $ne: excludeScheduleId };
+  return (await countLiveSessions(query)) >= ONE_ON_ONE_SLOT_CAP;
 }
 
 /**
@@ -287,6 +329,9 @@ module.exports = {
   validateRoomAssignment,
   isTutorDoubleBooked,
   isRoomDoubleBooked,
+  isOneOnOneHourFull,
+  countLiveSessions,
+  filterLiveSessions,
   hasStudentTimeConflict,
   isStudentEnrolledInSession,
   getAvailableSlots,

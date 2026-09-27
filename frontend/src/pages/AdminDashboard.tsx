@@ -47,7 +47,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage, type PendingBalanceItem } from "@/services/api";
+import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type ParentChild, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage, type PendingBalanceItem } from "@/services/api";
 import { adminEmailVerificationService } from "@/services/adminEmailVerification";
 import {
   AlertDialog,
@@ -86,8 +86,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { sanitizeName, sanitizePhoneInput } from "@/utils/validation";
+import {
+  sanitizeName,
+  sanitizePhoneInput,
+  getNameError,
+  getPhMobileError,
+  getPasswordError,
+  getConfirmPasswordError,
+} from "@/utils/validation";
 import { PROGRAM_LABELS } from "@/constants/programs";
+import UserProfileDialog, { ChildrenInfo, childrenForUser } from "@/components/admin/UserProfileDialog";
 import AdminAddStudentWizard from "@/components/admin/AdminAddStudentWizard";
 
 const AVAILABILITY_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -289,6 +297,79 @@ const initialEmailVerificationState: EmailVerificationState = {
   verifying: false,
 };
 
+/** Send-code / enter-code / verified block shared by Add Tutor and Add Admin — the
+ * "Create" button stays disabled until this reports verified (via isTutorEmailVerified /
+ * isAdminEmailVerified, computed from the same state this renders). */
+function EmailVerificationBlock({
+  email,
+  verification,
+  isVerified,
+  onCodeChange,
+  onSendCode,
+  onVerifyCode,
+  roleLabel,
+}: {
+  email: string;
+  verification: EmailVerificationState;
+  isVerified: boolean;
+  onCodeChange: (value: string) => void;
+  onSendCode: () => void;
+  onVerifyCode: () => void;
+  roleLabel: string;
+}) {
+  const trimmedEmail = email.trim();
+  const emailLooksValid = !!trimmedEmail && !getEmailCharacterError(email);
+
+  if (isVerified) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-300">
+        <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> Email verified — ready to create this {roleLabel}.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs text-muted-foreground">
+          {verification.status === "code_sent"
+            ? `A verification code was sent to ${verification.email || trimmedEmail}. Enter it below before you can create the account.`
+            : "Send a one-time verification code to this email before the Create button is enabled."}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onSendCode}
+          disabled={!emailLooksValid || verification.sending}
+        >
+          {verification.sending ? "Sending..." : verification.status === "code_sent" ? "Resend code" : "Send code"}
+        </Button>
+      </div>
+      {verification.status === "code_sent" && (
+        <div className="flex items-center gap-2">
+          <Input
+            value={verification.code}
+            onChange={(e) => onCodeChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="6-digit code"
+            inputMode="numeric"
+            className="w-36"
+            aria-label={`${roleLabel} email verification code`}
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={onVerifyCode}
+            disabled={verification.verifying || verification.code.trim().length !== 6}
+          >
+            {verification.verifying ? "Verifying..." : "Verify"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const SCHEDULING_DAYS = [
   { key: 1, name: "Monday", templateDay: 0 },
   { key: 2, name: "Tuesday", templateDay: 1 },
@@ -322,6 +403,31 @@ const formatScheduleStudentNames = (schedule: AdminSchedule) => {
   if (students.length <= 3) return students.map((student) => personDisplayName(student)).filter(Boolean).join(", ");
   return `${students.length} children`;
 };
+
+// "polishing prompt (1).pdf", Group I — schedule entries color-coded by program. Exact
+// hex values as specified (not Tailwind's built-in cyan/yellow/orange shades), applied as
+// the entry's own background so it reads as a colored chip in the calendar (there was no
+// existing per-entry dot/indicator style to match instead — every entry was previously the
+// same flat bg-primary/10, regardless of program).
+/** Tailwind arbitrary-value background class for a schedule entry's program, or the
+ * previous neutral default when the program isn't one of the three colored ones. These
+ * three class strings must appear literally in the source (not built via string
+ * interpolation) for Tailwind's JIT scanner to generate the corresponding CSS at all.
+ * TPG101 uses the same light-mode-adjusted cyan (#7DE0E0) in BOTH modes now — a separate,
+ * paler dark-mode shade (the original spec's #E0FFFF) rendered as washed-out near-white
+ * against the dark background, per "bug (4).pdf" Group O. */
+function scheduleEntryBgClass(code?: string): string {
+  if (code === "TPG101") return "bg-[#7DE0E0]"; // Toddlers Playgroup — cyan (same shade, both modes)
+  if (code === "ACT102") return "bg-[#ffff00]"; // Academic Tutorial — yellow
+  if (code === "EXP106") return "bg-[#ffa500]"; // Examination Preparation — orange
+  return "bg-primary/10";
+}
+
+/** Text is black in BOTH light and dark mode against these light program colors — per
+ * "bug (4).pdf" Group O, superseding the original Group I spec's "white in dark mode" +
+ * outline-shadow approach entirely. No dark: variant needed since black-on-light-color
+ * reads the same regardless of theme. */
+const SCHEDULE_ENTRY_TEXT_CLASS = "text-black";
 
 const enrollmentIsReadyToSchedule = (enrollment: AdminEnrollment) => {
   const status = enrollment.status || "";
@@ -469,15 +575,21 @@ export default function AdminDashboard() {
   const [viewEnrollmentLoading, setViewEnrollmentLoading] = useState(false);
   const [paymentProofPreview, setPaymentProofPreview] = useState<{ src: string; reference: string } | null>(null);
   const [paymentProofZoomed, setPaymentProofZoomed] = useState(false);
+  // The <img> below had no onLoad/onError handling at all — a missing/moved proof file
+  // (a 404) rendered as a totally blank box with no error message, indistinguishable from
+  // a broken feature. Track load state explicitly so a failure is visible instead of silent.
+  const [paymentProofLoadState, setPaymentProofLoadState] = useState<'loading' | 'loaded' | 'error'>('loading');
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
   // Parents who still owe the remaining 50% (Payments tab: "Total Unpaid" + "Pending Payments").
   const [pendingBalances, setPendingBalances] = useState<PendingBalanceItem[]>([]);
+  // Clicking a Pending Payments row opens a summary of that parent's bill(s), itemized per child.
+  const [billParent, setBillParent] = useState<PendingBalanceItem | null>(null);
   const [totalUnpaid, setTotalUnpaid] = useState(0);
   // Parent/Guardian rows in the Users table expand to show that parent's children.
-  const [parentChildren, setParentChildren] = useState<Record<string, { name: string; studentId: string }[]>>({});
+  const [parentChildren, setParentChildren] = useState<Record<string, ParentChild[]>>({});
   const [expandedParentIds, setExpandedParentIds] = useState<string[]>([]);
   const toggleParentRow = (id: string) =>
     setExpandedParentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -506,6 +618,8 @@ export default function AdminDashboard() {
   const [scheduleEnrollmentSaving, setScheduleEnrollmentSaving] = useState(false);
   const [scheduleEnrollmentOverride, setScheduleEnrollmentOverride] = useState(false);
   const [scheduleEnrollmentOverrideReason, setScheduleEnrollmentOverrideReason] = useState("");
+  // "Add children to this playgroup": the date (a session date of this same playgroup) the children start on.
+  const [scheduleEnrollmentStartDate, setScheduleEnrollmentStartDate] = useState("");
   const [scheduleCompatibleSlots, setScheduleCompatibleSlots] = useState<Array<{ _id: string; date: string; startTime: string; endTime: string; tutorName?: string }>>([]);
   const [scheduleViewMode, setScheduleViewMode] = useState<"monthly" | "weekly" | "daily">(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem(SCHEDULE_VIEW_STORAGE_KEY) : null;
@@ -571,6 +685,8 @@ export default function AdminDashboard() {
 
   const [usersCategory, setUsersCategory] = useState<"active" | "archived">("active");
   const [archivedUserDetail, setArchivedUserDetail] = useState<AdminUser | null>(null);
+  // "View profile" popup in the Users tab.
+  const [profileUser, setProfileUser] = useState<AdminUser | null>(null);
   const [pendingUserAction, setPendingUserAction] = useState<PendingUserAction>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementsLoading, setAnnouncementsLoading] = useState(false);
@@ -663,6 +779,7 @@ export default function AdminDashboard() {
     lastName: "",
     email: "",
     password: "",
+    confirmPassword: "",
     phone: "",
   });
   const [addAdminEmailVerification, setAddAdminEmailVerification] =
@@ -683,6 +800,7 @@ export default function AdminDashboard() {
     lastName: "",
     email: "",
     password: "",
+    confirmPassword: "",
     phone: "",
     subjectsTaught: [] as string[],
     employmentType: "full-time" as "full-time" | "part-time",
@@ -1037,6 +1155,7 @@ export default function AdminDashboard() {
     setScheduleEnrollmentOverride(false);
     setScheduleEnrollmentOverrideReason("");
     setScheduleCompatibleSlots([]);
+    setScheduleEnrollmentStartDate("");
   }, [selectedSchedule?._id]);
 
   useEffect(() => {
@@ -1291,6 +1410,33 @@ export default function AdminDashboard() {
       ? [scheduleEnrollmentSelectedStudentIds[0]]
       : [...scheduleEnrollmentSelectedStudentIds];
 
+    // Starting date (playgroup): the children are added to THIS playgroup's session on that date -
+    // only that one session, never to the group's other days. If the chosen date is not one of
+    // this playgroup's sessions (or it is full), say which dates ARE open instead of silently failing.
+    const dateKeyOf = (value: string) => new Date(value).toISOString().slice(0, 10);
+    let targetSchedule: AdminSchedule = selectedSchedule;
+    if (!isOneOnOneSession && scheduleEnrollmentStartDate && scheduleEnrollmentStartDate !== dateKeyOf(selectedSchedule.date)) {
+      const sameGroup = (item: AdminSchedule) =>
+        item.sessionType === "playgroup" &&
+        (selectedSchedule.group
+          ? item.group === selectedSchedule.group
+          : item.subject?._id === selectedSchedule.subject?._id && item.startTime === selectedSchedule.startTime && item.endTime === selectedSchedule.endTime);
+      const groupSessions = schedules.filter(sameGroup);
+      const openDates = groupSessions
+        .filter((item) => dateKeyOf(item.date) >= dateKeyOf(new Date().toISOString()) && (item.students || []).length + idsToEnroll.length <= (item.maxCapacity || 12))
+        .map((item) => dateKeyOf(item.date))
+        .sort()
+        .slice(0, 4);
+      const match = groupSessions.find((item) => dateKeyOf(item.date) === scheduleEnrollmentStartDate);
+      if (!match || !openDates.includes(scheduleEnrollmentStartDate)) {
+        toast.error(
+          `${match ? "That session is full" : "This playgroup has no session on that date"}.${openDates.length ? ` Open dates: ${openDates.join(", ")}.` : ""}`
+        );
+        return;
+      }
+      targetSchedule = match;
+    }
+
     setScheduleEnrollmentSaving(true);
     setScheduleCompatibleSlots([]);
     try {
@@ -1301,7 +1447,7 @@ export default function AdminDashboard() {
 
       for (const enrollmentId of idsToEnroll) {
         try {
-          const res = await scheduleService.enrollStudent(selectedSchedule._id, {
+          const res = await scheduleService.enrollStudent(targetSchedule._id, {
             enrollmentId,
             overridePreference: scheduleEnrollmentOverride,
             overrideReason: scheduleEnrollmentOverrideReason.trim(),
@@ -1332,6 +1478,9 @@ export default function AdminDashboard() {
       }
 
       if (successCount > 0) {
+        // The enrollments now link to their student accounts; reload so a child who was just
+        // assigned no longer shows up as selectable in the "Choose children" dropdown.
+        fetchEnrollments();
         setScheduleEnrollmentSelectedStudentIds([]);
         setScheduleEnrollmentOverride(false);
         setScheduleEnrollmentOverrideReason("");
@@ -1511,6 +1660,7 @@ export default function AdminDashboard() {
       reference: reference || "Payment proof",
     });
     setPaymentProofZoomed(false);
+    setPaymentProofLoadState('loading');
   };
 
   const handlePaymentVerification = async (paymentId: string, verified: boolean, rejectionReason?: string) => {
@@ -2751,7 +2901,20 @@ export default function AdminDashboard() {
                             </tr>
                           ) : (
                             pendingBalances.map((row) => (
-                              <tr key={row.parentId || row.parentEmail} className="hover:bg-muted/50 transition-colors">
+                              <tr
+                                key={row.parentId || row.parentEmail}
+                                className="hover:bg-muted/50 transition-colors cursor-pointer"
+                                role="button"
+                                tabIndex={0}
+                                data-testid="pending-payment-row"
+                                onClick={() => setBillParent(row)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setBillParent(row);
+                                  }
+                                }}
+                              >
                                 <td className="p-4">
                                   <p className="font-medium text-foreground">{row.parentName}</p>
                                   {row.children.length > 0 && (
@@ -3133,16 +3296,16 @@ export default function AdminDashboard() {
                         onClick={async () => {
                           if (!confirm(`Delete ${selectedScheduleIds.length} selected session(s)?`)) return;
                           setScheduleBulkDeleting(true);
+                          // One server-side operation — a browser-side loop of single deletes could
+                          // fail partway and leave ghost sessions that still block new scheduling.
                           let done = 0;
                           let failed = 0;
-                          for (const id of selectedScheduleIds) {
-                            try {
-                              const res = await scheduleService.delete(id);
-                              if (res.data?.success) done++;
-                              else failed++;
-                            } catch {
-                              failed++;
-                            }
+                          try {
+                            const res = await scheduleService.bulkDelete(selectedScheduleIds);
+                            if (res.data?.success) done = res.data.deleted;
+                            else failed = selectedScheduleIds.length;
+                          } catch {
+                            failed = selectedScheduleIds.length;
                           }
                           setScheduleBulkDeleting(false);
                           setSelectedScheduleIds([]);
@@ -3239,7 +3402,7 @@ export default function AdminDashboard() {
                                       tabIndex={0}
                                       onClick={() => setSelectedSchedule(s)}
                                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedSchedule(s); }}
-                                      className={`w-full text-left p-2 rounded text-xs truncate transition-colors flex items-start gap-2 cursor-pointer ${isDetailsSelected ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary hover:bg-primary/20"} ${isChecked ? "ring-2 ring-offset-1 ring-primary" : ""}`}
+                                      className={`w-full text-left p-2 rounded text-xs truncate transition-colors flex items-start gap-2 cursor-pointer ${isDetailsSelected ? "bg-primary text-primary-foreground" : `${scheduleEntryBgClass(s.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS} hover:opacity-90`} ${isChecked ? "ring-2 ring-offset-1 ring-primary" : ""}`}
                                     >
                                       <Checkbox
                                         checked={isChecked}
@@ -3314,7 +3477,7 @@ export default function AdminDashboard() {
                                               tabIndex={0}
                                               onClick={() => setSelectedSchedule(session)}
                                               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedSchedule(session); }}
-                                              className={`w-full text-left p-2 rounded text-xs truncate transition-colors flex items-start gap-2 cursor-pointer ${isDetailsSelected ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary hover:bg-primary/20"} ${isChecked ? "ring-2 ring-offset-1 ring-primary" : ""}`}
+                                              className={`w-full text-left p-2 rounded text-xs truncate transition-colors flex items-start gap-2 cursor-pointer ${isDetailsSelected ? "bg-primary text-primary-foreground" : `${scheduleEntryBgClass(session.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS} hover:opacity-90`} ${isChecked ? "ring-2 ring-offset-1 ring-primary" : ""}`}
                                             >
                                               <Checkbox
                                                 checked={isChecked}
@@ -3364,7 +3527,7 @@ export default function AdminDashboard() {
                               tabIndex={0}
                               onClick={() => setSelectedSchedule(s)}
                               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedSchedule(s); }}
-                              className={`p-3 rounded-md border transition-colors cursor-pointer ${isDetailsSelected ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"}`}
+                              className={`p-3 rounded-md border-l-4 border transition-colors cursor-pointer ${scheduleEntryBgClass(s.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS} ${isDetailsSelected ? "border-primary ring-2 ring-primary" : "border-border hover:opacity-90"}`}
                             >
                               <div className="flex items-start gap-3">
                                 <Checkbox
@@ -3379,10 +3542,10 @@ export default function AdminDashboard() {
                                   aria-label={`Select ${s.subject?.name ?? "session"} for deletion`}
                                 />
                                 <div className="min-w-0 flex-1">
-                                  <p className="font-medium text-foreground">{s.subject?.name ?? "—"}</p>
-                                  <p className="text-sm text-muted-foreground">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
-                                  <p className="text-xs text-muted-foreground">Student: {studentName}</p>
-                                  <p className="text-xs text-muted-foreground">{s.sessionType === "playgroup" ? "Tutors" : "Tutor"}: {tutorName}</p>
+                                  <p className="font-medium">{s.subject?.name ?? "—"}</p>
+                                  <p className="text-sm opacity-90">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
+                                  <p className="text-xs opacity-80">Student: {studentName}</p>
+                                  <p className="text-xs opacity-80">{s.sessionType === "playgroup" ? "Tutors" : "Tutor"}: {tutorName}</p>
                                 </div>
                               </div>
                             </div>
@@ -3661,6 +3824,22 @@ export default function AdminDashboard() {
                                       )}
                                     </>
                                   )}
+                                  {!isOneOnOneSession && (
+                                    <div className="space-y-1">
+                                      <Label htmlFor="playgroup-panel-start-date" className="text-xs">Starting date</Label>
+                                      <Input
+                                        id="playgroup-panel-start-date"
+                                        type="date"
+                                        min={new Date().toISOString().slice(0, 10)}
+                                        value={scheduleEnrollmentStartDate || new Date(s.date).toISOString().slice(0, 10)}
+                                        onChange={(event) => setScheduleEnrollmentStartDate(event.target.value)}
+                                        className="h-8 text-sm"
+                                      />
+                                      <p className="text-[11px] text-muted-foreground">
+                                        The children are added to this playgroup&apos;s session on this date only — not to its other days. Pick another date if this one is full.
+                                      </p>
+                                    </div>
+                                  )}
                                   <Button
                                     type="button"
                                     size="sm"
@@ -3763,7 +3942,7 @@ export default function AdminDashboard() {
               <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="p-4 border-b border-border flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-display font-bold text-lg text-foreground">{isSuperAdmin ? "Student, Tutor, and Admin Accounts" : "Student and Tutor Accounts"}</h3>
+                    <h3 className="font-display font-bold text-lg text-foreground">Users / User Accounts</h3>
                     <div className="flex rounded-lg border border-border p-0.5 bg-muted/50">
                         <button
                           type="button"
@@ -3905,10 +4084,21 @@ export default function AdminDashboard() {
                               </td>
                               <td className="p-4" onClick={(e) => e.stopPropagation()}>
                                 <div className="flex gap-1">
-                                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast.info(`Emailing ${name}...`)}>
-                                    <Mail className="h-4 w-4" />
+                                  {/* Opens a compose draft in the admin's OWN logged-in Gmail (web), addressed to
+                                      this user — a mailto: link instead opens whatever the OS's default mail
+                                      client is (Outlook, Mail.app, etc.), which usually isn't Gmail at all. */}
+                                  <Button asChild variant="ghost" size="icon" className="h-8 w-8" title={`Email ${name}`}>
+                                    <a
+                                      href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(u.email)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      aria-label={`Email ${name}`}
+                                      data-testid="user-email-link"
+                                    >
+                                      <Mail className="h-4 w-4" />
+                                    </a>
                                   </Button>
-                                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toast.info(`Viewing ${name}'s profile...`)}>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8" title={`View ${name}'s profile`} aria-label={`View ${name}'s profile`} data-testid="user-view-profile" onClick={() => setProfileUser(u)}>
                                     <UserCheck className="h-4 w-4" />
                                   </Button>
                                   <Button
@@ -4267,38 +4457,52 @@ export default function AdminDashboard() {
             className="space-y-4 py-2"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!addTutorForm.firstName?.trim() || !addTutorForm.lastName?.trim() || !addTutorForm.email?.trim() || !addTutorForm.password || !addTutorForm.phone?.trim()) {
-                toast.error("First name, last name, email, password, and phone are required.");
+              const fieldErr =
+                getNameError(addTutorForm.firstName, "First name") ||
+                getNameError(addTutorForm.middleName, "Middle name", false) ||
+                getNameError(addTutorForm.lastName, "Last name") ||
+                getEmailError(addTutorForm.email) ||
+                getPhMobileError(addTutorForm.phone) ||
+                getPasswordError(addTutorForm.password) ||
+                getConfirmPasswordError(addTutorForm.password, addTutorForm.confirmPassword);
+              if (fieldErr) {
+                toast.error(fieldErr);
                 return;
               }
-              const tutorEmailProblem = getEmailError(addTutorForm.email);
-              if (tutorEmailProblem) {
-                toast.error(tutorEmailProblem);
+              const partTimeAvailabilityStr =
+                addTutorForm.employmentType === "part-time"
+                  ? buildAvailabilityString(
+                      addTutorForm.availabilityDays,
+                      addTutorForm.availabilityStart,
+                      addTutorForm.availabilityEnd
+                    )
+                  : "";
+              if (addTutorForm.employmentType === "part-time" && !partTimeAvailabilityStr) {
+                toast.error("Select at least one day and a start/end time for this part-time tutor's availability.");
+                return;
+              }
+              if (!isTutorEmailVerified) {
+                toast.error("Verify this email before creating the account.");
                 return;
               }
               setAddTutorSubmitting(true);
               try {
-                const availabilityStr =
-                  addTutorForm.employmentType === "part-time"
-                    ? buildAvailabilityString(
-                        addTutorForm.availabilityDays,
-                        addTutorForm.availabilityStart,
-                        addTutorForm.availabilityEnd
-                      )
-                    : undefined;
-                const res = await userService.createTutor({
+                const availabilityStr = partTimeAvailabilityStr || undefined;
+                const res = await adminEmailVerificationService.createVerifiedTutor({
                   firstName: addTutorForm.firstName.trim(),
                   middleName: addTutorForm.middleName.trim() || undefined,
                   lastName: addTutorForm.lastName.trim(),
                   email: normalizedTutorEmail,
                   password: addTutorForm.password,
                   phone: addTutorForm.phone.trim(),
+                  subjectsTaught: addTutorForm.subjectsTaught,
                   employmentType: addTutorForm.employmentType,
-                  availability: availabilityStr || undefined,
+                  availability: availabilityStr || "",
+                  verificationId: addTutorEmailVerification.verificationId,
+                  verificationToken: addTutorEmailVerification.verificationToken,
                 });
-                const responseData = res?.data;
-                if (responseData?.success) {
-                  toast.success(responseData.message || "Tutor created successfully.");
+                if (res?.success) {
+                  toast.success(res.message || "Tutor created successfully.");
                   setAddTutorOpen(false);
                   setAddTutorForm({
                     firstName: "",
@@ -4306,6 +4510,7 @@ export default function AdminDashboard() {
                     lastName: "",
                     email: "",
                     password: "",
+                    confirmPassword: "",
                     phone: "",
                     subjectsTaught: [],
                     employmentType: "full-time",
@@ -4317,7 +4522,7 @@ export default function AdminDashboard() {
                   setAddTutorEmailVerification(initialEmailVerificationState);
                   fetchUsers();
                 } else {
-                  toast.error(responseData?.message || "Failed to create tutor.");
+                  toast.error(res?.message || "Failed to create tutor.");
                 }
               } catch (err: unknown) {
                 const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to create tutor.";
@@ -4335,17 +4540,25 @@ export default function AdminDashboard() {
                   value={addTutorForm.firstName}
                   onChange={(e) => setAddTutorForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))}
                   placeholder="Maria"
+                  aria-invalid={!!getNameError(addTutorForm.firstName, "First name")}
                   required
                 />
+                {addTutorForm.firstName && getNameError(addTutorForm.firstName, "First name") && (
+                  <p role="alert" className="text-xs text-destructive">{getNameError(addTutorForm.firstName, "First name")}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tutor-middleName">Middle Name (optional)</Label>
                 <Input
                   id="tutor-middleName"
                   value={addTutorForm.middleName}
-                  onChange={(e) => setAddTutorForm((f) => ({ ...f, middleName: e.target.value }))}
+                  onChange={(e) => setAddTutorForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))}
                   placeholder="Santos"
+                  aria-invalid={!!getNameError(addTutorForm.middleName, "Middle name", false)}
                 />
+                {getNameError(addTutorForm.middleName, "Middle name", false) && (
+                  <p role="alert" className="text-xs text-destructive">{getNameError(addTutorForm.middleName, "Middle name", false)}</p>
+                )}
               </div>
             </div>
             <div className="space-y-2">
@@ -4355,8 +4568,12 @@ export default function AdminDashboard() {
                 value={addTutorForm.lastName}
                 onChange={(e) => setAddTutorForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))}
                 placeholder="Dela Cruz"
+                aria-invalid={!!getNameError(addTutorForm.lastName, "Last name")}
                 required
               />
+              {addTutorForm.lastName && getNameError(addTutorForm.lastName, "Last name") && (
+                <p role="alert" className="text-xs text-destructive">{getNameError(addTutorForm.lastName, "Last name")}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="tutor-email">Email (provided by admin)</Label>
@@ -4374,12 +4591,16 @@ export default function AdminDashboard() {
               {getEmailCharacterError(addTutorForm.email) && (
                 <p role="alert" className="text-xs text-destructive">{getEmailCharacterError(addTutorForm.email)}</p>
               )}
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <p className="text-xs text-muted-foreground">
-                  The account will be created immediately using the email and password provided.
-                </p>
-              </div>
             </div>
+            <EmailVerificationBlock
+              email={addTutorForm.email}
+              verification={addTutorEmailVerification}
+              isVerified={isTutorEmailVerified}
+              onCodeChange={(value) => setAddTutorEmailVerification((current) => ({ ...current, code: value }))}
+              onSendCode={handleSendTutorVerificationCode}
+              onVerifyCode={handleVerifyTutorEmailCode}
+              roleLabel="tutor"
+            />
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="tutor-password">Password</Label>
@@ -4388,20 +4609,42 @@ export default function AdminDashboard() {
                   value={addTutorForm.password}
                   onChange={(e) => setAddTutorForm((f) => ({ ...f, password: e.target.value }))}
                   placeholder="Min 8 chars, 1 upper, 1 lower, 1 number, 1 special"
+                  aria-invalid={!!(addTutorForm.password && getPasswordError(addTutorForm.password))}
                   required
                 />
+                {addTutorForm.password && getPasswordError(addTutorForm.password) && (
+                  <p role="alert" className="text-xs text-destructive">{getPasswordError(addTutorForm.password)}</p>
+                )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="tutor-phone">Phone (Philippine)</Label>
-                <Input
-                  id="tutor-phone"
-                  type="tel"
-                  value={addTutorForm.phone}
-                  onChange={(e) => setAddTutorForm((f) => ({ ...f, phone: sanitizePhoneInput(e.target.value) }))}
-                  placeholder="09XX XXX XXXX"
+                <Label htmlFor="tutor-confirmPassword">Confirm Password</Label>
+                <PasswordInput
+                  id="tutor-confirmPassword"
+                  value={addTutorForm.confirmPassword}
+                  onChange={(e) => setAddTutorForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+                  placeholder="Re-enter password"
+                  aria-invalid={!!(addTutorForm.confirmPassword && getConfirmPasswordError(addTutorForm.password, addTutorForm.confirmPassword))}
                   required
                 />
+                {addTutorForm.confirmPassword && getConfirmPasswordError(addTutorForm.password, addTutorForm.confirmPassword) && (
+                  <p role="alert" className="text-xs text-destructive">{getConfirmPasswordError(addTutorForm.password, addTutorForm.confirmPassword)}</p>
+                )}
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tutor-phone">Phone (Philippine)</Label>
+              <Input
+                id="tutor-phone"
+                type="tel"
+                value={addTutorForm.phone}
+                onChange={(e) => setAddTutorForm((f) => ({ ...f, phone: sanitizePhoneInput(e.target.value) }))}
+                placeholder="09XX XXX XXXX"
+                aria-invalid={!!(addTutorForm.phone && getPhMobileError(addTutorForm.phone))}
+                required
+              />
+              {addTutorForm.phone && getPhMobileError(addTutorForm.phone) && (
+                <p role="alert" className="text-xs text-destructive">{getPhMobileError(addTutorForm.phone)}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Employment Type</Label>
@@ -4511,7 +4754,8 @@ export default function AdminDashboard() {
               <Button
                 type="submit"
                 className="btn-glow"
-                disabled={addTutorSubmitting}
+                disabled={addTutorSubmitting || !isTutorEmailVerified}
+                title={!isTutorEmailVerified ? "Verify the email first" : undefined}
               >
                 {addTutorSubmitting ? "Creating..." : "Create Tutor"}
               </Button>
@@ -4537,34 +4781,42 @@ export default function AdminDashboard() {
               className="space-y-4 py-2"
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (!addAdminForm.firstName?.trim() || !addAdminForm.lastName?.trim() || !addAdminForm.email?.trim() || !addAdminForm.password || !addAdminForm.phone?.trim()) {
-                  toast.error("First name, last name, email, password, and phone are required.");
+                const fieldErr =
+                  getNameError(addAdminForm.firstName, "First name") ||
+                  getNameError(addAdminForm.middleName, "Middle name", false) ||
+                  getNameError(addAdminForm.lastName, "Last name") ||
+                  getEmailError(addAdminForm.email) ||
+                  getPhMobileError(addAdminForm.phone) ||
+                  getPasswordError(addAdminForm.password) ||
+                  getConfirmPasswordError(addAdminForm.password, addAdminForm.confirmPassword);
+                if (fieldErr) {
+                  toast.error(fieldErr);
                   return;
                 }
-                const adminEmailProblem = getEmailError(addAdminForm.email);
-                if (adminEmailProblem) {
-                  toast.error(adminEmailProblem);
+                if (!isAdminEmailVerified) {
+                  toast.error("Verify this email before creating the account.");
                   return;
                 }
                 setAddAdminSubmitting(true);
                 try {
-                  const res = await userService.createAdmin({
+                  const res = await adminEmailVerificationService.createVerifiedAdmin({
                     firstName: addAdminForm.firstName.trim(),
                     middleName: addAdminForm.middleName?.trim() || undefined,
                     lastName: addAdminForm.lastName.trim(),
                     email: normalizedAdminEmail,
                     password: addAdminForm.password,
                     phone: addAdminForm.phone.trim(),
+                    verificationId: addAdminEmailVerification.verificationId,
+                    verificationToken: addAdminEmailVerification.verificationToken,
                   });
-                  const responseData = res?.data;
-                  if (responseData?.success) {
-                    toast.success(responseData.message ?? "Admin created successfully.");
+                  if (res?.success) {
+                    toast.success(res.message ?? "Admin created successfully.");
                     setAddAdminOpen(false);
-                    setAddAdminForm({ firstName: "", middleName: "", lastName: "", email: "", password: "", phone: "" });
+                    setAddAdminForm({ firstName: "", middleName: "", lastName: "", email: "", password: "", confirmPassword: "", phone: "" });
                     setAddAdminEmailVerification(initialEmailVerificationState);
                     fetchUsers();
                   } else {
-                    toast.error(responseData?.message || "Failed to create admin.");
+                    toast.error(res?.message || "Failed to create admin.");
                   }
                 } catch (err: unknown) {
                   const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to create admin.";
@@ -4577,16 +4829,25 @@ export default function AdminDashboard() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="admin-firstName">First Name</Label>
-                <Input id="admin-firstName" value={addAdminForm.firstName} onChange={(e) => setAddAdminForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))} placeholder="Maria" required />
+                <Input id="admin-firstName" value={addAdminForm.firstName} onChange={(e) => setAddAdminForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))} placeholder="Maria" aria-invalid={!!getNameError(addAdminForm.firstName, "First name")} required />
+                {addAdminForm.firstName && getNameError(addAdminForm.firstName, "First name") && (
+                  <p role="alert" className="text-xs text-destructive">{getNameError(addAdminForm.firstName, "First name")}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="admin-middleName">Middle Name</Label>
-                <Input id="admin-middleName" value={addAdminForm.middleName} onChange={(e) => setAddAdminForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))} placeholder="Optional" />
+                <Input id="admin-middleName" value={addAdminForm.middleName} onChange={(e) => setAddAdminForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))} placeholder="Optional" aria-invalid={!!getNameError(addAdminForm.middleName, "Middle name", false)} />
+                {getNameError(addAdminForm.middleName, "Middle name", false) && (
+                  <p role="alert" className="text-xs text-destructive">{getNameError(addAdminForm.middleName, "Middle name", false)}</p>
+                )}
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="admin-lastName">Last Name</Label>
-              <Input id="admin-lastName" value={addAdminForm.lastName} onChange={(e) => setAddAdminForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))} placeholder="Dela Cruz" required />
+              <Input id="admin-lastName" value={addAdminForm.lastName} onChange={(e) => setAddAdminForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))} placeholder="Dela Cruz" aria-invalid={!!getNameError(addAdminForm.lastName, "Last name")} required />
+              {addAdminForm.lastName && getNameError(addAdminForm.lastName, "Last name") && (
+                <p role="alert" className="text-xs text-destructive">{getNameError(addAdminForm.lastName, "Last name")}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="admin-email">Email</Label>
@@ -4594,21 +4855,38 @@ export default function AdminDashboard() {
               {getEmailCharacterError(addAdminForm.email) && (
                 <p role="alert" className="text-xs text-destructive">{getEmailCharacterError(addAdminForm.email)}</p>
               )}
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <p className="text-xs text-muted-foreground">
-                  The account will be created immediately using the email and password provided.
-                </p>
-              </div>
             </div>
+            <EmailVerificationBlock
+              email={addAdminForm.email}
+              verification={addAdminEmailVerification}
+              isVerified={isAdminEmailVerified}
+              onCodeChange={(value) => setAddAdminEmailVerification((current) => ({ ...current, code: value }))}
+              onSendCode={handleSendAdminVerificationCode}
+              onVerifyCode={handleVerifyAdminEmailCode}
+              roleLabel="admin"
+            />
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="admin-password">Password</Label>
-                <PasswordInput id="admin-password" value={addAdminForm.password} onChange={(e) => setAddAdminForm((f) => ({ ...f, password: e.target.value }))} placeholder="Min 8 chars, 1 upper, 1 lower, 1 number, 1 special" required />
+                <PasswordInput id="admin-password" value={addAdminForm.password} onChange={(e) => setAddAdminForm((f) => ({ ...f, password: e.target.value }))} placeholder="Min 8 chars, 1 upper, 1 lower, 1 number, 1 special" aria-invalid={!!(addAdminForm.password && getPasswordError(addAdminForm.password))} required />
+                {addAdminForm.password && getPasswordError(addAdminForm.password) && (
+                  <p role="alert" className="text-xs text-destructive">{getPasswordError(addAdminForm.password)}</p>
+                )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="admin-phone">Phone (Philippine)</Label>
-                <Input id="admin-phone" type="tel" value={addAdminForm.phone} onChange={(e) => setAddAdminForm((f) => ({ ...f, phone: sanitizePhoneInput(e.target.value) }))} placeholder="09XX XXX XXXX" required />
+                <Label htmlFor="admin-confirmPassword">Confirm Password</Label>
+                <PasswordInput id="admin-confirmPassword" value={addAdminForm.confirmPassword} onChange={(e) => setAddAdminForm((f) => ({ ...f, confirmPassword: e.target.value }))} placeholder="Re-enter password" aria-invalid={!!(addAdminForm.confirmPassword && getConfirmPasswordError(addAdminForm.password, addAdminForm.confirmPassword))} required />
+                {addAdminForm.confirmPassword && getConfirmPasswordError(addAdminForm.password, addAdminForm.confirmPassword) && (
+                  <p role="alert" className="text-xs text-destructive">{getConfirmPasswordError(addAdminForm.password, addAdminForm.confirmPassword)}</p>
+                )}
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="admin-phone">Phone (Philippine)</Label>
+              <Input id="admin-phone" type="tel" value={addAdminForm.phone} onChange={(e) => setAddAdminForm((f) => ({ ...f, phone: sanitizePhoneInput(e.target.value) }))} placeholder="09XX XXX XXXX" aria-invalid={!!(addAdminForm.phone && getPhMobileError(addAdminForm.phone))} required />
+              {addAdminForm.phone && getPhMobileError(addAdminForm.phone) && (
+                <p role="alert" className="text-xs text-destructive">{getPhMobileError(addAdminForm.phone)}</p>
+              )}
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setAddAdminOpen(false)} disabled={addAdminSubmitting}>
@@ -4617,7 +4895,8 @@ export default function AdminDashboard() {
               <Button
                 type="submit"
                 className="btn-glow"
-                disabled={addAdminSubmitting}
+                disabled={addAdminSubmitting || !isAdminEmailVerified}
+                title={!isAdminEmailVerified ? "Verify the email first" : undefined}
               >
                 {addAdminSubmitting ? "Creating..." : "Add Admin"}
               </Button>
@@ -4851,6 +5130,46 @@ export default function AdminDashboard() {
       </AlertDialog>
 
       {/* Admin: Post center-wide announcement */}
+      {/* Pending Payments: a parent's bill(s), itemized per child */}
+      <Dialog open={!!billParent} onOpenChange={(open) => { if (!open) setBillParent(null); }}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto" data-testid="bill-summary-dialog">
+          <DialogHeader>
+            <DialogTitle>Bill summary</DialogTitle>
+            <DialogDescription>
+              {billParent ? `${billParent.parentName}${billParent.parentEmail ? ` \u2022 ${billParent.parentEmail}` : ""}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {billParent && (
+            <div className="space-y-3 text-sm">
+              {(billParent.bills && billParent.bills.length > 0 ? billParent.bills : []).map((bill) => (
+                <div key={bill.enrollmentId} className="rounded-lg border border-border p-3 space-y-1" data-testid="bill-line">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium text-foreground">{bill.childName}</p>
+                      <p className="text-xs text-muted-foreground font-mono">Student ID: {bill.studentId || "\u2014"}</p>
+                      {bill.programs.length > 0 && <p className="text-xs text-muted-foreground">{bill.programs.join(", ")}</p>}
+                    </div>
+                    <p className="font-semibold text-foreground whitespace-nowrap">{"\u20B1"}{bill.remaining.toLocaleString()}</p>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Total fee {"\u20B1"}{bill.totalFee.toLocaleString()}</span>
+                    <span>Paid {"\u20B1"}{bill.paid.toLocaleString()}</span>
+                    <span>Remaining {"\u20B1"}{bill.remaining.toLocaleString()}</span>
+                  </div>
+                </div>
+              ))}
+              {(!billParent.bills || billParent.bills.length === 0) && (
+                <p className="text-muted-foreground">{billParent.children.join(", ") || "No itemized bill available."}</p>
+              )}
+              <div className="flex justify-between border-t border-border pt-3 font-semibold text-foreground">
+                <span>Total remaining ({billParent.bills?.length ?? billParent.children.length} child{(billParent.bills?.length ?? billParent.children.length) === 1 ? "" : "ren"})</span>
+                <span>{"\u20B1"}{billParent.remaining.toLocaleString()}</span>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      <UserProfileDialog user={profileUser} parentChildren={parentChildren} onOpenChange={(open) => { if (!open) setProfileUser(null); }} />
       <Dialog open={!!archivedUserDetail} onOpenChange={(open) => { if (!open) setArchivedUserDetail(null); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -4881,10 +5200,6 @@ export default function AdminDashboard() {
                   <p className="font-medium text-foreground">{archivedUserDetail.phone || "—"}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Grade Level</p>
-                  <p className="font-medium text-foreground">{archivedUserDetail.gradeLevel || "—"}</p>
-                </div>
-                <div>
                   <p className="text-muted-foreground">Enrollment Status</p>
                   <p className="font-medium text-foreground capitalize">{archivedUserDetail.enrollmentStatus || "—"}</p>
                 </div>
@@ -4897,6 +5212,9 @@ export default function AdminDashboard() {
                   <p className="font-medium text-foreground">{archivedUserDetail.archivedAt ? new Date(archivedUserDetail.archivedAt).toLocaleString() : "—"}</p>
                 </div>
               </div>
+
+              {/* The child's info replaces the old Grade Level: the program(s) they're enrolled in and their Student ID. */}
+              <ChildrenInfo kids={childrenForUser(archivedUserDetail, parentChildren)} />
 
               {Array.isArray(archivedUserDetail.subjectsTaught) && archivedUserDetail.subjectsTaught.length > 0 ? (
                 <div>
@@ -5373,6 +5691,7 @@ export default function AdminDashboard() {
           if (!open) {
             setPaymentProofPreview(null);
             setPaymentProofZoomed(false);
+            setPaymentProofLoadState('loading');
           }
         }}
       >
@@ -5385,22 +5704,39 @@ export default function AdminDashboard() {
           </DialogHeader>
           {paymentProofPreview ? (
             <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-muted/40 p-3">
-              <div className={paymentProofZoomed ? "min-w-max" : "min-w-0"}>
-                <button
-                  type="button"
-                  onClick={() => setPaymentProofZoomed((current) => !current)}
-                  className={paymentProofZoomed ? "block cursor-zoom-out" : "flex min-h-full w-full items-start justify-center cursor-zoom-in"}
-                >
-                  <img
-                    src={paymentProofPreview.src}
-                    alt={`Payment receipt ${paymentProofPreview.reference}`}
-                    className={paymentProofZoomed
-                      ? "max-w-none w-auto min-w-[1200px] rounded-md border border-border bg-background"
-                      : "max-h-[75vh] w-auto max-w-full rounded-md border border-border bg-background object-contain"
-                    }
-                  />
-                </button>
-              </div>
+              {paymentProofLoadState === 'error' ? (
+                <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+                  <AlertTriangle className="h-8 w-8 text-destructive" />
+                  <p>This proof image failed to load — the file may be missing or moved.</p>
+                  <a href={paymentProofPreview.src} target="_blank" rel="noopener noreferrer" className="text-amber-600 underline">
+                    Open the file directly
+                  </a>
+                </div>
+              ) : (
+                <div className={paymentProofZoomed ? "min-w-max" : "min-w-0"}>
+                  {paymentProofLoadState === 'loading' && (
+                    <div className="flex min-h-[300px] items-center justify-center">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPaymentProofZoomed((current) => !current)}
+                    className={`${paymentProofZoomed ? "block cursor-zoom-out" : "flex min-h-full w-full items-start justify-center cursor-zoom-in"} ${paymentProofLoadState === 'loading' ? "hidden" : ""}`}
+                  >
+                    <img
+                      src={paymentProofPreview.src}
+                      alt={`Payment receipt ${paymentProofPreview.reference}`}
+                      onLoad={() => setPaymentProofLoadState('loaded')}
+                      onError={() => setPaymentProofLoadState('error')}
+                      className={paymentProofZoomed
+                        ? "max-w-none w-auto min-w-[1200px] rounded-md border border-border bg-background"
+                        : "max-h-[75vh] w-auto max-w-full rounded-md border border-border bg-background object-contain"
+                      }
+                    />
+                  </button>
+                </div>
+              )}
             </div>
           ) : null}
           <DialogFooter>

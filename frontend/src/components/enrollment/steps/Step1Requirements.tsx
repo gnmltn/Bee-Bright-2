@@ -9,6 +9,8 @@ interface Props {
   update: (p: Partial<WizardData>) => void;
   onNext: () => void;
   onBack: () => void;
+  /** Set by the dashboard's Add Child modal (a logged-in parent, no account to create). */
+  addChild?: boolean;
 }
 
 const timeline = [
@@ -19,9 +21,9 @@ const timeline = [
   { label: 'Schedule Assigned by Admin',       time: 'After approval' },
 ];
 
-export default function Step1Requirements({ data, update, onNext }: Props) {
+export default function Step1Requirements({ data, update, onNext, addChild }: Props) {
   const { toast } = useToast();
-  const isAddChildMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'add-child';
+  const isAddChildMode = !!addChild || typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'add-child';
 
   const allDocsUploaded =
     !!data.docBirthCertificate && !!data.docStudentPhoto && !!data.docGuardianId;
@@ -148,7 +150,7 @@ export default function Step1Requirements({ data, update, onNext }: Props) {
         </div>
       )}
 
-      <StepNav hideBack onNext={handleNext} nextLabel="Create Account" />
+      <StepNav hideBack onNext={handleNext} nextLabel={isAddChildMode ? 'Continue' : 'Create Account'} />
     </div>
   );
 }

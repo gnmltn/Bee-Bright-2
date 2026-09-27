@@ -7,7 +7,7 @@ export type EnrollmentForChild = {
   studentId?: string;
   permanentStudentId?: string;
   student?: string | null;
-  studentSnapshot?: { firstName?: string; lastName?: string };
+  studentSnapshot?: { firstName?: string; middleName?: string; lastName?: string };
   studentProfileImage?: string | null;
   requirementDocuments?: { studentPhoto?: { path?: string } | null } | null;
 };
@@ -17,6 +17,10 @@ export type ChildRecord = {
   key: string;
   studentUserId: string | null;
   name: string;
+  /** Name fields separately — needed to pre-fill an edit form (Settings → Student Information). */
+  firstName: string;
+  middleName: string;
+  lastName: string;
   status?: string;
   /** The child's permanent Student ID (BB-…). */
   studentId: string;
@@ -44,6 +48,9 @@ export function groupEnrollmentsIntoChildren(enrollments: EnrollmentForChild[]):
       key,
       studentUserId: e.student || null,
       name: [e.studentSnapshot?.firstName, e.studentSnapshot?.lastName].filter(Boolean).join(" ") || e.studentId || "Child",
+      firstName: e.studentSnapshot?.firstName || "",
+      middleName: e.studentSnapshot?.middleName || "",
+      lastName: e.studentSnapshot?.lastName || "",
       status: e.status,
       studentId: e.permanentStudentId || e.studentId || e.enrollmentId || "",
       photoPath,

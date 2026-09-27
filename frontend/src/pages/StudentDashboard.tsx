@@ -2,12 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { formatAge } from "@/components/enrollment/wizard-types";
-import { checkProgramEligibility } from "@/components/enrollment/wizard-types";
 import { PROGRAM_LABELS } from "@/constants/programs";
-import DocUploadField from "@/components/enrollment/DocUploadField";
-import {
-  validateFullName, validateBirthdate, birthdateMin, birthdateMax, toTitleCase, computeAgeYears,
-} from "@/lib/enrollmentValidation";
 import {
   BookOpen,
   Calendar,
@@ -31,21 +26,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StarRating } from "@/components/ui/star-rating";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { enrollmentService, assessmentService, scheduleService, gradeService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { scheduleService, gradeService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
+import AddChildModal, { type AddChildPrefill } from "@/components/enrollment/AddChildModal";
 import { ContactTutorPanel } from "@/components/dashboard/ContactTutorPanel";
 import { useSelectedChild } from "@/hooks/useSelectedChild";
 import { resolveUploadUrl, displayStudentId } from "@/lib/children";
-import { remainingBalanceOf, expectedRemainingAfterDown, peso, type BalanceEnrollment } from "@/lib/balance";
+import { remainingBalanceOf, isReminderDue, formatDueDate, peso, type BalanceEnrollment } from "@/lib/balance";
 import { notifyBadgesChanged } from "@/lib/navBadges";
 
 function formatTime12h(hhmm: string) {
@@ -201,24 +196,8 @@ export default function StudentDashboard() {
   const [isAddChildOpen, setIsAddChildOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [renewChildInfo, setRenewChildInfo] = useState<RenewChildInfo | null>(null);
-  const [isAddingChild, setIsAddingChild] = useState(false);
-  const [addChildStep, setAddChildStep] = useState(1);
-  const [expandedPrograms, setExpandedPrograms] = useState<string[]>([]);
-  const [pricing, setPricing] = useState<{ programCode: string; packageSlug: string; displayName: string; durationDesc?: string; priceFull: number; priceDown?: number | null; ageMin?: number | null; ageMax?: number | null }[]>([]);
-  const [assessmentTemplates, setAssessmentTemplates] = useState<{ _id: string; title: string; sections?: { title?: string; items?: { key: string; label: string }[] }[]; ratingScale?: { value: string; label: string }[]; infoFields?: { key: string; label: string }[] }[]>([]);
-  const [assessmentRatings, setAssessmentRatings] = useState<Record<string, string>>({});
-  const [assessmentInfo, setAssessmentInfo] = useState<Record<string, string>>({});
-  const [assessmentTemplateId, setAssessmentTemplateId] = useState("");
-  const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
-  const [paymentReference, setPaymentReference] = useState("");
-  const [hasAllergies, setHasAllergies] = useState<"yes" | "no" | "">("");
-  const [hasMedicalConditions, setHasMedicalConditions] = useState<"yes" | "no" | "">("");
-  const [newChild, setNewChild] = useState({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", assessmentApplicable: false, assessmentRemarks: "" });
-  const [newChildConsent, setNewChildConsent] = useState(false);
-  type ChildDoc = { dataUrl: string; fileName: string; fileSize: number } | null;
-  const [childDocs, setChildDocs] = useState<{ birthCert: ChildDoc; photo: ChildDoc; guardianId: ChildDoc }>({ birthCert: null, photo: null, guardianId: null });
-  const [childErrors, setChildErrors] = useState<Record<string, string>>({});
-  const childDocsComplete = Boolean(childDocs.birthCert && childDocs.photo && childDocs.guardianId);
+  // Prefill for resubmitting a rejected enrollment through the Add Child modal (null = blank form).
+  const [addChildPrefill, setAddChildPrefill] = useState<AddChildPrefill | null>(null);
 
   // ─── Schedule view controls ────────────────────────────────────────────────────
   const [scheduleViewMode, setScheduleViewMode] = useState<"monthly" | "weekly" | "daily">("monthly");
@@ -229,23 +208,28 @@ export default function StudentDashboard() {
   });
   const [scheduleWeekStart, setScheduleWeekStart] = useState<Date>(() => startOfSchoolWeek(new Date()));
 
-  // Once per browser session, if any remaining 50% balance is outstanding, say so.
+  // Remaining-balance reminder: NOT straight after enrolling. The second 50% falls due once half
+  // of the sessions are done, so once per browser session we only remind about enrollments whose
+  // due date is within REMINDER_LEAD_DAYS (or already past).
   useEffect(() => {
     if (!isParent || enrollmentsLoading) return;
-    const owed = enrollments.map((e) => remainingBalanceOf(e as BalanceEnrollment)).filter((r) => r > 0);
-    if (owed.length === 0) return;
+    const due = enrollments.filter((e) => remainingBalanceOf(e as BalanceEnrollment) > 0 && isReminderDue((e as BalanceEnrollment).remainingDueDate));
+    if (due.length === 0) return;
     try {
       if (sessionStorage.getItem("bb-balance-popup-shown")) return;
       sessionStorage.setItem("bb-balance-popup-shown", "1");
     } catch {
       /* storage unavailable — show it anyway */
     }
-    const total = owed.reduce((a, b) => a + b, 0);
+    const total = due.reduce((sum, e) => sum + remainingBalanceOf(e as BalanceEnrollment), 0);
     setBalancePopup((current) => current ?? {
-      heading: "Remaining balance due",
+      heading: "Remaining balance due soon",
       lines: [
-        `You have ${owed.length} enrollment${owed.length === 1 ? "" : "s"} with a remaining 50% balance, ${peso(total)} in total.`,
-        "Open Payments to review and pay it.",
+        ...due.map((e) => {
+          const name = [e.studentSnapshot?.firstName, e.studentSnapshot?.lastName].filter(Boolean).join(" ") || "Your child";
+          return `${name}: ${peso(remainingBalanceOf(e as BalanceEnrollment))} due ${formatDueDate((e as BalanceEnrollment).remainingDueDate)}`;
+        }),
+        `Total: ${peso(total)}. Open Payments to review and pay it.`,
       ],
     });
   }, [isParent, enrollmentsLoading, enrollments]);
@@ -770,52 +754,15 @@ export default function StudentDashboard() {
   };
 
   const handleAddChild = (resubmission?: typeof enrollments[number]) => {
-    if (!resubmission) {
-      // A plain "+ Add Child" click must start from a blank form — Cancel on this
-      // dialog doesn't itself clear `newChild`, so without this a child/program picked
-      // during an abandoned resubmission would otherwise leak into the next "new child"
-      // attempt.
-      setNewChild((current) => ({
-        ...current,
-        firstName: "",
-        lastName: "",
-        birthdate: "",
-        packageKey: "",
-      }));
-    }
-    if (pricing.length === 0) {
-      enrollmentService.getPricing().then((response) => {
-        if (response.data?.success) {
-          setPricing(response.data.pricing);
-          if (resubmission) {
-            const packageItem = resubmission.packages?.[0];
-            const matchingPackage = response.data.pricing.find((item) => item.displayName === packageItem?.displayName);
-            setNewChild((current) => ({
-              ...current,
-              firstName: resubmission.studentSnapshot?.firstName || "",
-              lastName: resubmission.studentSnapshot?.lastName || "",
-              birthdate: resubmission.studentSnapshot?.birthdate?.slice(0, 10) || "",
-              packageKey: matchingPackage ? `${matchingPackage.programCode}:${matchingPackage.packageSlug}` : "",
-            }));
-          }
-        }
-      }).catch(() => toast.error("Unable to load programs. Please try again."));
-    } else if (resubmission) {
-      const packageItem = resubmission.packages?.[0];
-      const matchingPackage = pricing.find((item) => item.displayName === packageItem?.displayName);
-      setNewChild((current) => ({
-        ...current,
-        firstName: resubmission.studentSnapshot?.firstName || "",
-        lastName: resubmission.studentSnapshot?.lastName || "",
-        birthdate: resubmission.studentSnapshot?.birthdate?.slice(0, 10) || "",
-        packageKey: matchingPackage ? `${matchingPackage.programCode}:${matchingPackage.packageSlug}` : "",
-      }));
-    }
-    assessmentService.getTemplates(["ACT102"]).then((response) => {
-      if (response.data?.success) setAssessmentTemplates(response.data.templates);
-    }).catch(() => setAssessmentTemplates([]));
-    setAddChildStep(1);
-    setExpandedPrograms([]);
+    // A plain "+ Add Child" click starts from a blank form; resubmitting a rejected enrollment
+    // pre-fills the child's details and the same package.
+    setAddChildPrefill(resubmission ? {
+      firstName: resubmission.studentSnapshot?.firstName || "",
+      middleName: resubmission.studentSnapshot?.middleName || "",
+      lastName: resubmission.studentSnapshot?.lastName || "",
+      birthdate: resubmission.studentSnapshot?.birthdate?.slice(0, 10) || "",
+      packageDisplayName: resubmission.packages?.[0]?.displayName,
+    } : null);
     setIsAddChildOpen(true);
   };
 
@@ -857,31 +804,12 @@ export default function StudentDashboard() {
     setIsRenewModalOpen(true);
   };
 
-  // After an enrollment is submitted, remind the parent what the remaining 50% will be.
-  const announceRemainingBalance = (enrollmentId: string, list: typeof enrollments) => {
-    const created = list.find((e) => e.enrollmentId === enrollmentId);
-    if (!created) return;
-    const remaining = expectedRemainingAfterDown(created);
-    if (remaining <= 0) return;
-    const childName = [created.studentSnapshot?.firstName, created.studentSnapshot?.lastName].filter(Boolean).join(" ") || "your child";
-    const programs = (created.packages || []).map((p) => p.displayName).filter(Boolean).join(", ");
-    setBalancePopup({
-      heading: "Remaining balance for this enrollment",
-      lines: [
-        `${childName}${programs ? ` — ${programs}` : ""}`,
-        `The remaining 50% (${peso(remaining)}) is due after half of the sessions are completed.`,
-        "You can pay it any time from the Payments page once your down payment is verified.",
-      ],
-    });
-    notifyBadgesChanged();
-  };
-
   const handleRenewEnrolled = (enrollmentId: string) => {
     setRenewChildInfo(null);
     fetchEnrollments().then((list) => {
       const created = list.find((e) => e.enrollmentId === enrollmentId);
       toast.success("Enrollment submitted", { description: `Student ID: ${created ? displayStudentId(created) : enrollmentId}. Check your email for confirmation.` });
-      announceRemainingBalance(enrollmentId, list);
+      notifyBadgesChanged();
     });
   };
 
@@ -913,143 +841,16 @@ export default function StudentDashboard() {
     return { badge, notes };
   };
 
-  const handleAddChildSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!validateChildStep1() || !newChild.packageKey || !newChildConsent) {
-      toast.error("Please complete the child information, required documents and accept the agreement.");
-      return;
-    }
-
-    const selectedProgram = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey);
-    if (!selectedProgram) { toast.error("Please select an available package."); return; }
-    setIsAddingChild(true);
-    try {
-      const submission = await enrollmentService.submitWizard({
-          packages: [{
-          programCode: selectedProgram.programCode,
-          packageSlug: selectedProgram.packageSlug,
-          displayName: selectedProgram.displayName,
-          price: selectedProgram.priceFull,
-          paymentOption: "down",
-        }],
-        paymentOption: "down",
-        paymentMethod: newChild.paymentMethod as "gcash" | "maribank" | "bdo",
-        studentFirstName: toTitleCase(newChild.firstName),
-        studentMiddleName: newChild.middleName.trim() ? toTitleCase(newChild.middleName) : "",
-        studentLastName: toTitleCase(newChild.lastName),
-        birthdate: newChild.birthdate,
-        requirementDocuments: {
-          birthCertificate: childDocs.birthCert ? { dataUrl: childDocs.birthCert.dataUrl, fileName: childDocs.birthCert.fileName } : undefined,
-          studentPhoto: childDocs.photo ? { dataUrl: childDocs.photo.dataUrl, fileName: childDocs.photo.fileName } : undefined,
-          guardianId: childDocs.guardianId ? { dataUrl: childDocs.guardianId.dataUrl, fileName: childDocs.guardianId.fileName } : undefined,
-        },
-        preferredStartDate: newChild.preferredStartDate || undefined,
-        // preferredDays not collected in the quick add-child flow — defaults to no preference
-        allergies: hasAllergies === "no" ? "None" : newChild.allergies.trim(),
-        medications: hasMedicalConditions === "no" ? "None" : newChild.medications.trim(),
-        specialNeeds: newChild.specialNeeds,
-        specialNeedsDetails: newChild.specialNeedsDetails.trim(),
-        // No separate Emergency Contact step — the parent's own registered phone
-        // already serves this purpose (ChildSelector_AddChildModal_TutorRemarksView.pdf B2).
-        emergencyContact: user?.phone || "",
-        consentVersion: "1.0",
-        consentItems: [{ name: "participation_agreement", accepted: true, version: "1.0" }],
-        assessment: newChild.assessmentApplicable && assessmentTemplateId ? { applicable: true, templateId: assessmentTemplateId, ratings: assessmentRatings, infoValues: assessmentInfo, remarks: newChild.assessmentRemarks.trim() } : { applicable: false, skipReason: "Not applicable" },
-      });
-      if (paymentProofFile && submission?.data?.enrollmentId) {
-        const proofDataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(paymentProofFile); });
-        // Wizard-created Payment docs are parent-keyed (student: null) — the legacy
-        // student-keyed paymentService.submitPaymentProof never matches them and
-        // fails with "Payment record not found." Use the enrollment-keyed endpoint
-        // instead, same as Step12Review.tsx's working submission flow.
-        await enrollmentService.submitPaymentProof(submission.data.enrollmentId, { proofDataUrl, payerReference: paymentReference.trim(), paymentMethod: newChild.paymentMethod });
-      }
-      toast.success("Child added", { description: "The enrollment was submitted for admin review." });
-      setNewChild({ firstName: "", middleName: "", lastName: "", birthdate: "", packageKey: "", preferredStartDate: "", paymentMethod: "gcash", allergies: "", medications: "", specialNeeds: false, specialNeedsDetails: "", assessmentApplicable: false, assessmentRemarks: "" });
-      setNewChildConsent(false);
-      setHasAllergies("");
-      setHasMedicalConditions("");
-      setAssessmentTemplateId("");
-      setAssessmentRatings({});
-      setAssessmentInfo({});
-      setPaymentProofFile(null);
-      setPaymentReference("");
-      setChildDocs({ birthCert: null, photo: null, guardianId: null });
-      setChildErrors({});
-      setAddChildStep(1);
-      setIsAddChildOpen(false);
-      const response = await enrollmentService.getMyEnrollments();
-      if (response.data?.success && Array.isArray(response.data.enrollments)) {
-        setEnrollments(response.data.enrollments);
-        if (submission?.data?.enrollmentId) announceRemainingBalance(submission.data.enrollmentId, response.data.enrollments);
-      }
-    } catch (error) {
-      const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast.error(message || "Unable to add child. Please try again.");
-    } finally {
-      setIsAddingChild(false);
-    }
+  const handleAddChildEnrolled = (enrollmentId: string) => {
+    // No remaining-balance popup here: the second 50% is only due after half of the sessions,
+    // so the reminder appears closer to that date (see the reminder effect above).
+    fetchEnrollments().then((list) => {
+      const created = list.find((e) => e.enrollmentId === enrollmentId);
+      toast.success("Child added", { description: `Student ID: ${created ? displayStudentId(created) : enrollmentId}. The enrollment was submitted for admin review.` });
+      notifyBadgesChanged();
+    });
   };
 
-  const validateChildStep1 = () => {
-    const e: Record<string, string> = {};
-    const fn = validateFullName(newChild.firstName, "First name", { minParts: 1 });
-    if (!fn.valid) e.firstName = fn.error!;
-    if (newChild.middleName.trim()) {
-      const mn = validateFullName(newChild.middleName, "Middle name", { minParts: 1, required: false });
-      if (!mn.valid) e.middleName = mn.error!;
-    }
-    const ln = validateFullName(newChild.lastName, "Last name", { minParts: 1 });
-    if (!ln.valid) e.lastName = ln.error!;
-    const bd = validateBirthdate(newChild.birthdate);
-    if (!bd.valid) e.birthdate = bd.error!;
-    if (!childDocsComplete) e.docs = "Upload all three required documents (Birth Certificate, 2×2 Photo, Guardian ID).";
-    setChildErrors(e);
-    return Object.keys(e).length === 0;
-  };
-
-  const handleAddChildNext = () => {
-    if (addChildStep === 1 && !validateChildStep1()) {
-      toast.error("Please complete the child information, birthdate and required documents.");
-      return;
-    }
-    const requiredByStep: Record<number, boolean> = {
-      1: true,
-      2: Boolean(newChild.packageKey),
-      3: true,
-      4: Boolean(hasAllergies && hasMedicalConditions && (hasAllergies === "no" || newChild.allergies.trim()) && (hasMedicalConditions === "no" || newChild.medications.trim())),
-      7: Boolean(newChild.paymentMethod && paymentProofFile),
-      8: newChildConsent,
-    };
-    if (addChildStep === 2) {
-      const selectedPackage = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey);
-      if (!selectedPackage || !isPackageEligible(selectedPackage)) {
-        toast.error("Please choose a package that is available for the child’s age.");
-        return;
-      }
-    }
-    if (requiredByStep[addChildStep] === false) {
-      toast.error(addChildStep === 7 ? "Choose a payment method and upload your payment proof." : addChildStep === 8 ? "Please accept the agreement." : "Please complete the required fields before continuing.");
-      return;
-    }
-    if (addChildStep === 6 && newChild.assessmentApplicable) {
-      const assessmentItems = (activeAssessmentTemplate?.sections || []).flatMap((section) => section.items || []);
-      if (!activeAssessmentTemplate || assessmentItems.some((item) => !assessmentRatings[item.key])) {
-        toast.error("Please complete every assessment rating.");
-        return;
-      }
-    }
-    setAddChildStep((step) => Math.min(9, step + 1));
-  };
-
-  // Shared calendar-exact age maths — a local 365.25-day approximation here used
-  // to compute 1.9997 for a child on their exact 2nd birthday, locking them out.
-  const childAge = newChild.birthdate ? computeAgeYears(newChild.birthdate) : null;
-  // Use the shared program eligibility rules (Toddlers Playgroup 2–4, etc.) rather than
-  // the raw Pricing ageMin/ageMax so this matches the main enrollment wizard.
-  const isPackageEligible = (item: { programCode?: string }) =>
-    childAge !== null && !!item.programCode && checkProgramEligibility(item.programCode, childAge).eligible;
-  const activeAssessmentTemplate = assessmentTemplates.find((template) => template._id === assessmentTemplateId);
 
   const handleQuickAction = (action: string) => {
     switch (action) {
@@ -1698,16 +1499,9 @@ export default function StudentDashboard() {
                   {/* Student Remarks — replaces the old grading display (BeeBright Student Remarks Spec v2) */}
                   <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
                     <div className="flex flex-wrap gap-3">
-                      {isParent && (
-                        <Select value={activeChildId} onValueChange={setActiveChildId}>
-                          <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="Choose child" /></SelectTrigger>
-                          <SelectContent>
-                            {children.map((child) => (
-                              <SelectItem key={child.key} value={child.key}>{child.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
+                      {/* Which child these remarks belong to follows the ONE "Viewing child" switcher
+                          at the top of the page — no separate switch control here (Redundant_Switchers_
+                          Settings_Rules_EnrollmentBugs.pdf, item A). */}
                       <Select value={remarkProgramFilter} onValueChange={setRemarkProgramFilter}>
                         <SelectTrigger className="w-full sm:w-48"><SelectValue placeholder="All programs" /></SelectTrigger>
                         <SelectContent>
@@ -1895,90 +1689,12 @@ export default function StudentDashboard() {
           </div>
         </div>
       </div>
-      <Dialog open={isAddChildOpen} onOpenChange={setIsAddChildOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add Child</DialogTitle>
-            <DialogDescription>Step {addChildStep + 3} of 12. This creates an enrollment under your account, not another login account.</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleAddChildSubmit} className="space-y-4">
-            {addChildStep === 1 && <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="child-first-name">First name</Label>
-                <Input id="child-first-name" value={newChild.firstName}
-                  className={childErrors.firstName ? "border-destructive" : ""}
-                  onChange={(event) => { setNewChild((current) => ({ ...current, firstName: event.target.value })); setChildErrors((p) => ({ ...p, firstName: "" })); }}
-                  onBlur={(event) => { const c = toTitleCase(event.target.value); if (c && c !== event.target.value) setNewChild((cur) => ({ ...cur, firstName: c })); const r = validateFullName(c || event.target.value, "First name", { minParts: 1 }); setChildErrors((p) => ({ ...p, firstName: r.valid ? "" : r.error! })); }}
-                  required />
-                {childErrors.firstName && <p className="text-xs text-destructive">{childErrors.firstName}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="child-middle-name">Middle name</Label>
-                <Input id="child-middle-name" value={newChild.middleName}
-                  className={childErrors.middleName ? "border-destructive" : ""}
-                  onChange={(event) => { setNewChild((current) => ({ ...current, middleName: event.target.value })); setChildErrors((p) => ({ ...p, middleName: "" })); }}
-                  onBlur={(event) => { if (!event.target.value.trim()) { setChildErrors((p) => ({ ...p, middleName: "" })); return; } const c = toTitleCase(event.target.value); if (c !== event.target.value) setNewChild((cur) => ({ ...cur, middleName: c })); const r = validateFullName(c, "Middle name", { minParts: 1, required: false }); setChildErrors((p) => ({ ...p, middleName: r.valid ? "" : r.error! })); }} />
-                {childErrors.middleName && <p className="text-xs text-destructive">{childErrors.middleName}</p>}
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="child-last-name">Last name</Label>
-                <Input id="child-last-name" value={newChild.lastName}
-                  className={childErrors.lastName ? "border-destructive" : ""}
-                  onChange={(event) => { setNewChild((current) => ({ ...current, lastName: event.target.value })); setChildErrors((p) => ({ ...p, lastName: "" })); }}
-                  onBlur={(event) => { const c = toTitleCase(event.target.value); if (c && c !== event.target.value) setNewChild((cur) => ({ ...cur, lastName: c })); const r = validateFullName(c || event.target.value, "Last name", { minParts: 1 }); setChildErrors((p) => ({ ...p, lastName: r.valid ? "" : r.error! })); }}
-                  required />
-                {childErrors.lastName && <p className="text-xs text-destructive">{childErrors.lastName}</p>}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="child-birthdate">Birthdate</Label>
-                <Input id="child-birthdate" type="date" min={birthdateMin()} max={birthdateMax()} value={newChild.birthdate}
-                  className={childErrors.birthdate ? "border-destructive" : ""}
-                  onChange={(event) => { setNewChild((current) => ({ ...current, birthdate: event.target.value })); setChildErrors((p) => ({ ...p, birthdate: "" })); }}
-                  required />
-                {childErrors.birthdate && <p className="text-xs text-destructive">{childErrors.birthdate}</p>}
-                {!childErrors.birthdate && newChild.birthdate && (
-                  <p className="text-xs text-muted-foreground">Age: <span className="font-medium text-foreground">{formatAge(newChild.birthdate)}</span></p>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-3 rounded-lg border border-border p-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold">Enrollment Requirements</p>
-                <span className="text-xs text-muted-foreground">{[childDocs.birthCert, childDocs.photo, childDocs.guardianId].filter(Boolean).length}/3</span>
-              </div>
-              <DocUploadField label="Student Birth Certificate" desc="Used for age verification." value={childDocs.birthCert}
-                onChange={(doc) => { setChildDocs((c) => ({ ...c, birthCert: doc })); setChildErrors((p) => ({ ...p, docs: "" })); }}
-                onRemove={() => setChildDocs((c) => ({ ...c, birthCert: null }))} />
-              <DocUploadField label="Recent 2×2 Photo of Student" desc="Clear, recent photo." value={childDocs.photo}
-                accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-                onChange={(doc) => { setChildDocs((c) => ({ ...c, photo: doc })); setChildErrors((p) => ({ ...p, docs: "" })); }}
-                onRemove={() => setChildDocs((c) => ({ ...c, photo: null }))} />
-              <DocUploadField label="Guardian Valid ID" desc="Government-issued ID of the parent/guardian." value={childDocs.guardianId}
-                onChange={(doc) => { setChildDocs((c) => ({ ...c, guardianId: doc })); setChildErrors((p) => ({ ...p, docs: "" })); }}
-                onRemove={() => setChildDocs((c) => ({ ...c, guardianId: null }))} />
-              {childErrors.docs && <p className="text-xs text-destructive">{childErrors.docs}</p>}
-            </div>
-            </div>}
-            {addChildStep === 2 && <div className="space-y-2"><Label>Choose a program package</Label><p className="text-xs text-muted-foreground">Enter the birthdate first. Programs outside the child&apos;s age range are disabled.</p><div className="max-h-64 space-y-2 overflow-y-auto">{["TPG101", "ACT102", "EXP106"].map((programCode) => { const items = pricing.filter((item) => item.programCode === programCode); if (!items.length) return null; const eligibleItems = items.filter(isPackageEligible); const expanded = expandedPrograms.includes(programCode); const programName = programCode === "TPG101" ? "Toddlers Playgroup" : programCode === "ACT102" ? "Academic Tutorial" : "Examination Preparation"; return <div key={programCode} className="rounded-lg border border-border"><button type="button" disabled={eligibleItems.length === 0} onClick={() => setExpandedPrograms((current) => current.includes(programCode) ? current.filter((code) => code !== programCode) : [...current, programCode])} className={`flex w-full items-center justify-between p-3 text-left ${eligibleItems.length === 0 ? "cursor-not-allowed opacity-50" : "hover:bg-muted/50"}`}><span><span className="block text-sm font-semibold">{programName}</span><span className="text-xs text-muted-foreground">{eligibleItems.length === 0 ? (childAge === null ? "Enter birthdate to check eligibility" : "Not available for this age") : `${items.length} package${items.length === 1 ? "" : "s"}`}</span></span><span className="text-muted-foreground">{expanded ? "−" : "+"}</span></button>{expanded && eligibleItems.length > 0 && <div className="space-y-2 border-t border-border p-2">{eligibleItems.map((item) => { const down = item.priceDown ?? Math.ceil(item.priceFull * 0.5); return <button type="button" key={`${item.programCode}:${item.packageSlug}`} onClick={() => setNewChild((current) => ({ ...current, packageKey: `${item.programCode}:${item.packageSlug}` }))} className={`w-full rounded-lg border p-3 text-left ${newChild.packageKey === `${item.programCode}:${item.packageSlug}` ? "border-primary bg-primary/5" : "border-border"}`}><span className="block text-sm font-medium">{item.displayName}</span><span className="text-xs text-muted-foreground block">{item.durationDesc || "Package"}</span><span className="text-xs text-muted-foreground">Full price: PHP {item.priceFull.toLocaleString()}</span><span className="text-xs font-semibold text-primary block">50% down: PHP {down.toLocaleString()}</span></button>; })}</div>}</div>; })}</div></div>}
-            {addChildStep === 3 && <div className="space-y-2"><Label htmlFor="child-start-date">Preferred start date <span className="font-normal text-muted-foreground">(optional)</span></Label><Input id="child-start-date" type="date" value={newChild.preferredStartDate} onChange={(event) => setNewChild((current) => ({ ...current, preferredStartDate: event.target.value }))} /></div>}
-            {addChildStep === 4 && <div className="space-y-4"><div className="space-y-2"><Label>Does the child have allergies?</Label><div className="flex gap-2"><Button type="button" variant={hasAllergies === "yes" ? "default" : "outline"} onClick={() => setHasAllergies("yes")}>Yes</Button><Button type="button" variant={hasAllergies === "no" ? "default" : "outline"} onClick={() => { setHasAllergies("no"); setNewChild((current) => ({ ...current, allergies: "" })); }}>No</Button></div>{hasAllergies === "yes" && <Input aria-label="Allergy details" value={newChild.allergies} onChange={(event) => setNewChild((current) => ({ ...current, allergies: event.target.value }))} placeholder="List allergies" required />}</div><div className="space-y-2"><Label>Does the child have medical conditions or take medication?</Label><div className="flex gap-2"><Button type="button" variant={hasMedicalConditions === "yes" ? "default" : "outline"} onClick={() => setHasMedicalConditions("yes")}>Yes</Button><Button type="button" variant={hasMedicalConditions === "no" ? "default" : "outline"} onClick={() => { setHasMedicalConditions("no"); setNewChild((current) => ({ ...current, medications: "" })); }}>No</Button></div>{hasMedicalConditions === "yes" && <Input aria-label="Medical condition details" value={newChild.medications} onChange={(event) => setNewChild((current) => ({ ...current, medications: event.target.value }))} placeholder="List conditions or medications" required />}</div></div>}
-            {addChildStep === 5 && <div className="space-y-3"><Label className="flex items-center gap-3"><Checkbox checked={newChild.specialNeeds} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, specialNeeds: checked === true }))} /> Does the child have special learning or medical needs?</Label>{newChild.specialNeeds && <Input value={newChild.specialNeedsDetails} onChange={(event) => setNewChild((current) => ({ ...current, specialNeedsDetails: event.target.value }))} placeholder="Please provide details" />}</div>}
-            {addChildStep === 6 && <div className="max-h-72 space-y-3 overflow-y-auto"><p className="text-sm text-muted-foreground">Complete the assessment when it applies to the child. If it does not apply, leave this unchecked.</p><Label className="flex items-center gap-3"><Checkbox checked={newChild.assessmentApplicable} onCheckedChange={(checked) => setNewChild((current) => ({ ...current, assessmentApplicable: checked === true }))} /> Assessment is applicable</Label>{newChild.assessmentApplicable && assessmentTemplates.length > 0 && <><Label htmlFor="assessment-template">Assessment form</Label><select id="assessment-template" value={assessmentTemplateId} onChange={(event) => { setAssessmentTemplateId(event.target.value); setAssessmentRatings({}); setAssessmentInfo({}); }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select assessment form</option>{assessmentTemplates.map((template) => <option key={template._id} value={template._id}>{template.title}</option>)}</select>{activeAssessmentTemplate && <><p className="font-medium">{activeAssessmentTemplate.title}</p>{(activeAssessmentTemplate.infoFields || []).map((field) => <div key={field.key} className="space-y-1"><Label htmlFor={`assessment-info-${field.key}`}>{field.label}</Label><Input id={`assessment-info-${field.key}`} value={assessmentInfo[field.key] || ""} onChange={(event) => setAssessmentInfo((current) => ({ ...current, [field.key]: event.target.value }))} /></div>)}{(activeAssessmentTemplate.sections || []).map((section) => <div key={section.title} className="space-y-2"><p className="text-sm font-semibold">{section.title}</p>{(section.items || []).map((item) => <div key={item.key} className="space-y-1"><Label htmlFor={`assessment-rating-${item.key}`}>{item.label}</Label><select id={`assessment-rating-${item.key}`} value={assessmentRatings[item.key] || ""} onChange={(event) => setAssessmentRatings((current) => ({ ...current, [item.key]: event.target.value }))} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required><option value="">Select rating</option>{(activeAssessmentTemplate.ratingScale || []).map((rating) => <option key={rating.value} value={rating.value}>{rating.label}</option>)}</select></div>)}</div>)}<Input value={newChild.assessmentRemarks} onChange={(event) => setNewChild((current) => ({ ...current, assessmentRemarks: event.target.value }))} placeholder="Assessment remarks" /></>}</>}{newChild.assessmentApplicable && assessmentTemplates.length === 0 && <p className="text-sm text-muted-foreground">No assessment is configured for this program.</p>}</div>}
-            {addChildStep === 7 && <div className="space-y-3"><Label>Billing and payment method</Label>{(() => { const selected = pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey); const down = selected?.priceDown ?? Math.ceil((selected?.priceFull || 0) * 0.5); return <div className="rounded-lg bg-muted p-3 text-sm"><p className="font-medium">{selected?.displayName || "Select a package first"}</p><p>Full price: PHP {(selected?.priceFull || 0).toLocaleString()}</p><p className="font-semibold text-primary">Amount due now (50%): PHP {down.toLocaleString()}</p></div>; })()}<Label htmlFor="child-payment-method">Payment method</Label><select id="child-payment-method" value={newChild.paymentMethod} onChange={(event) => setNewChild((current) => ({ ...current, paymentMethod: event.target.value }))} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" required><option value="gcash">GCash</option><option value="maribank">MariBank</option><option value="bdo">BDO</option></select><Label htmlFor="child-payment-proof">Payment proof</Label><Input id="child-payment-proof" type="file" accept="image/jpeg,image/png,application/pdf" onChange={(event) => setPaymentProofFile(event.target.files?.[0] || null)} required /><Input aria-label="Payment reference" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Payment reference number (optional)" /><p className="text-xs text-muted-foreground">Upload a screenshot or PDF showing the 50% payment.</p></div>}
-            {addChildStep === 8 && <label className="flex items-start gap-3 text-sm text-muted-foreground"><Checkbox checked={newChildConsent} onCheckedChange={(checked) => setNewChildConsent(checked === true)} /><span>I confirm that the child information is accurate and agree to submit this enrollment for admin review.</span></label>}
-            {addChildStep === 9 && <div className="space-y-2 rounded-lg bg-muted p-4 text-sm"><p className="font-semibold">Ready to submit</p><p>{[newChild.firstName, newChild.middleName, newChild.lastName].filter(Boolean).join(" ")} - {pricing.find((item) => `${item.programCode}:${item.packageSlug}` === newChild.packageKey)?.displayName || "No package selected"}</p><p className="text-muted-foreground">Payment instructions will be provided after submission.</p></div>}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setIsAddChildOpen(false)}>Cancel</Button>
-              {addChildStep > 1 && <Button type="button" variant="outline" onClick={() => setAddChildStep((step) => step - 1)}>Back</Button>}
-              {addChildStep < 9 ? <Button type="button" onClick={handleAddChildNext}>Next</Button> : <Button type="submit" disabled={isAddingChild || !newChildConsent}>{isAddingChild ? "Submitting..." : "Submit Enrollment"}</Button>}
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <AddChildModal
+        open={isAddChildOpen}
+        onOpenChange={setIsAddChildOpen}
+        prefill={addChildPrefill}
+        onEnrolled={handleAddChildEnrolled}
+      />
       <Dialog open={!!selectedAnnouncement} onOpenChange={(open) => { if (!open) setSelectedAnnouncement(null); }}>
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           {selectedAnnouncement && (

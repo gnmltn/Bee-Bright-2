@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog';
 import { INITIAL_WIZARD_DATA, WizardData } from './wizard-types';
 import { assessmentService } from '@/services/api';
+import { ASSESSMENT_ELIGIBLE_PROGRAM_CODES } from '@/constants/programs';
 
 import Step6Programs        from './steps/Step6Programs';
 import StepAssessment       from './steps/StepAssessment';
@@ -104,12 +105,11 @@ export default function RenewProgramModal({ open, onOpenChange, child, onEnrolle
   }, [open, child]);
 
   const selectedProgramCodes = data.selectedPackages.map((p) => p.programCode);
-  const relevantAssessmentCodes = new Set(['ACT102', 'EXP106']);
   const programCodesKey = selectedProgramCodes.sort().join(',');
 
   useEffect(() => {
     if (!open) return;
-    const applicableCodes = selectedProgramCodes.filter((code) => relevantAssessmentCodes.has(code));
+    const applicableCodes = selectedProgramCodes.filter((code) => ASSESSMENT_ELIGIBLE_PROGRAM_CODES.has(code));
     if (applicableCodes.length === 0) {
       setIncludeAssessment(false);
       return;

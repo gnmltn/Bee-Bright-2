@@ -42,7 +42,7 @@ async function listOutstandingBalances({ parentId, childKey } = {}) {
   }
   const enrollments = await Enrollment.find(filter)
     .populate('parent', 'firstName lastName email')
-    .select('enrollmentId parent studentSnapshot totalFee status')
+    .select('enrollmentId permanentStudentId studentId parent studentSnapshot packages totalFee status')
     .lean();
   if (enrollments.length === 0) return [];
 
@@ -58,8 +58,11 @@ async function listOutstandingBalances({ parentId, childKey } = {}) {
 
   const out = [];
   for (const e of enrollments) {
-    const { remaining, owed } = computeRemainingBalance(e, byEnrollment.get(String(e._id)));
-    if (owed) out.push({ enrollment: e, remaining });
+    const list = byEnrollment.get(String(e._id));
+    const { remaining, owed } = computeRemainingBalance(e, list);
+    // Already paid = the verified payments (the 50% down payment), so a bill can be itemized.
+    const paid = (list || []).filter((p) => p.status === 'verified').reduce((sum, p) => sum + amountOf(p), 0);
+    if (owed) out.push({ enrollment: e, remaining, paid: Math.round(paid) });
   }
   return out;
 }

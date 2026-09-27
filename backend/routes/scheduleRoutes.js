@@ -9,6 +9,8 @@ const {
   getAvailableSlotsByDay,
   createSchedule,
   createMonthlySchedules,
+  checkMonthlySchedule,
+  bulkDeleteSchedules,
   listPlaygroupGroups,
   createOrJoinPlaygroupGroup,
   enrollStudentInSession,
@@ -41,6 +43,8 @@ router.get('/available-slots-monthly', protect, authorize('admin'), getAvailable
 router.get('/available-slots-by-day', protect, authorize('admin'), getAvailableSlotsByDay);
 router.post('/', protect, authorize('admin'), createSchedule);
 router.post('/monthly', protect, authorize('admin'), createMonthlySchedules);
+router.post('/monthly/check', protect, authorize('admin'), checkMonthlySchedule);
+router.post('/bulk-delete', protect, authorize('admin'), bulkDeleteSchedules);
 router.get('/playgroup-groups', protect, authorize('admin'), listPlaygroupGroups);
 router.post('/playgroup-groups', protect, authorize('admin'), createOrJoinPlaygroupGroup);
 router.post('/:id/enroll-student', protect, authorize('admin'), enrollStudentInSession);

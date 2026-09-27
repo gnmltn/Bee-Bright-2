@@ -72,7 +72,11 @@ function stubCommon({ tutorConflictDates = [], studentConflictDates = [] } = {})
   const origScheduleFind = Schedule.find;
 
   User.findOne = () => mockQuery(TUTOR);
-  User.find = () => mockQuery([]); // no admins -> notifyUnresolvedSuspension short-circuits
+  // Ghost-filtering (filterLiveSessions) looks up the rows' tutor/student ids via
+  // User.find({_id:{$in:[...]}}) — echo those ids back as "live" so a stubbed conflict
+  // row isn't spuriously filtered out. Any other query (e.g. "find admins to notify")
+  // still gets [] so notifyUnresolvedSuspension short-circuits as before.
+  User.find = (query) => mockQuery(query && query._id && query._id.$in ? query._id.$in.map((id) => ({ _id: id })) : []);
   TutorUnavailability.exists = async () => false;
   TutoringArea.findById = () => mockQuery({ areaType: 'tutoring_area', capacity: 15 });
   Schedule.countDocuments = async () => 0;
@@ -86,10 +90,10 @@ function stubCommon({ tutorConflictDates = [], studentConflictDates = [] } = {})
   // suspendDates is stubbed separately per-test since its shape differs ({date:{$gte}}).
   Schedule.find = (query) => {
     if (query && query.$or && query.$or[0] && 'tutor' in query.$or[0]) {
-      return mockQuery(tutorConflictKeys.has(dateKey(query.date)) ? [{ startTime: '08:00', endTime: '09:00' }] : []);
+      return mockQuery(tutorConflictKeys.has(dateKey(query.date)) ? [{ startTime: '08:00', endTime: '09:00', tutor: 'tutor-1', student: 'student-1' }] : []);
     }
     if (query && query.$or && query.$or[0] && 'student' in query.$or[0]) {
-      return mockQuery(studentConflictKeys.has(dateKey(query.date)) ? [{ startTime: '08:00', endTime: '09:00' }] : []);
+      return mockQuery(studentConflictKeys.has(dateKey(query.date)) ? [{ startTime: '08:00', endTime: '09:00', tutor: 'tutor-1', student: 'student-1' }] : []);
     }
     return mockQuery([]);
   };

@@ -36,6 +36,15 @@ async function findApplicableTemplates(programCodes) {
 }
 
 /**
+ * The only rating a parent MUST give: the first skill of the first section (the form's first
+ * row). Every other rating, the info fields, remarks, goals and the assessor name are optional.
+ */
+function requiredRatingKeys(template) {
+  const first = (template.sections || []).find((s) => (s.items || []).length > 0);
+  return first ? [first.items[0].key] : [];
+}
+
+/**
  * Validates wizard assessment payload against the live template in the database.
  */
 async function validateAndBuildAssessment(body, selectedProgramCodes) {
@@ -82,18 +91,22 @@ async function validateAndBuildAssessment(body, selectedProgramCodes) {
 
   const allowedRatings = new Set((template.ratingScale || []).map((r) => r.value));
   const ratings = assessment.ratings && typeof assessment.ratings === 'object' ? assessment.ratings : {};
+  const requiredKeys = new Set(requiredRatingKeys(template));
+  const cleanRatings = {};
   const missing = [];
   for (const section of template.sections || []) {
     for (const item of section.items || []) {
       const value = ratings[item.key];
-      if (!value || !allowedRatings.has(value)) {
+      if (value && allowedRatings.has(value)) {
+        cleanRatings[item.key] = value;
+      } else if (requiredKeys.has(item.key)) {
         missing.push(item.label);
       }
     }
   }
   if (missing.length > 0) {
     throw Object.assign(
-      new Error(`Please rate every assessment item. Missing: ${missing.slice(0, 3).join('; ')}${missing.length > 3 ? '…' : ''}`),
+      new Error(`Please complete the first assessment item. Missing: ${missing.join('; ')}`),
       { statusCode: 400 }
     );
   }
@@ -124,7 +137,7 @@ async function validateAndBuildAssessment(body, selectedProgramCodes) {
       templateTitle: template.title,
       snapshot: snapshotTemplate(template),
       infoValues,
-      ratings,
+      ratings: cleanRatings,
       remarks: String(assessment.remarks || '').trim(),
       goals,
       assessedBy: String(assessment.assessedBy || '').trim(),
@@ -135,6 +148,7 @@ async function validateAndBuildAssessment(body, selectedProgramCodes) {
 
 module.exports = {
   snapshotTemplate,
+  requiredRatingKeys,
   templateAppliesToPackages,
   findApplicableTemplates,
   validateAndBuildAssessment,

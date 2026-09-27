@@ -36,7 +36,11 @@ export interface WizardData {
   docGuardianId: UploadedDoc | null;
 
   // ── Step 2 – Parent registration ──────────────────────────────────────
+  /** Full display name — always kept in sync with the three fields below. */
   parentName: string;
+  parentFirstName: string;
+  parentMiddleName: string;
+  parentLastName: string;
   parentEmail: string;
   parentMobile: string;
   parentPassword: string;
@@ -133,7 +137,7 @@ export const INITIAL_WIZARD_DATA: WizardData = {
   docGuardianId: null,
 
   // Step 2
-  parentName: '', parentEmail: '', parentMobile: '', parentPassword: '',
+  parentName: '', parentFirstName: '', parentMiddleName: '', parentLastName: '', parentEmail: '', parentMobile: '', parentPassword: '',
   parentId: null, enrollmentToken: null,
 
   // Step 5

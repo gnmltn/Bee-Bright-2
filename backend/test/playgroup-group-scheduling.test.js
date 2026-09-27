@@ -10,6 +10,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const mongoose = require('mongoose');
 
 const Subject = require('../models/Subject');
 const Enrollment = require('../models/Enrollment');
@@ -18,6 +19,16 @@ const TutoringArea = require('../models/TutoringArea');
 const Schedule = require('../models/Schedule');
 const PlaygroupGroup = require('../models/PlaygroupGroup');
 const { createOrJoinPlaygroupGroup, listPlaygroupGroups } = require('../controllers/scheduleController');
+
+// createOrJoinPlaygroupGroup now wraps its writes in runTransactionSafe (C1 fix) — a fake
+// session lets that path run without a real MongoDB connection, same pattern already used
+// by test/hard-delete-archived-user.test.js.
+function fakeSession() {
+  return {
+    withTransaction: async (fn) => { await fn(); },
+    endSession: async () => {},
+  };
+}
 
 function mockQuery(result) {
   const q = {
@@ -54,13 +65,18 @@ function stubModels({ enrollment, existingScheduleStudents = null, tutorIdsFound
   const origUserFind = User.find;
   const origTutoringAreaFindOne = TutoringArea.findOne;
   const origTutoringAreaFindById = TutoringArea.findById;
+  const origScheduleFind = Schedule.find;
   const origScheduleFindOne = Schedule.findOne;
   const origScheduleUpdateOne = Schedule.updateOne;
   const origScheduleCreate = Schedule.create;
+  const origScheduleDeleteMany = Schedule.deleteMany;
   const origScheduleCountDocuments = Schedule.countDocuments;
   const origGroupFind = PlaygroupGroup.find;
   const origGroupFindOne = PlaygroupGroup.findOne;
   const origGroupCreate = PlaygroupGroup.create;
+  const origGroupDeleteOne = PlaygroupGroup.deleteOne;
+  const origStartSession = mongoose.startSession;
+  mongoose.startSession = async () => fakeSession();
 
   const createdSchedules = [];
   const updatedIds = [];
@@ -72,25 +88,35 @@ function stubModels({ enrollment, existingScheduleStudents = null, tutorIdsFound
   User.find = () => mockQuery(tutorIdsFound.map((id) => ({ _id: id })));
   TutoringArea.findOne = () => mockQuery({ _id: 'toddler-room-1' });
   TutoringArea.findById = () => mockQuery({ areaType: 'toddler_room', capacity: 10 });
+  // hasStudentScheduleConflict's own conflict-search query (no existing 1-on-1/other-group
+  // conflicts by default in these fixtures).
+  Schedule.find = () => mockQuery([]);
   Schedule.findOne = () => mockQuery(
     existingScheduleStudents
       ? { _id: 'existing-sched-1', students: existingScheduleStudents }
       : null
   );
   Schedule.updateOne = async (filter) => { updatedIds.push(filter._id); return { acknowledged: true }; };
-  Schedule.create = async (data) => {
-    const doc = { ...data, _id: `sched-${createdSchedules.length}` };
-    createdSchedules.push(doc);
-    return doc;
+  // Model.create(docs, options) only honors `options` (e.g. {session}) when `docs` is an
+  // array — real code now always calls the array form so a transaction session can ride
+  // along; unwrap it here so callers keep seeing a flat createdSchedules list.
+  Schedule.create = async (docs) => {
+    const arr = Array.isArray(docs) ? docs : [docs];
+    const made = arr.map((data) => ({ ...data, _id: `sched-${createdSchedules.length}` }));
+    createdSchedules.push(...made);
+    return made;
   };
+  Schedule.deleteMany = async () => ({ deletedCount: 0 });
   Schedule.countDocuments = async () => (roomAtCapacity ? 1 : 0);
   PlaygroupGroup.find = () => mockQuery([]);
   PlaygroupGroup.findOne = () => mockQuery(groupDoc);
-  PlaygroupGroup.create = async (data) => {
-    const doc = { ...data, _id: 'group-new-1' };
-    createdGroups.push(doc);
-    return doc;
+  PlaygroupGroup.create = async (docs) => {
+    const arr = Array.isArray(docs) ? docs : [docs];
+    const made = arr.map((data) => ({ ...data, _id: data._id || 'group-new-1' }));
+    createdGroups.push(...made);
+    return made;
   };
+  PlaygroupGroup.deleteOne = async () => ({ deletedCount: 0 });
 
   return {
     createdSchedules,
@@ -103,13 +129,17 @@ function stubModels({ enrollment, existingScheduleStudents = null, tutorIdsFound
       User.find = origUserFind;
       TutoringArea.findOne = origTutoringAreaFindOne;
       TutoringArea.findById = origTutoringAreaFindById;
+      Schedule.find = origScheduleFind;
       Schedule.findOne = origScheduleFindOne;
       Schedule.updateOne = origScheduleUpdateOne;
       Schedule.create = origScheduleCreate;
+      Schedule.deleteMany = origScheduleDeleteMany;
       Schedule.countDocuments = origScheduleCountDocuments;
       PlaygroupGroup.find = origGroupFind;
       PlaygroupGroup.findOne = origGroupFindOne;
       PlaygroupGroup.create = origGroupCreate;
+      PlaygroupGroup.deleteOne = origGroupDeleteOne;
+      mongoose.startSession = origStartSession;
     },
   };
 }
@@ -257,6 +287,74 @@ test('createOrJoinPlaygroupGroup: rejects when the enrollment does not cover TPG
     await createOrJoinPlaygroupGroup(baseReq(), res);
     assert.equal(res._status, 400);
     assert.match(res._body.message, /not enrolled in this subject/i);
+  } finally { restore(); }
+});
+
+// H2 — joining never bypasses the student's own conflict check (regression: previously
+// only room/ratio capacity was checked, so a child could be double-booked against an
+// existing 1-on-1 session or a different playgroup group at the very same time).
+test('createOrJoinPlaygroupGroup: rejects joining a child already double-booked at that date/time (1-on-1 or another group)', async () => {
+  const enrollment = baseEnrollment();
+  const { restore, createdSchedules, updatedIds } = stubModels({ enrollment });
+  const origScheduleFind = Schedule.find;
+  const origUserFind = User.find;
+  // Any hasStudentScheduleConflict lookup ($or on student/students) reports a conflict;
+  // everything else (e.g. the outer "existing session for this date" query) is untouched
+  // since that's Schedule.findOne, stubbed separately.
+  Schedule.find = (query) => mockQuery(query && query.$or ? [{ startTime: '08:00', endTime: '09:00', tutor: 'tutor-a', student: 'student-1' }] : []);
+  // filterLiveSessions (H3) needs both the tutor AND student on that conflict row to
+  // resolve as live, not just whichever ids stubModels' default tutorIdsFound covers.
+  User.find = (query) => mockQuery((query?._id?.$in || []).map((id) => ({ _id: id })));
+  try {
+    const res = mockRes();
+    await createOrJoinPlaygroupGroup(baseReq(), res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.match(res._body.message, /conflicting session/i);
+    assert.equal(createdSchedules.length, 0, 'no session written once a conflict is found');
+    assert.equal(updatedIds.length, 0);
+  } finally { Schedule.find = origScheduleFind; User.find = origUserFind; restore(); }
+});
+
+test('createOrJoinPlaygroupGroup: a child already enrolled in THIS exact session is not treated as its own conflict', async () => {
+  const enrollment = baseEnrollment();
+  // student-1 is already on the existing session for every date — alreadyEnrolled will be
+  // true for all of them (nothing new to check), so this must succeed as a no-op-ish join.
+  const { restore } = stubModels({ enrollment, existingScheduleStudents: ['student-1'] });
+  try {
+    const res = mockRes();
+    await createOrJoinPlaygroupGroup(baseReq({ groupId: 'group-1', tutorIds: undefined }), res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.match(res._body.message, /already enrolled in this group/i, 'rejected for being fully enrolled already, not for a false conflict');
+  } finally { restore(); }
+});
+
+// C1 — a failure partway through a multi-date batch must not leave some dates committed
+// and others not: either the whole group commits, or none of it does.
+test('createOrJoinPlaygroupGroup: a mid-batch write failure rolls back every session (and the new group) already written in that batch', async () => {
+  const enrollment = baseEnrollment();
+  const { restore, createdSchedules } = stubModels({ enrollment });
+  const deletedScheduleIds = [];
+  const deletedGroupIds = [];
+  Schedule.deleteMany = async (filter) => { deletedScheduleIds.push(...(filter?._id?.$in || [])); return { deletedCount: (filter?._id?.$in || []).length }; };
+  PlaygroupGroup.deleteOne = async (filter) => { deletedGroupIds.push(String(filter._id)); return { deletedCount: 1 }; };
+  let callCount = 0;
+  Schedule.create = async (docs) => {
+    callCount += 1;
+    if (callCount === 2) throw new Error('simulated mid-batch failure');
+    const arr = Array.isArray(docs) ? docs : [docs];
+    const made = arr.map((data) => ({ ...data, _id: `sched-${createdSchedules.length}` }));
+    createdSchedules.push(...made);
+    return made;
+  };
+  try {
+    const res = mockRes();
+    // Default baseReq daysOfWeek=[MONDAY] spans ~4-5 Mondays in the ~1-month window, so a
+    // NEW group here means multiple Schedule.create calls — enough to fail on the 2nd.
+    await createOrJoinPlaygroupGroup(baseReq(), res);
+    assert.equal(res._status, 500, JSON.stringify(res._body));
+    assert.equal(createdSchedules.length, 1, 'exactly the one session written before the simulated failure');
+    assert.deepEqual(new Set(deletedScheduleIds), new Set(createdSchedules.map((s) => s._id)), 'every session written in this batch is rolled back, none left behind');
+    assert.equal(deletedGroupIds.length, 1, 'the new group itself is rolled back too, not left as an orphaned empty group');
   } finally { restore(); }
 });
 

@@ -6,9 +6,13 @@ import { Switch } from '@/components/ui/switch';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 
-interface Props { data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void; }
+interface Props {
+  data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void;
+  /** Add Child uses the parent's own registered phone as the emergency contact, so no extra field. */
+  hideEmergencyContact?: boolean;
+}
 
-export default function Step9Health({ data, update, onNext, onBack }: Props) {
+export default function Step9Health({ data, update, onNext, onBack, hideEmergencyContact }: Props) {
   return (
     <div className="space-y-6">
       <div>
@@ -51,11 +55,13 @@ export default function Step9Health({ data, update, onNext, onBack }: Props) {
           </div>
         )}
 
-        <div className="space-y-1.5">
-          <Label htmlFor="emergencyContact">Emergency Contact (Other than Primary Guardian)</Label>
-          <Input id="emergencyContact" placeholder="Name and mobile number"
-            value={data.emergencyContact} onChange={(e) => update({ emergencyContact: e.target.value })} />
-        </div>
+        {!hideEmergencyContact && (
+          <div className="space-y-1.5">
+            <Label htmlFor="emergencyContact">Emergency Contact (Other than Primary Guardian)</Label>
+            <Input id="emergencyContact" placeholder="Name and mobile number"
+              value={data.emergencyContact} onChange={(e) => update({ emergencyContact: e.target.value })} />
+          </div>
+        )}
       </div>
 
       <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 rounded-lg flex gap-2 text-xs text-amber-800 dark:text-amber-300">

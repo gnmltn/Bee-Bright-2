@@ -5,9 +5,10 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
-import type { AssessmentTemplate } from '../assessment-types';
+import { assessedByDisplayLabel, requiredRatingKeys, type AssessmentTemplate } from '../assessment-types';
 import { assessmentService } from '@/services/api';
 import { formatAge, computeAgeYears } from '../wizard-types';
+import { ASSESSMENT_ELIGIBLE_PROGRAM_CODES } from '@/constants/programs';
 
 interface Props {
   data: WizardData;
@@ -33,8 +34,7 @@ export default function StepAssessment({ data, update, onNext, onBack, toast }: 
     () => Array.from(new Set(data.selectedPackages.map((pkg) => pkg.programCode))),
     [data.selectedPackages]
   );
-  const relevantProgramCodes = new Set(['ACT102', 'EXP106']);
-  const shouldAutoSkipAssessment = !programCodes.some((code) => relevantProgramCodes.has(code));
+  const shouldAutoSkipAssessment = !programCodes.some((code) => ASSESSMENT_ELIGIBLE_PROGRAM_CODES.has(code));
   const childAgeYears = data.birthdate ? computeAgeYears(data.birthdate) : 0;
   const isToddlerOrNotApplicable = shouldAutoSkipAssessment || childAgeYears < 2;
 
@@ -90,11 +90,10 @@ export default function StepAssessment({ data, update, onNext, onBack, toast }: 
 
   const selectedTemplate = templates.find((t) => t._id === data.assessmentTemplateId) || null;
 
+  // Only the form's first rating is required; everything else is optional.
   const allItemsRated = useMemo(() => {
     if (!selectedTemplate || data.assessmentApplicable === false) return true;
-    return (selectedTemplate.sections || []).every((section) =>
-      (section.items || []).every((item) => Boolean(data.assessmentRatings[item.key]))
-    );
+    return requiredRatingKeys(selectedTemplate).every((key) => Boolean(data.assessmentRatings[key]));
   }, [selectedTemplate, data.assessmentApplicable, data.assessmentRatings]);
 
   const canContinue =
@@ -135,15 +134,13 @@ export default function StepAssessment({ data, update, onNext, onBack, toast }: 
   const saveAssessment = () => {
     if (!activeTemplate) return;
 
-    const requiredInfoMissing = (activeTemplate.infoFields || []).some((field) => !(draftInfoValues[field.key] || '').trim());
-    const requiredRatingsMissing = (activeTemplate.sections || []).some((section) =>
-      (section.items || []).some((item) => !(draftRatings[item.key] || '').trim())
-    );
+    // Only the first rating is required — every other field on the form may stay blank.
+    const requiredRatingsMissing = requiredRatingKeys(activeTemplate).some((key) => !(draftRatings[key] || '').trim());
 
-    if (requiredInfoMissing || requiredRatingsMissing) {
+    if (requiredRatingsMissing) {
       toast({
         title: 'Assessment incomplete',
-        description: 'Please complete all required fields before saving the assessment.',
+        description: 'Please fill in the first item (marked *). All other fields are optional.',
         variant: 'destructive',
       });
       return;
@@ -276,6 +273,7 @@ export default function StepAssessment({ data, update, onNext, onBack, toast }: 
             <div className="px-6 pb-6 pt-2">
 
             <div className="space-y-6">
+              <p className="text-xs text-muted-foreground">Only the first item (marked *) is required. Every other field is optional.</p>
               {activeTemplate.infoFields?.map((field) => (
                 <div key={field.key} className="space-y-1.5">
                   <Label htmlFor={`modal-${field.key}`}>{field.label}</Label>
@@ -303,7 +301,7 @@ export default function StepAssessment({ data, update, onNext, onBack, toast }: 
                       <tbody>
                         {section.items.map((item) => (
                           <tr key={item.key} className="border-t border-border">
-                            <td className="p-2 pr-3">{item.label}</td>
+                            <td className="p-2 pr-3">{item.label}{requiredRatingKeys(activeTemplate).includes(item.key) && <span className="text-destructive"> *</span>}</td>
                             {activeTemplate.ratingScale.map((option) => (
                               <td key={option.value} className="p-2 text-center">
                                 <input
@@ -369,7 +367,7 @@ export default function StepAssessment({ data, update, onNext, onBack, toast }: 
               )}
 
               <div className="space-y-1.5">
-                <Label htmlFor="modal-assessed-by">{activeTemplate.assessedByLabel}</Label>
+                <Label htmlFor="modal-assessed-by">{assessedByDisplayLabel(activeTemplate.assessedByLabel)}</Label>
                 <Input
                   id="modal-assessed-by"
                   value={draftAssessedBy}

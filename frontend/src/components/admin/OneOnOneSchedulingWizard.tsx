@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Calendar, Info, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -17,6 +18,7 @@ import {
   type WeeklyScheduleSubjectOption,
   type WeeklyScheduleTutorOption,
   type PricingPackage,
+  type MonthlyScheduleCheck,
 } from "@/services/api";
 import { StudentSearchSelect } from "./StudentSearchSelect";
 import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
@@ -94,8 +96,14 @@ function formatSlotTime(value: string) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
-function toMonthStartKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
+/** Local calendar date as YYYY-MM-DD (never the UTC date, which is "yesterday" early morning in the Philippines). */
+function toDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateKey(key: string) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function preferredSlotLabel(enrollment: AdminEnrollment, programCode: string) {
@@ -194,8 +202,16 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
   const [selectedDays, setSelectedDays] = useState<number[]>(DEFAULT_DAYS);
   const [selectedTime, setSelectedTime] = useState(TIME_BLOCKS[0]);
   const [selectedTutorId, setSelectedTutorId] = useState("");
-  const [slotsByDay, setSlotsByDay] = useState<Record<string, { startTime: string; endTime: string }[]> | null>(null);
-  const [loadingSlots, setLoadingSlots] = useState(false);
+  // Tutor overrides per day: a day the first-choice tutor can't cover can go to a different tutor,
+  // all under this student's one schedule (e.g. Tutor A Mon/Wed, Tutor B Thu).
+  const [dayTutors, setDayTutors] = useState<Record<number, string>>({});
+  // The date the month of sessions starts on — lets the admin stagger new enrollees who share the
+  // same preferred day/time instead of everyone landing on the same day.
+  const [startDate, setStartDate] = useState("");
+  const [check, setCheck] = useState<MonthlyScheduleCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  // Per blocked day: which other tutors can cover it (loaded on demand).
+  const [altTutors, setAltTutors] = useState<Record<number, string[] | "loading">>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -210,54 +226,94 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
       )
     : null;
 
+  const todayKey = toDateKey(new Date());
+
   // Reset downstream steps whenever the student/program changes — including any day
   // selection made for a previous student, since it may not fit this one's lock.
   useEffect(() => {
     setSelectedDays(DEFAULT_DAYS);
     setSelectedTutorId("");
-    setSlotsByDay(null);
+    setDayTutors({});
+    setAltTutors({});
+    setCheck(null);
     setError(null);
+    // Default the starting date to the parent's preferred start date (never in the past).
+    const preferred = selectedOption?.enrollment.preferredStartDate ? toDateKey(new Date(selectedOption.enrollment.preferredStartDate)) : "";
+    setStartDate(selectedOption ? (preferred && preferred >= todayKey ? preferred : todayKey) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey]);
 
-  useEffect(() => {
-    if (!selectedTutorId) {
-      setSlotsByDay(null);
-      return;
-    }
-    let cancelled = false;
-    setLoadingSlots(true);
-    setError(null);
-    scheduleService
-      .getAvailableSlotsByDay(selectedTutorId, toMonthStartKey(new Date()))
-      .then((res) => {
-        if (cancelled) return;
-        setSlotsByDay(res.data?.slotsByDay || {});
-      })
-      .catch(() => {
-        if (!cancelled) setSlotsByDay({});
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingSlots(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedTutorId]);
-
-  const dayAvailability = useMemo(
-    () =>
-      selectedDays.map((day) => {
-        const free = slotsByDay?.[String(day)] || [];
-        const match = free.find((slot) => slot.startTime === selectedTime);
-        return { day, available: Boolean(match) };
-      }),
-    [selectedDays, selectedTime, slotsByDay]
+  const effectiveTutorId = (day: number) => dayTutors[day] || selectedTutorId;
+  const daySlotsPayload = useMemo(
+    () => selectedDays.map((day) => ({ dayOfWeek: day, startTime: selectedTime, endTime: addOneHour(selectedTime), tutorId: dayTutors[day] || selectedTutorId })),
+    [selectedDays, selectedTime, dayTutors, selectedTutorId]
   );
 
   const dayCountMatchesLock = requiredDays === null || selectedDays.length === requiredDays;
+  const readyToCheck = Boolean(selectedOption && selectedTutorId && selectedDays.length > 0 && dayCountMatchesLock && startDate && startDate >= todayKey);
 
-  const allDaysAvailable =
-    Boolean(selectedTutorId) && Boolean(slotsByDay) && dayAvailability.length > 0 && dayAvailability.every((d) => d.available) && dayCountMatchesLock;
+  // Authoritative, date-aware availability: asks the server about every session of the month for
+  // this starting date, per day and per tutor — and, when something is blocked, which other
+  // starting dates work — instead of silently blocking.
+  useEffect(() => {
+    if (!readyToCheck || !selectedOption) {
+      setCheck(null);
+      setChecking(false);
+      return;
+    }
+    let cancelled = false;
+    setChecking(true);
+    setError(null);
+    const timer = setTimeout(() => {
+      scheduleService
+        .checkMonthly({ enrollmentId: selectedOption.enrollment._id, subjectId: selectedOption.subject._id, tutorId: selectedTutorId, startDate, daySlots: daySlotsPayload })
+        .then((res) => { if (!cancelled) setCheck(res.data); })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setCheck(null);
+          setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Could not check availability.");
+        })
+        .finally(() => { if (!cancelled) setChecking(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readyToCheck, selectedKey, startDate, selectedTutorId, selectedTime, JSON.stringify(daySlotsPayload)]);
+
+  const conflictForDay = (day: number) => check?.conflicts.find((c) => c.dayOfWeek === day) || null;
+  const allDaysAvailable = readyToCheck && !checking && Boolean(check?.ok);
+
+  // Other tutors who could take one blocked day (the whole month of that weekday must be free).
+  const loadAlternativeTutors = async (day: number) => {
+    if (!selectedOption) return;
+    setAltTutors((prev) => ({ ...prev, [day]: "loading" }));
+    const current = effectiveTutorId(day);
+    const results = await Promise.all(
+      tutors.filter((t) => t._id !== current).map(async (t) => {
+        try {
+          const res = await scheduleService.checkMonthly({
+            enrollmentId: selectedOption.enrollment._id,
+            subjectId: selectedOption.subject._id,
+            startDate,
+            daySlots: [{ dayOfWeek: day, startTime: selectedTime, endTime: addOneHour(selectedTime), tutorId: t._id }],
+          });
+          return res.data.ok ? t._id : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    setAltTutors((prev) => ({ ...prev, [day]: results.filter((id): id is string => Boolean(id)) }));
+  };
+
+  const setTutorForDay = (day: number, tutorId: string) => {
+    setDayTutors((prev) => {
+      const next = { ...prev };
+      if (!tutorId || tutorId === selectedTutorId) delete next[day];
+      else next[day] = tutorId;
+      return next;
+    });
+    setAltTutors((prev) => { const next = { ...prev }; delete next[day]; return next; });
+  };
 
   const toggleDay = (day: number) => {
     setSelectedDays((prev) => {
@@ -268,6 +324,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
       if (requiredDays !== null && prev.length >= requiredDays) return prev; // locked at the package's sessions-per-week
       return [...prev, day].sort((a, b) => a - b);
     });
+    setAltTutors({});
   };
 
   const resetWizard = () => {
@@ -276,7 +333,10 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
     setSelectedDays(DEFAULT_DAYS);
     setSelectedTime(TIME_BLOCKS[0]);
     setSelectedTutorId("");
-    setSlotsByDay(null);
+    setDayTutors({});
+    setAltTutors({});
+    setCheck(null);
+    setStartDate("");
     setError(null);
   };
 
@@ -285,13 +345,12 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
     setSubmitting(true);
     setError(null);
     try {
-      const endTime = addOneHour(selectedTime);
-      const daySlots = selectedDays.map((dayOfWeek) => ({ dayOfWeek, startTime: selectedTime, endTime }));
       const res = await scheduleService.createMonthly({
         enrollmentId: selectedOption.enrollment._id,
         tutorId: selectedTutorId,
         subjectId: selectedOption.subject._id,
-        daySlots,
+        startDate,
+        daySlots: daySlotsPayload,
       });
       if (res.data?.success) {
         toast.success(res.data.message || `Created ${res.data.count} sessions.`);
@@ -414,6 +473,23 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
             ))}
           </SelectContent>
         </Select>
+
+        <div className="mt-3 space-y-1">
+          <Label htmlFor="one-on-one-start-date">Starting date</Label>
+          <Input
+            id="one-on-one-start-date"
+            type="date"
+            min={todayKey}
+            value={startDate}
+            disabled={!selectedOption}
+            onChange={(event) => setStartDate(event.target.value)}
+            className="w-56"
+          />
+          <p className="text-xs text-muted-foreground">
+            The month of sessions begins on the first chosen weekday on or after this date. Use different starting dates to stagger new
+            enrollees who share the same preferred day and time.
+          </p>
+        </div>
       </div>
 
       {/* Step 3: Select Tutor */}
@@ -433,18 +509,83 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
         </Select>
 
         {selectedTutorId && (
-          <div className="mt-2 rounded-md border border-border bg-background p-2 space-y-1">
-            {loadingSlots ? (
+          <div className="mt-2 rounded-md border border-border bg-background p-2 space-y-2" data-testid="tutor-day-availability">
+            {checking && !check ? (
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Loader2 className="h-3 w-3 animate-spin" /> Checking tutor availability…
               </p>
             ) : (
-              dayAvailability.map(({ day, available }) => (
-                <p key={day} className={`text-xs ${available ? "text-emerald-600" : "text-destructive"}`}>
-                  {DAY_OPTIONS.find((d) => d.value === day)?.label} {formatSlotTime(selectedTime)}:{" "}
-                  {available ? "Available" : "Not available — choose a different tutor or time"}
+              selectedDays.map((day) => {
+                const label = DAY_OPTIONS.find((d) => d.value === day)?.label;
+                const conflict = conflictForDay(day);
+                const tutorId = effectiveTutorId(day);
+                const tutorName = personDisplayName(tutors.find((t) => t._id === tutorId)) || "Tutor";
+                const alt = altTutors[day];
+                return (
+                  <div key={day} className="space-y-1" data-testid={`day-row-${day}`}>
+                    <p className={`text-xs ${conflict ? "text-destructive" : check ? "text-emerald-600" : "text-muted-foreground"}`}>
+                      {label} {formatSlotTime(selectedTime)} — {tutorName}
+                      {dayTutors[day] ? " (assigned for this day)" : ""}:{" "}
+                      {conflict ? `Not available (${formatDateKey(conflict.date)}: ${conflict.reason})` : check ? "Available" : "…"}
+                    </p>
+                    {(conflict || dayTutors[day]) && (
+                      <div className="flex flex-wrap items-center gap-2 pl-2">
+                        {dayTutors[day] ? (
+                          <Button type="button" size="sm" variant="ghost" onClick={() => setTutorForDay(day, "")}>
+                            Use {personDisplayName(tutors.find((t) => t._id === selectedTutorId)) || "first-choice tutor"} for {label}
+                          </Button>
+                        ) : null}
+                        {conflict && alt === undefined && (
+                          <Button type="button" size="sm" variant="outline" onClick={() => void loadAlternativeTutors(day)}>
+                            Assign a different tutor for {label}
+                          </Button>
+                        )}
+                        {conflict && alt === "loading" && (
+                          <span className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Finding tutors who can cover {label}…</span>
+                        )}
+                        {conflict && Array.isArray(alt) && alt.length === 0 && (
+                          <span className="text-xs text-muted-foreground">No other tutor is free on {label} at this time — try another time or starting date.</span>
+                        )}
+                        {conflict && Array.isArray(alt) && alt.length > 0 && (
+                          <Select value="" onValueChange={(value) => setTutorForDay(day, value)}>
+                            <SelectTrigger className="w-56 h-8" aria-label={`Tutor for ${label}`}>
+                              <SelectValue placeholder={`Tutor for ${label}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {alt.map((id) => (
+                                <SelectItem key={id} value={id}>{personDisplayName(tutors.find((t) => t._id === id))}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+            {check && !check.ok && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 space-y-1 dark:bg-amber-950/20 dark:text-amber-200" data-testid="start-date-suggestions">
+                <p>
+                  Some sessions from {formatDateKey(check.startDate)} can&apos;t be booked
+                  {check.slotCap ? ` (the center fits at most ${check.slotCap} one-on-one sessions per hour)` : ""}.
+                  Assign a different tutor for the blocked day, or pick a different starting date:
                 </p>
-              ))
+                {check.suggestions.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {check.suggestions.map((date) => (
+                      <Button key={date} type="button" size="sm" variant="outline" onClick={() => setStartDate(date)}>
+                        Start {formatDateKey(date)}
+                      </Button>
+                    ))}
+                  </div>
+                ) : (
+                  <p>No fully open starting date in the next 6 weeks with this tutor and time — try another tutor or time.</p>
+                )}
+              </div>
+            )}
+            {check?.ok && (
+              <p className="text-xs text-emerald-600">All sessions for the month starting {formatDateKey(check.startDate)} are available.</p>
             )}
           </div>
         )}

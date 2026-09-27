@@ -66,7 +66,19 @@ router.post(
 router.post(
   '/register-parent',
   validate([
-    body('name').notEmpty().trim().withMessage('Name is required'),
+    // The wizard sends split firstName/middleName/lastName (registerParent's own preferred
+    // shape); a single combined `name` is still accepted for older callers. Item E of
+    // "Redundant_Switchers_Settings_Rules_EnrollmentBugs.pdf" — this rule still required the
+    // old `name` field even after the wizard stopped sending it, so every registration was
+    // rejected here before the controller (which already supported both) ever ran.
+    body().custom((_, { req }) => {
+      const hasSplit = String(req.body?.firstName || '').trim() && String(req.body?.lastName || '').trim();
+      const hasName = String(req.body?.name || '').trim();
+      if (!hasSplit && !hasName) {
+        throw new Error('First name and last name are required');
+      }
+      return true;
+    }),
     emailField(),
     body('mobile').notEmpty().withMessage('Mobile number is required'),
     body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),

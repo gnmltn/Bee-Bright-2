@@ -1,61 +1,81 @@
-import { useState } from "react";
-import { GraduationCap, Camera } from "lucide-react";
+import { useEffect, useState } from "react";
+import { GraduationCap } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UserAvatar } from "@/components/UserAvatar";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { ProfilePicturePicker } from "@/components/ProfilePicturePicker";
 import { useToast } from "@/hooks/use-toast";
 import { useSelectedChild } from "@/hooks/useSelectedChild";
 import { enrollmentService } from "@/services/api";
 import { resolveUploadUrl } from "@/lib/children";
+import { sanitizeName } from "@/utils/validation";
 
 /**
  * Parent Settings → "Student Information": the currently selected child's name,
  * permanent Student ID and profile picture. Reads/writes the ONE shared selected child
- * (SelectedChildContext), so switching child here or on any other page updates
- * everything at once. The parent's OWN picture/name (header + the card above) never
- * changes with the selection.
+ * (SelectedChildContext) — displays whichever child is selected via the single "Viewing
+ * child" switcher elsewhere; no separate switch control here (item A). The parent's OWN
+ * picture/name (header + the card above) never changes with the selection.
+ *
+ * Name fields are editable the same way the parent's own Personal Information is (plain
+ * inputs + an explicit Save — item B/C); the Student ID stays locked/read-only. The picture
+ * goes through the shared preview-then-confirm flow (item D).
  */
 export function ParentStudentInfoCard() {
   const { toast } = useToast();
-  const { childList: children, activeChild, setActiveChildId, setChildPhoto, loading } = useSelectedChild();
-  const [uploading, setUploading] = useState(false);
+  const { activeChild, setChildPhoto, setChildName, loading } = useSelectedChild();
 
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.target;
-    const file = input.files?.[0];
-    if (!file || !activeChild) return;
-    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
-      toast({ title: "Invalid file", description: "Please choose a JPG, PNG, or WEBP image.", variant: "destructive" });
-      input.value = "";
+  const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [savingName, setSavingName] = useState(false);
+
+  // Resync the editable fields whenever the selected child changes (or first loads).
+  useEffect(() => {
+    setFirstName(activeChild?.firstName || "");
+    setMiddleName(activeChild?.middleName || "");
+    setLastName(activeChild?.lastName || "");
+  }, [activeChild?.key, activeChild?.firstName, activeChild?.middleName, activeChild?.lastName]);
+
+  const nameDirty = !!activeChild && (
+    firstName.trim() !== (activeChild.firstName || "")
+    || middleName.trim() !== (activeChild.middleName || "")
+    || lastName.trim() !== (activeChild.lastName || "")
+  );
+
+  const handleSaveName = async () => {
+    if (!activeChild) return;
+    if (!firstName.trim() || !lastName.trim()) {
+      toast({ title: "Error", description: "First name and last name are required.", variant: "destructive" });
       return;
     }
-    setUploading(true);
-    const childKey = activeChild.key;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const { data } = await enrollmentService.setChildPhoto(childKey, reader.result as string);
-        if (data?.success && data.studentProfileImage) {
-          setChildPhoto(childKey, data.studentProfileImage);
-          toast({ title: "Student picture updated", description: `${activeChild.name}'s profile picture has been saved.` });
-        } else {
-          toast({ title: "Error", description: data?.message || "Failed to update the picture", variant: "destructive" });
-        }
-      } catch (err) {
-        const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-        toast({ title: "Error", description: message || "Failed to update the picture", variant: "destructive" });
-      } finally {
-        setUploading(false);
-        input.value = "";
+    setSavingName(true);
+    try {
+      const { data } = await enrollmentService.setChildName(activeChild.key, firstName.trim(), middleName.trim(), lastName.trim());
+      if (data?.success) {
+        setChildName(activeChild.key, firstName.trim(), middleName.trim(), lastName.trim());
+        toast({ title: "Student name updated", description: "The change has been saved." });
+      } else {
+        toast({ title: "Error", description: data?.message || "Failed to update the name.", variant: "destructive" });
       }
-    };
-    reader.onerror = () => {
-      setUploading(false);
-      input.value = "";
-      toast({ title: "Error", description: "Failed to read the image file", variant: "destructive" });
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast({ title: "Error", description: message || "Failed to update the name.", variant: "destructive" });
+    } finally {
+      setSavingName(false);
+    }
+  };
+
+  const handlePhotoConfirm = async (dataUrl: string) => {
+    if (!activeChild) return;
+    const { data } = await enrollmentService.setChildPhoto(activeChild.key, dataUrl);
+    if (data?.success && data.studentProfileImage) {
+      setChildPhoto(activeChild.key, data.studentProfileImage);
+      toast({ title: "Student picture updated", description: `${activeChild.name}'s profile picture has been saved.` });
+    } else {
+      throw new Error(data?.message || "Failed to update the picture");
+    }
   };
 
   return (
@@ -74,55 +94,62 @@ export function ParentStudentInfoCard() {
           <p className="text-sm text-muted-foreground">No student on this account yet.</p>
         ) : (
           <>
-            {children.length > 1 && (
-              <div className="space-y-2 max-w-xs">
-                <Label>Viewing child</Label>
-                <Select value={activeChild.key} onValueChange={setActiveChildId}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {children.map((child) => (
-                      <SelectItem key={child.key} value={child.key}>
-                        {child.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="relative">
-                <UserAvatar
-                  src={resolveUploadUrl(activeChild.photoPath)}
-                  fallback={activeChild.name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "S"}
-                  size={20}
-                />
-                <label className="absolute bottom-0 right-0 flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground cursor-pointer hover:opacity-90 shadow-md">
-                  <Camera className="h-4 w-4" />
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    className="sr-only"
-                    aria-label="Change student profile picture"
-                    disabled={uploading}
-                    onChange={handlePhotoChange}
-                  />
-                </label>
+              <ProfilePicturePicker
+                src={resolveUploadUrl(activeChild.photoPath)}
+                fallback={activeChild.name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "S"}
+                size={20}
+                accept="image/png,image/jpeg,image/webp"
+                ariaLabel="Change student profile picture"
+                onConfirm={handlePhotoConfirm}
+              />
+              <div>
+                <p className="text-xs text-muted-foreground">Student ID</p>
+                <p className="font-mono font-semibold text-foreground" data-testid="student-info-id">{activeChild.studentId || "—"}</p>
               </div>
-              <dl className="space-y-1 text-sm">
-                <div>
-                  <dt className="text-muted-foreground text-xs">Student name</dt>
-                  <dd className="text-base font-semibold text-foreground" data-testid="student-info-name">{activeChild.name}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground text-xs">Student ID</dt>
-                  <dd className="font-mono font-semibold text-foreground" data-testid="student-info-id">{activeChild.studentId || "—"}</dd>
-                </div>
-              </dl>
             </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="child-firstName">First Name</Label>
+                <Input
+                  id="child-firstName"
+                  data-testid="student-info-firstname"
+                  value={firstName}
+                  onChange={(e) => setFirstName(sanitizeName(e.target.value))}
+                  placeholder="First name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="child-middleName">Middle Name <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Input
+                  id="child-middleName"
+                  data-testid="student-info-middlename"
+                  value={middleName}
+                  onChange={(e) => setMiddleName(sanitizeName(e.target.value))}
+                  placeholder="Middle name"
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="child-lastName">Last Name</Label>
+                <Input
+                  id="child-lastName"
+                  data-testid="student-info-lastname"
+                  value={lastName}
+                  onChange={(e) => setLastName(sanitizeName(e.target.value))}
+                  placeholder="Last name"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button data-testid="student-info-save" onClick={handleSaveName} disabled={!nameDirty || savingName}>
+                {savingName ? "Saving…" : "Save"}
+              </Button>
+            </div>
+
             <p className="text-xs text-muted-foreground">
-              This is your child&apos;s picture. Your own profile picture (above) does not change when you switch children.
+              This is your child&apos;s picture and name. Your own profile picture and name (above) do not change when you switch children.
             </p>
           </>
         )}

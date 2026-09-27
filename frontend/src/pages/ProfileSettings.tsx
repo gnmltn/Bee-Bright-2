@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { UserAvatar } from "@/components/UserAvatar";
+import { ProfilePicturePicker } from "@/components/ProfilePicturePicker";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -136,7 +136,6 @@ export default function ProfileSettings() {
   const [availabilitySlots, setAvailabilitySlots] = useState<AvailabilitySlot[]>(() =>
     parseAvailabilityString((user as { availability?: string })?.availability || "")
   );
-  const [profileImageUploading, setProfileImageUploading] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
@@ -337,56 +336,19 @@ export default function ProfileSettings() {
     }
   };
 
-  const handleProfileImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !file.type.startsWith("image/")) {
+  // Called only after the user has previewed the picture and explicitly confirmed
+  // "Change profile picture?" (ProfilePicturePicker) — nothing uploads before that (item D).
+  const handleProfileImageChange = async (dataUrl: string) => {
+    const { data } = await authService.uploadProfileImage(dataUrl);
+    if (data?.success && data.profileImageUrl) {
+      updateUser({ profileImageUrl: data.profileImageUrl });
       toast({
-        title: "Invalid file",
-        description: "Please select an image file (e.g. JPG, PNG, GIF, WebP).",
-        variant: "destructive",
+        title: "Profile picture updated",
+        description: "Your profile picture has been saved.",
       });
-      return;
+    } else {
+      throw new Error(data?.message || "Failed to upload profile picture");
     }
-    setProfileImageUploading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result as string;
-      try {
-        const { data } = await authService.uploadProfileImage(dataUrl);
-        if (data?.success && data.profileImageUrl) {
-          updateUser({ profileImageUrl: data.profileImageUrl });
-          toast({
-            title: "Profile picture updated",
-            description: "Your profile picture has been saved.",
-          });
-        } else {
-          toast({
-            title: "Error",
-            description: data?.message || "Failed to upload profile picture",
-            variant: "destructive",
-          });
-        }
-      } catch (err) {
-        toast({
-          title: "Error",
-          description: "Failed to upload profile picture",
-          variant: "destructive",
-        });
-      } finally {
-        setProfileImageUploading(false);
-        e.target.value = "";
-      }
-    };
-    reader.onerror = () => {
-      setProfileImageUploading(false);
-      e.target.value = "";
-      toast({
-        title: "Error",
-        description: "Failed to read image file",
-        variant: "destructive",
-      });
-    };
-    reader.readAsDataURL(file);
   };
 
   return (
@@ -401,23 +363,13 @@ export default function ProfileSettings() {
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="relative">
-                <UserAvatar
-                  src={user.profileImageUrl}
-                  fallback={`${user.firstName?.[0] || user.name?.[0] || "U"}${user.lastName?.[0] || user.name?.split(" ")[1]?.[0] || ""}`}
-                  size={20}
-                />
-                <label className="absolute bottom-0 right-0 flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground cursor-pointer hover:opacity-90 shadow-md">
-                  <User className="h-4 w-4" />
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="sr-only"
-                    disabled={profileImageUploading}
-                    onChange={handleProfileImageChange}
-                  />
-                </label>
-              </div>
+              <ProfilePicturePicker
+                src={user.profileImageUrl}
+                fallback={`${user.firstName?.[0] || user.name?.[0] || "U"}${user.lastName?.[0] || user.name?.split(" ")[1]?.[0] || ""}`}
+                size={20}
+                accept="image/*"
+                onConfirm={handleProfileImageChange}
+              />
               <div>
                 <h2 className="text-lg font-semibold">{getFullName() || user.email}</h2>
                 <p className="text-sm text-muted-foreground capitalize">{user.role}</p>

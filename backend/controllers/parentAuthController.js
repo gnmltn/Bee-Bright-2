@@ -15,7 +15,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const PendingParentSignup = require('../models/PendingParentSignup');
 const { getEmailError } = require('../utils/emailRules');
-const { sendEmail, getEmailErrorMessage, logEmailError } = require('../utils/emailService');
+const { sendEmail, getEmailErrorMessage, logEmailError, buildOtpEmailHtml } = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
 const { validateFullName, validatePhMobile, normalizeMobile, checkMobileNumberUnique, toTitleCase } = require('../utils/validation');
 
@@ -66,30 +66,12 @@ async function sendParentOtpEmail(to, otp) {
     {
       to,
       subject: 'Bee Bright — Verify your email to continue enrollment',
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:linear-gradient(135deg,#f59e0b,#d97706);padding:28px;text-align:center;border-radius:8px 8px 0 0;">
-            <h1 style="color:#fff;margin:0;font-size:24px;">🐝 Bee Bright</h1>
-            <p style="color:#fef3c7;margin:6px 0 0;font-size:14px;">Tutorial Center</p>
-          </div>
-          <div style="padding:32px;background:#fffbeb;border:1px solid #fde68a;border-top:none;border-radius:0 0 8px 8px;">
-            <h2 style="color:#92400e;margin:0 0 12px;">Email Verification</h2>
-            <p style="color:#78350f;line-height:1.6;">
-              Thank you for registering! Enter the code below to verify your email and continue with the enrollment wizard.
-            </p>
-            <div style="text-align:center;margin:28px 0;">
-              <div style="display:inline-block;background:#fff;border:2px solid #f59e0b;border-radius:12px;padding:16px 40px;">
-                <span style="font-size:36px;font-weight:700;letter-spacing:8px;color:#92400e;">${otp}</span>
-              </div>
-            </div>
-            <p style="color:#78350f;font-size:14px;text-align:center;">
-              This code expires in <strong>${OTP_TTL_MINUTES} minutes</strong>.
-            </p>
-            <p style="color:#b45309;font-size:13px;text-align:center;margin-top:20px;">
-              If you did not request this, you can safely ignore this email.
-            </p>
-          </div>
-        </div>`,
+      html: buildOtpEmailHtml({
+        title: 'Email Verification',
+        introHtml: '<p>Thank you for registering! Enter the code below to verify your email and continue with the enrollment wizard.</p>',
+        otp,
+        expiresMinutes: OTP_TTL_MINUTES,
+      }),
     },
     'parent registration OTP'
   );
@@ -118,9 +100,25 @@ const registerParent = async (req, res) => {
     const { name, email, mobile, password, draftId } = req.body;
 
     // ── Validation ──
-    const nameErr = validateFullName(name, 'Full name', { minParts: 2 });
-    if (nameErr) return res.status(400).json({ success: false, message: nameErr });
-    const cleanName = toTitleCase(name);
+    // Separate first / middle / last name fields are preferred; a single combined `name`
+    // is still accepted (older clients) and split the way it always was.
+    let firstName; let middleName; let lastName;
+    if (req.body.firstName !== undefined || req.body.lastName !== undefined) {
+      const { firstName: first, middleName: middle, lastName: last } = req.body;
+      const firstErr = validateFullName(first, 'First name', { minParts: 1 });
+      if (firstErr) return res.status(400).json({ success: false, message: firstErr });
+      const middleErr = validateFullName(middle, 'Middle name', { minParts: 1, required: false });
+      if (middleErr) return res.status(400).json({ success: false, message: middleErr });
+      const lastErr = validateFullName(last, 'Last name', { minParts: 1 });
+      if (lastErr) return res.status(400).json({ success: false, message: lastErr });
+      firstName = toTitleCase(first);
+      middleName = String(middle ?? '').trim() ? toTitleCase(middle) : '';
+      lastName = toTitleCase(last);
+    } else {
+      const nameErr = validateFullName(name, 'Full name', { minParts: 2 });
+      if (nameErr) return res.status(400).json({ success: false, message: nameErr });
+      ({ firstName, middleName, lastName } = splitName(toTitleCase(name)));
+    }
 
     const normalizedEmail = normalizeEmail(email);
     const emailErr = getEmailError(normalizedEmail);
@@ -176,7 +174,6 @@ const registerParent = async (req, res) => {
       await PendingParentSignup.deleteOne({ _id: sessionPending._id }).catch(() => {});
     }
 
-    const { firstName, middleName, lastName } = splitName(cleanName);
     const emailChanged = !!pending && pending.email !== normalizedEmail;
     const passwordHash = await bcrypt.hash(password, 10);
 

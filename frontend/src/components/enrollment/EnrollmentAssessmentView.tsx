@@ -1,4 +1,4 @@
-import { ratingLabel, type PreEnrollmentAssessment } from '@/components/enrollment/assessment-types';
+import { ratingLabel, assessedByDisplayLabel, type PreEnrollmentAssessment } from '@/components/enrollment/assessment-types';
 
 interface Props {
   assessment?: PreEnrollmentAssessment | null;
@@ -74,7 +74,7 @@ export function EnrollmentAssessmentView({ assessment, compact }: Props) {
       ) : null}
 
       {assessment.assessedBy ? (
-        <p><span className="text-muted-foreground">{snapshot?.assessedByLabel || 'Assessed by'}:</span> {assessment.assessedBy}</p>
+        <p><span className="text-muted-foreground">{assessedByDisplayLabel(snapshot?.assessedByLabel)}:</span> {assessment.assessedBy}</p>
       ) : null}
     </div>
   );
