@@ -732,7 +732,12 @@ async function processSubstitutionForSchedule({
   schedule.substitutionStatus = 'in_progress';
   schedule.substitutionRequestSource = triggerSource;
   schedule.substitutionTimestamp = new Date();
-  schedule.substitutionReason = String(reason || 'Tutor unavailable').trim() || 'Tutor unavailable';
+  // What THIS action's own reason was, for the permanent log entry below — captured
+  // separately from `schedule.substitutionReason` (the schedule's own "current" reason
+  // field) because a clean "revert to original" clears that field back to '' once nothing
+  // is substituted anymore, but the log must still record why this specific action happened.
+  const thisActionReason = String(reason || 'Tutor unavailable').trim() || 'Tutor unavailable';
+  schedule.substitutionReason = thisActionReason;
 
   if ((schedule.substitutionAttemptCount || 0) >= MAX_SUBSTITUTION_ATTEMPTS && !replacementTutorId) {
     schedule.substitutionStatus = 'substitute_required';
@@ -744,7 +749,7 @@ async function processSubstitutionForSchedule({
       originalTutorId,
       status: 'substitute_required',
       triggerSource,
-      reason: schedule.substitutionReason,
+      reason: thisActionReason,
       actedBy,
       metadata: { maxAttemptsReached: true },
       session
@@ -781,7 +786,7 @@ async function processSubstitutionForSchedule({
       originalTutorId,
       status: 'substitute_required',
       triggerSource,
-      reason: schedule.substitutionReason,
+      reason: thisActionReason,
       actedBy,
       metadata: { attempt: schedule.substitutionAttemptCount },
       session
@@ -842,8 +847,51 @@ async function processSubstitutionForSchedule({
   if (replacedTutorIsPrimary) {
     schedule.tutor = resolvedReplacementTutorId;
   }
-  schedule.isSubstitution = true;
-  schedule.substitutionStatus = 'assigned';
+
+  // "Revert to original tutor" ("what to do (10).pdf"): swapping the PRIMARY seat back to
+  // exactly who this schedule's substitution history says was there before ANY substitution
+  // ever happened is a genuine return to baseline, not just another substitution — without
+  // this, `isSubstitution` stayed true forever and the "Substitute tutor assigned" banner
+  // never cleared, even once the original tutor was back. Scoped to the primary seat only:
+  // `originalTutor` is a single whole-schedule field that only ever reliably tracks the
+  // primary slot's pre-substitution occupant, not an arbitrary Playgroup co-tutor's — a
+  // co-tutor revert still works (via the normal substitute-assignment path below), it just
+  // doesn't get this auto-clear treatment.
+  // `originalTutorId` may already be a POPULATED user doc (the query above populates
+  // `originalTutor` for display elsewhere) — pull its `_id` out before comparing, or this
+  // always evaluates false against a plain ID string (a real bug caught in live testing:
+  // String({...}) is "[object Object]", never equal to any tutor's hex id).
+  const originalTutorIdStr = String(originalTutorId?._id || originalTutorId);
+  const isRevertToOriginal = replacedTutorIsPrimary && String(resolvedReplacementTutorId) === originalTutorIdStr;
+  let stillHasActiveSubstitute = !isRevertToOriginal;
+  if (isRevertToOriginal) {
+    // Even with the primary genuinely back to normal, a Playgroup co-tutor elsewhere in the
+    // roster might still be a live substitute — the whole-session flag must stay true then.
+    const otherCurrentTutorIds = schedule.tutors.map(String).filter((id) => id !== String(resolvedReplacementTutorId));
+    if (otherCurrentTutorIds.length > 0) {
+      const coTutorStillSubstituted = await ScheduleSubstitutionLog.exists({
+        schedule: schedule._id,
+        substituteTutor: { $in: otherCurrentTutorIds },
+        status: 'assigned'
+      });
+      stillHasActiveSubstitute = Boolean(coTutorStillSubstituted);
+    }
+  }
+
+  if (stillHasActiveSubstitute) {
+    schedule.isSubstitution = true;
+    schedule.substitutionStatus = 'assigned';
+  } else {
+    schedule.isSubstitution = false;
+    schedule.substitutionStatus = 'none';
+    schedule.originalTutor = null;
+    schedule.substituteTutor = null;
+    // `substitutionReason` is deliberately left as `thisActionReason` (e.g. "Reverted to
+    // original tutor") rather than cleared — the "Substitute tutor assigned" banner already
+    // never renders once `isSubstitution` is false, and the notification email below reads
+    // this same field for its "Reason" line, which must still say why the schedule just
+    // changed, not silently fall back to "Tutor unavailable".
+  }
   schedule.substitutedAt = new Date();
   schedule.substitutedBy = actedBy || null;
   schedule.substitutionAttemptCount = (schedule.substitutionAttemptCount || 0) + 1;
@@ -855,7 +903,7 @@ async function processSubstitutionForSchedule({
     substituteTutorId: resolvedReplacementTutorId,
     status: 'assigned',
     triggerSource,
-    reason: schedule.substitutionReason,
+    reason: thisActionReason,
     actedBy,
     metadata: { attempt: schedule.substitutionAttemptCount },
     session
@@ -3164,166 +3212,6 @@ const assignSubstituteTutor = async (req, res) => {
   }
 };
 
-// @desc    Mark tutor unavailable (manual) and auto-assign substitutes where possible
-// @route   POST /api/schedules/tutor-unavailability
-// @access  Private (Admin/Super Admin)
-const markTutorUnavailability = async (req, res) => {
-  try {
-    const { tutorId, startDate, endDate, reason, autoAssign = true } = req.body || {};
-    if (!tutorId || !startDate || !endDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'tutorId, startDate and endDate are required'
-      });
-    }
-
-    const tutor = await User.findOne({ _id: tutorId, role: 'tutor' })
-      .select('firstName middleName lastName email')
-      .lean();
-    if (!tutor) {
-      return res.status(404).json({ success: false, message: 'Tutor not found' });
-    }
-
-    const start = toUtcDayStart(startDate);
-    const end = toUtcDayEnd(endDate);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
-      return res.status(400).json({ success: false, message: 'Invalid date range' });
-    }
-
-    const marker = await TutorUnavailability.create({
-      tutor: tutorId,
-      startDate: start,
-      endDate: end,
-      reason: String(reason || '').trim(),
-      markedBy: req.user.id,
-      autoAssigned: Boolean(autoAssign)
-    });
-
-    // A Playgroup session can have this tutor as a CO-tutor (in `tutors[]`) rather than the
-    // primary `tutor` field — matching only `tutor` silently skipped every such session
-    // ("bug (8).pdf": Repro 2's "0 reassigned, 0 unresolved" on a multi-tutor session).
-    const schedules = await Schedule.find({
-      $or: [{ tutor: tutorId }, { tutors: tutorId }],
-      date: { $gte: start, $lte: end }
-    })
-      .populate('student', 'firstName middleName lastName email')
-      .populate('tutor', 'firstName middleName lastName email')
-      .populate('subject', 'name code');
-
-    const reassigned = [];
-    const unresolved = [];
-
-    for (const schedule of schedules) {
-      if (!autoAssign) {
-        schedule.substitutionStatus = 'substitute_required';
-        schedule.substitutionRequestSource = 'admin_marked_absent';
-        schedule.substitutionTimestamp = new Date();
-        schedule.substitutionReason = String(reason || 'Tutor unavailable').trim() || 'Tutor unavailable';
-        await schedule.save();
-
-        await createSubstitutionLog({
-          scheduleId: schedule._id,
-          originalTutorId: schedule.originalTutor || schedule.tutor,
-          status: 'substitute_required',
-          triggerSource: 'admin_marked_absent',
-          reason: schedule.substitutionReason,
-          actedBy: req.user.id,
-          metadata: { autoAssign: false }
-        });
-
-        await notifyNoSubstituteAlert({
-          schedule,
-          reason: schedule.substitutionReason
-        });
-
-        unresolved.push({
-          scheduleId: schedule._id,
-          date: schedule.date,
-          startTime: schedule.startTime,
-          endTime: schedule.endTime
-        });
-        continue;
-      }
-
-      const txResult = await runTransactionSafe((session) => processSubstitutionForSchedule({
-        scheduleId: schedule._id,
-        triggerSource: 'admin_marked_absent',
-        reason: String(reason || 'Tutor unavailable').trim() || 'Tutor unavailable',
-        actedBy: req.user.id,
-        replacementTutorId: null,
-        // On a multi-tutor Playgroup session, this is what actually says WHICH of the
-        // assigned tutors is the one being marked unavailable — without it, the default
-        // (the primary `tutor` field) could substitute out the WRONG tutor, leaving the
-        // genuinely-unavailable one still on the session.
-        replacedTutorId: tutorId,
-        allowAlreadyAssigned: false,
-        session
-      }));
-
-      if (txResult.status === 'assigned' && txResult.skipped) {
-        continue;
-      }
-
-      if (txResult.status !== 'assigned') {
-        await notifyNoSubstituteAlert({
-          schedule: txResult.schedule,
-          reason: txResult.schedule.substitutionReason
-        });
-        unresolved.push({
-          scheduleId: txResult.schedule._id,
-          date: txResult.schedule.date,
-          startTime: txResult.schedule.startTime,
-          endTime: txResult.schedule.endTime
-        });
-        continue;
-      }
-
-      reassigned.push({
-        scheduleId: txResult.schedule._id,
-        replacementTutorId: txResult.replacementTutor?._id || txResult.replacementTutor
-      });
-
-      await notifyScheduleSubstitution({
-        schedule: txResult.schedule,
-        previousTutor: txResult.previousTutor,
-        replacementTutor: txResult.replacementTutor,
-        reason: txResult.schedule.substitutionReason
-      });
-    }
-
-    logAudit({
-      req,
-      userId: req.user.id,
-      action: 'Mark Tutor Unavailable',
-      module: 'Academic',
-      description: 'Admin marked tutor unavailable and processed substitutions',
-      status: 'SUCCESS',
-      metadata: {
-        tutorId,
-        startDate: start,
-        endDate: end,
-        autoAssign: Boolean(autoAssign),
-        reassignedCount: reassigned.length,
-        unresolvedCount: unresolved.length
-      }
-    }).catch(() => {});
-
-    return res.status(200).json({
-      success: true,
-      message: 'Tutor unavailability recorded',
-      unavailability: marker,
-      affectedSchedules: schedules.length,
-      reassigned,
-      unresolved
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to mark tutor unavailability'
-    });
-  }
-};
-
 // ─── Section 3: Suspension (system-wide) & Emergency (single-student) auto-adjust ──
 // Two deliberately separate functions — see BeeBright Scheduling Spec Section 3. Both
 // reuse the same conflict-checking primitives as the rest of this file
@@ -4058,7 +3946,6 @@ module.exports = {
   assignSubstituteTutor,
   announceTutorAbsence,
   triggerAttendanceTimeoutSubstitution,
-  markTutorUnavailability,
   suspendDates,
   listSuspensions,
   emergencyReschedule,

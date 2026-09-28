@@ -46,6 +46,19 @@ test('computeRemainingBalance: a submitted remaining payment is under review, no
   assert.equal(r.remaining, 1200);
 });
 
+test('computeRemainingBalance: a remaining payment with its PROOF verified but not yet Approved is still "under review", not "owed" or paid ("bug (12).pdf")', () => {
+  // The Payments tab's new 2-step Verify-then-Approve flow marks proofVerifiedAt while
+  // deliberately leaving `status: 'submitted'` until Approve runs — this must not make the
+  // balance briefly look settled (or re-owed) in the gap between the two steps.
+  const r = computeRemainingBalance({ status: 'approved', totalFee: 2400 }, [
+    { status: 'verified', paymentType: 'down', amountPaid: 1200 },
+    { status: 'submitted', paymentType: 'remaining', amount: 1200, proofVerifiedAt: new Date() },
+  ]);
+  assert.equal(r.owed, false);
+  assert.equal(r.underReview, true);
+  assert.equal(r.remaining, 1200);
+});
+
 test('computeRemainingBalance: fully paid, rejected and cancelled enrollments owe nothing', () => {
   const full = [{ status: 'verified', paymentType: 'down', amountPaid: 1200 }, { status: 'verified', paymentType: 'remaining', amountPaid: 1200 }];
   assert.equal(computeRemainingBalance({ status: 'approved', totalFee: 2400 }, full).remaining, 0);

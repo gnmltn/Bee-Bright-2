@@ -24,7 +24,6 @@ const {
   assignSubstituteTutor,
   announceTutorAbsence,
   triggerAttendanceTimeoutSubstitution,
-  markTutorUnavailability,
   suspendDates,
   listSuspensions,
   emergencyReschedule,
@@ -51,7 +50,6 @@ router.post('/:id/enroll-student', protect, authorize('admin'), enrollStudentInS
 router.post('/:id/remove-student', protect, authorize('admin'), removeStudentFromSession);
 router.post('/:id/announce-absence', protect, authorize('tutor'), announceTutorAbsence);
 router.post('/:id/auto-substitute-timeout', protect, authorize('admin'), triggerAttendanceTimeoutSubstitution);
-router.post('/tutor-unavailability', protect, authorize('admin'), markTutorUnavailability);
 router.post('/suspend', protect, authorize('admin'), suspendDates);
 router.get('/suspensions', protect, authorize('admin'), listSuspensions);
 router.post('/:id/emergency-reschedule', protect, authorize('admin'), emergencyReschedule);

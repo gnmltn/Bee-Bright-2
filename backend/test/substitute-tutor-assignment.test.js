@@ -84,13 +84,14 @@ function makePlaygroupSchedule(overrides = {}) {
   return doc;
 }
 
-function stubCommon({ schedule, extraTutorLookups = {}, enrollments = [] }) {
+function stubCommon({ schedule, extraTutorLookups = {}, enrollments = [], coTutorStillSubstituted = false }) {
   const origScheduleFindById = Schedule.findById;
   const origScheduleFind = Schedule.find;
   const origUserFindOne = User.findOne;
   const origUserFindById = User.findById;
   const origTutorUnavailabilityExists = TutorUnavailability.exists;
   const origLogCreate = ScheduleSubstitutionLog.create;
+  const origLogExists = ScheduleSubstitutionLog.exists;
   const origEnrollmentFind = Enrollment.find;
 
   // Same mutable doc returned every time — mutations from processSubstitutionForSchedule
@@ -102,6 +103,9 @@ function stubCommon({ schedule, extraTutorLookups = {}, enrollments = [] }) {
   User.findById = (id) => mockQuery({ _id: id, firstName: extraTutorLookups[id]?.firstName || 'New', lastName: extraTutorLookups[id]?.lastName || 'Tutor', email: `${id}@example.com` });
   TutorUnavailability.exists = async () => false;
   ScheduleSubstitutionLog.create = async () => [{}];
+  // "Revert to original tutor" clean-baseline check — whether some OTHER currently-assigned
+  // (Playgroup co-)tutor still has a live substitution of their own. False by default.
+  ScheduleSubstitutionLog.exists = async () => coTutorStillSubstituted;
   // Playgroup parent-notification lookup — empty by default (no parent found => no parent
   // emails sent); tests that care about it pass their own `enrollments` fixture.
   Enrollment.find = () => mockQuery(enrollments);
@@ -114,6 +118,7 @@ function stubCommon({ schedule, extraTutorLookups = {}, enrollments = [] }) {
       User.findById = origUserFindById;
       TutorUnavailability.exists = origTutorUnavailabilityExists;
       ScheduleSubstitutionLog.create = origLogCreate;
+      ScheduleSubstitutionLog.exists = origLogExists;
       Enrollment.find = origEnrollmentFind;
     },
   };
@@ -162,6 +167,97 @@ test('assignSubstituteTutor: multi-tutor session — replacing the PRIMARY tutor
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(String(schedule.tutor), 'maria-co');
     assert.deepEqual(schedule.tutors.map(String), ['maria-co', 'mariana']);
+  } finally { restore(); }
+});
+
+// ── "Revert to original tutor" ("what to do (10).pdf") ────────────────────────────────────
+test('assignSubstituteTutor: a fresh (non-revert) substitution still sets isSubstitution/substitutionStatus normally — no regression', async () => {
+  const schedule = makePlaygroupSchedule({ sessionType: 'one-on-one', tutors: ['jake'], isSubstitution: false, substitutionStatus: 'none' });
+  const { restore } = stubCommon({ schedule });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({ params: { id: 'sched-pg-1' }, user: { id: 'admin-1' }, body: { replacementTutorId: 'maria', reason: 'Tutor is sick' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(schedule.isSubstitution, true);
+    assert.equal(schedule.substitutionStatus, 'assigned');
+    assert.equal(String(schedule.originalTutor), 'jake');
+    assert.equal(String(schedule.substituteTutor), 'maria');
+    assert.equal(schedule.substitutionReason, 'Tutor is sick');
+  } finally { restore(); }
+});
+
+test('assignSubstituteTutor: reverting a 1-on-1 session\'s substitute back to the original tutor clears the substitution flags cleanly', async () => {
+  const schedule = makePlaygroupSchedule({
+    sessionType: 'one-on-one',
+    tutor: { _id: 'jake', firstName: 'Jake', lastName: 'Soriano', email: 'jake@example.com' }, // the CURRENT substitute
+    tutors: ['jake'],
+    // Populated, not a bare id string — the real query populates `originalTutor` for
+    // display, and a same-value comparison against it must unwrap `_id` or it silently
+    // never matches (caught live: String({...}) !== any tutor's hex id).
+    originalTutor: { _id: 'orig-tutor', firstName: 'Original', lastName: 'Tutor', email: 'orig-tutor@example.com' },
+    substituteTutor: 'jake',
+    isSubstitution: true,
+    substitutionStatus: 'assigned',
+    substitutionReason: 'Tutor unavailable',
+  });
+  capturedEmails.length = 0;
+  const { restore } = stubCommon({ schedule, extraTutorLookups: { 'orig-tutor': { firstName: 'Original', lastName: 'Tutor' } } });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({
+      params: { id: 'sched-pg-1' },
+      user: { id: 'admin-1' },
+      body: { replacementTutorId: 'orig-tutor', replacedTutorId: 'jake', reason: 'Reverted to original tutor' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(String(schedule.tutor), 'orig-tutor', 'the primary tutor field must show the original tutor again');
+    assert.deepEqual(schedule.tutors.map(String), ['orig-tutor']);
+    assert.equal(schedule.isSubstitution, false, 'no leftover "substitute assigned" flag once genuinely back to the original tutor');
+    assert.equal(schedule.substitutionStatus, 'none');
+    assert.equal(schedule.originalTutor, null, 'nothing left to track — the schedule is back to its pre-substitution baseline');
+    assert.equal(schedule.substituteTutor, null);
+    assert.equal(schedule.substitutionReason, 'Reverted to original tutor', 'the log/notification reason must reflect what actually just happened, not silently reset');
+
+    // Both the outgoing substitute (Jake) and the returning original tutor must be notified,
+    // and BOTH emails must carry the real reason, not a stale/fallback "Tutor unavailable".
+    // (The replacement-tutor lookup is a fresh User.findById, whose stub always computes
+    // `${id}@example.com` regardless of extraTutorLookups — only the name fields honor it.)
+    const toJake = capturedEmails.find((e) => e.to === 'jake@example.com');
+    const toOriginal = capturedEmails.find((e) => e.to === 'orig-tutor@example.com');
+    assert.ok(toJake, 'expected the outgoing substitute to be notified');
+    assert.ok(toOriginal, 'expected the returning original tutor to be notified');
+    assert.match(toJake.text, /Reason: Reverted to original tutor/);
+    assert.match(toOriginal.text, /Reason: Reverted to original tutor/);
+    assert.doesNotMatch(toOriginal.text, /Reason: Tutor unavailable/);
+  } finally { restore(); }
+});
+
+test('assignSubstituteTutor: reverting a Playgroup session\'s PRIMARY tutor while a co-tutor is STILL substituted keeps isSubstitution true', async () => {
+  const schedule = makePlaygroupSchedule({
+    tutor: { _id: 'jake', firstName: 'Jake', lastName: 'Soriano', email: 'jake@example.com' }, // current substitute in the PRIMARY seat
+    tutors: ['jake', 'maria-co'], // maria-co is a co-tutor who is ALSO currently a live substitute
+    originalTutor: { _id: 'orig-tutor', firstName: 'Original', lastName: 'Tutor', email: 'orig-tutor@example.com' },
+    substituteTutor: 'jake',
+    isSubstitution: true,
+    substitutionStatus: 'assigned',
+  });
+  const { restore } = stubCommon({
+    schedule,
+    extraTutorLookups: { 'orig-tutor': { firstName: 'Original', lastName: 'Tutor' } },
+    coTutorStillSubstituted: true, // maria-co's own substitution log entry still exists
+  });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({
+      params: { id: 'sched-pg-1' },
+      user: { id: 'admin-1' },
+      body: { replacementTutorId: 'orig-tutor', replacedTutorId: 'jake', reason: 'Reverted to original tutor' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(String(schedule.tutor), 'orig-tutor', 'the primary seat itself is correctly restored');
+    assert.deepEqual(schedule.tutors.map(String), ['orig-tutor', 'maria-co'], 'the co-tutor is left completely untouched');
+    assert.equal(schedule.isSubstitution, true, 'the whole session still has an active substitute (maria-co) — the flag must not be cleared');
+    assert.equal(schedule.substitutionStatus, 'assigned');
   } finally { restore(); }
 });
 

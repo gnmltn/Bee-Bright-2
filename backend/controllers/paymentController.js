@@ -11,6 +11,7 @@ const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { validateName, validatePhoneNoLetters } = require('../utils/validation');
 const { listOutstandingBalances } = require('../utils/remainingBalance');
 const { getEmailError } = require('../utils/emailRules');
+const { sendPaymentVerifiedEmail } = require('../services/enrollmentService');
 
 const generateEnrollmentReference = () =>
   `BRGHT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -747,8 +748,13 @@ const getPendingPayments = async (req, res) => {
   }
 };
 
-// @desc Verify payment (Admin)
-// @route PUT /api/admin/payments/:paymentId/verify
+// Remaining-balance payments only ("bug (12).pdf" — Payments tab gap left by Group V, which
+// removed Verify/Reject entirely and left this payment type with no way to be actioned at
+// all). Down/full payments tied to a pending enrollment are still decided exclusively via
+// the Enrollments tab's Approve/Reject — this endpoint refuses them below.
+//
+// @desc   Mark a remaining-balance payment's proof verified, or reject it (Admin)
+// @route  PUT /api/payments/admin/payments/:paymentId/verify
 // @access Private (Admin)
 const verifyPayment = async (req, res) => {
   try {
@@ -757,132 +763,118 @@ const verifyPayment = async (req, res) => {
     const adminId = req.user.id;
 
     const payment = await Payment.findById(paymentId).populate('enrollment');
-
     if (!payment) {
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+    if (payment.paymentType !== 'remaining') {
+      return res.status(400).json({
         success: false,
-        message: 'Payment not found'
+        message: 'Down/initial payments are verified from the Enrollments tab, not here.'
       });
     }
 
-    let enrollment = payment.enrollment;
-    // Payment is always split 50/50 (down payment at enrollment, remaining balance
-    // later) — a 'remaining' payment must never be treated as "the whole enrollment
-    // just became fully paid and active" the way a down payment is.
-    const isRemainingBalance = payment.paymentType === 'remaining';
-    // `payment.student` is a legacy field from the old direct-student-login flow and
-    // is never populated by the current parent-account enrollment wizard (Payment is
-    // created with only `parent` set — see enrollmentController.js's submitEnrollment).
-    // Using it here silently no-ops the User update below, which is exactly why
-    // "Verify" on the Payments tab previously left the Users tab / login gate stuck
-    // on "inactive — pending payment" even though Enrollments tab + tracker showed
-    // active. Resolve the real account the same way adminApproveEnrollment does.
-    const targetUserId = payment.parent || enrollment?.parent || payment.student;
+    const enrollment = payment.enrollment;
+    if (!enrollment) {
+      return res.status(400).json({ success: false, message: 'This payment has no linked enrollment.' });
+    }
 
     if (verified) {
-      if (!enrollment) {
-        enrollment = await ensureEnrollmentForPayment(payment, payment.student);
-      }
-
-      if (!enrollment) {
-        return res.status(400).json({
-          success: false,
-          message: 'Missing enrollment checkout data for this payment.'
-        });
-      }
-
-      // Verify payment
-      payment.status = 'verified';
-      payment.verifiedAt = new Date();
-      payment.verifiedBy = adminId;
-      payment.amountPaid = payment.amountDue || payment.amount;
-
-      // Update enrollment
-      if (enrollment) {
-        enrollment.paymentStatus = isRemainingBalance ? 'paid' : 'partial';
-        enrollment.status = 'active';
-        await enrollment.save();
-      }
-
-      if (!isRemainingBalance && targetUserId) {
-        // Mirror adminApproveEnrollment's user activation exactly — this is the same
-        // "is this account approved and able to log in" gate the Enrollments tab's
-        // Approve button already updates correctly.
-        await User.findByIdAndUpdate(targetUserId, {
-          $set: { isActive: true, enrollmentStatus: 'active', paymentStatus: 'verified', enrollmentDraft: false },
-          $unset: { draftExpiresAt: 1 },
-        });
-      }
-
+      // "Verify" only confirms the proof looks legitimate — it deliberately does NOT
+      // touch `status` or the enrollment's balance yet (see the Payment model comment
+      // on `proofVerifiedAt`). "Approve" below is the separate step that finalizes it,
+      // mirroring the Enrollments tab's own verify-then-approve pattern (Group AH).
+      payment.proofVerifiedAt = new Date();
+      payment.proofVerifiedBy = adminId;
       await payment.save();
 
       logAudit({
-        req,
-        userId: adminId,
-        action: 'Verify Payment',
-        module: 'Payment',
-        description: 'Admin verified payment',
-        status: 'SUCCESS',
+        req, userId: adminId, action: 'Verify Payment Proof', module: 'Payment',
+        description: 'Admin verified remaining-balance payment proof', status: 'SUCCESS',
         metadata: { paymentId, amount: payment.amount, paymentMethod: payment.paymentMethod }
       }).catch(() => {});
 
-      res.status(200).json({
-        success: true,
-        message: 'Payment verified successfully',
-        payment
+      return res.status(200).json({ success: true, message: 'Payment proof verified.', payment });
+    }
+
+    // Reject — the parent still owes this amount and can resubmit; never touches the
+    // already-active enrollment's status or the parent's account access.
+    payment.status = 'rejected';
+    payment.rejectionReason = rejectionReason || 'Payment verification failed';
+    payment.proofVerifiedAt = null;
+    payment.proofVerifiedBy = null;
+    enrollment.paymentStatus = 'partial';
+    await Promise.all([payment.save(), enrollment.save()]);
+
+    logAudit({
+      req, userId: adminId, action: 'Reject Payment', module: 'Payment',
+      description: 'Admin rejected remaining-balance payment', status: 'SUCCESS',
+      metadata: { paymentId, amount: payment.amount }
+    }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Payment rejected', payment });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc   Finalize a remaining-balance payment as accepted (balance marked paid). Blocked
+//         until the proof has been verified first — same block-not-warn idiom as
+//         adminApproveEnrollment (Group AH): only a hard block guarantees the payment can
+//         never end up "paid" while its own proof was never actually checked.
+// @route  PATCH /api/payments/admin/payments/:paymentId/approve
+// @access Private (Admin)
+const approveRemainingPayment = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const adminId = req.user.id;
+
+    const payment = await Payment.findById(paymentId).populate('enrollment');
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+    if (payment.paymentType !== 'remaining') {
+      return res.status(400).json({
+        success: false,
+        message: 'Down/initial payments are approved from the Enrollments tab, not here.'
       });
-
-    } else {
-      // Reject payment
-      payment.status = 'rejected';
-      payment.rejectionReason = rejectionReason || 'Payment verification failed';
-
-      // Update enrollment — rejecting a remaining-balance payment only means the
-      // parent still owes it and can resubmit; it must never cancel an already-active
-      // enrollment or deactivate the parent's account the way a rejected down
-      // payment does.
-      if (enrollment) {
-        if (isRemainingBalance) {
-          enrollment.paymentStatus = 'partial';
-        } else {
-          enrollment.paymentStatus = 'failed';
-          enrollment.status = 'cancelled';
-        }
-        await enrollment.save();
-      }
-
-      if (!isRemainingBalance && targetUserId) {
-        await User.findByIdAndUpdate(targetUserId, {
-          enrollmentStatus: 'payment_rejected',
-          paymentStatus: 'rejected',
-          isActive: false
-        });
-      }
-
-      await payment.save();
-
-      logAudit({
-        req,
-        userId: adminId,
-        action: 'Reject Payment',
-        module: 'Payment',
-        description: 'Admin rejected payment',
-        status: 'SUCCESS',
-        metadata: { paymentId, amount: payment.amount }
-      }).catch(() => {});
-
-      res.status(200).json({
-        success: true,
-        message: 'Payment rejected',
-        payment
+    }
+    const enrollment = payment.enrollment;
+    if (!enrollment) {
+      return res.status(400).json({ success: false, message: 'This payment has no linked enrollment.' });
+    }
+    if (!payment.proofVerifiedAt) {
+      return res.status(400).json({
+        success: false,
+        code: 'PROOF_NOT_VERIFIED',
+        message: 'This payment\'s proof has not been verified yet. Please verify it before approving, to avoid a conflict between the payment and balance status.'
       });
     }
 
+    payment.status = 'verified';
+    payment.verifiedAt = new Date();
+    payment.verifiedBy = adminId;
+    payment.amountPaid = payment.amountDue || payment.amount;
+    enrollment.paymentStatus = 'paid';
+    await Promise.all([payment.save(), enrollment.save()]);
+
+    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    if (parentUser?.email) {
+      sendPaymentVerifiedEmail(parentUser.email, {
+        parentName: `${parentUser.firstName} ${parentUser.lastName}`,
+        studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
+        enrollmentId: enrollment.permanentStudentId || enrollment.enrollmentId,
+      }).catch(() => {});
+    }
+
+    logAudit({
+      req, userId: adminId, action: 'Approve Payment', module: 'Payment',
+      description: 'Admin approved remaining-balance payment — balance marked paid', status: 'SUCCESS',
+      metadata: { paymentId, amount: payment.amount }
+    }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Payment approved. Balance marked as paid.', payment, enrollment });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -945,6 +937,7 @@ module.exports = {
   getAdminPayments,
   getPendingPayments,
   verifyPayment,
+  approveRemainingPayment,
   // exported for tests
   splitValidAndInvalidPayments,
 };

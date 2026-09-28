@@ -582,6 +582,14 @@ export default function AdminDashboard() {
   // parent's bills can have different remaining amounts across children).
   const [paidOnsiteConfirm, setPaidOnsiteConfirm] = useState<{ enrollmentId: string; parentName: string; childName: string; remaining: number } | null>(null);
   const [paidOnsiteLoading, setPaidOnsiteLoading] = useState(false);
+  // "bug (12).pdf" — Payments tab Verify/Approve/Reject for remaining-balance payments only
+  // (down/initial payments stay Enrollments-tab-only, per the earlier Group V change).
+  const [remainingVerifyingId, setRemainingVerifyingId] = useState<string | null>(null);
+  const [remainingApprovingId, setRemainingApprovingId] = useState<string | null>(null);
+  const [remainingProofNotVerifiedOpen, setRemainingProofNotVerifiedOpen] = useState(false);
+  const [remainingRejectPaymentId, setRemainingRejectPaymentId] = useState<string | null>(null);
+  const [remainingRejectReason, setRemainingRejectReason] = useState("");
+  const [remainingRejectLoading, setRemainingRejectLoading] = useState(false);
   // Parent/Guardian rows in the Users table expand to show that parent's children.
   const [parentChildren, setParentChildren] = useState<Record<string, ParentChild[]>>({});
   const [expandedParentIds, setExpandedParentIds] = useState<string[]>([]);
@@ -607,6 +615,17 @@ export default function AdminDashboard() {
   const [selectedSchedule, setSelectedSchedule] = useState<AdminSchedule | null>(null);
   const [selectedScheduleIds, setSelectedScheduleIds] = useState<string[]>([]);
   const [scheduleBulkDeleting, setScheduleBulkDeleting] = useState(false);
+  // Custom confirmation modal replacing the native browser confirm() for schedule
+  // deletion (single + bulk) — one shared dialog, the actual delete action is stashed as a
+  // callback and run only if the admin confirms.
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmCount, setDeleteConfirmCount] = useState(1);
+  const [deleteConfirmAction, setDeleteConfirmAction] = useState<(() => void) | null>(null);
+  const requestDeleteConfirmation = (count: number, action: () => void) => {
+    setDeleteConfirmCount(count);
+    setDeleteConfirmAction(() => action);
+    setDeleteConfirmOpen(true);
+  };
   const [scheduleEnrollmentSelectedStudentIds, setScheduleEnrollmentSelectedStudentIds] = useState<string[]>([]);
   const [scheduleEnrollmentSaving, setScheduleEnrollmentSaving] = useState(false);
   const [scheduleEnrollmentOverride, setScheduleEnrollmentOverride] = useState(false);
@@ -667,17 +686,18 @@ export default function AdminDashboard() {
   const [substituteReplacementMap, setSubstituteReplacementMap] = useState<Record<string, string>>({});
   const [substituteReason, setSubstituteReason] = useState("Tutor unavailable");
   const [substituteLoading, setSubstituteLoading] = useState(false);
-
-  // "Mark tutor unavailable (day)" — see "bug (8).pdf". Same "which tutor" ambiguity as
-  // Assign Substitute Tutor for a multi-tutor Playgroup session; also doubles as the
-  // missing confirmation step Repro 1 flagged (it previously fired with a single click
-  // and no confirmation at all, for either session type).
-  const [markUnavailableDialogOpen, setMarkUnavailableDialogOpen] = useState(false);
-  const [markUnavailableTutors, setMarkUnavailableTutors] = useState<{ _id: string; name: string }[]>([]);
-  // Playgroup (2+ tutors on the session) allows marking several unavailable in one action;
-  // for a 1-on-1 session this array always holds exactly the one tutor, pre-selected.
-  const [markUnavailableTutorIds, setMarkUnavailableTutorIds] = useState<string[]>([]);
-  const [markUnavailableLoading, setMarkUnavailableLoading] = useState(false);
+  // "Revert to original tutor" — one-click swap back to whoever this schedule's primary
+  // tutor was before any substitution, reusing the same assignSubstitute endpoint.
+  const [revertingScheduleId, setRevertingScheduleId] = useState<string | null>(null);
+  // Bulk "Assign Substitute Tutor" across multiple checked calendar entries
+  // (selectedScheduleIds) — one replacement tutor applied to every selected session's
+  // PRIMARY tutor, each independently validated server-side (same assignSubstitute call
+  // the single-schedule dialog already uses, just looped).
+  const [bulkSubstituteDialogOpen, setBulkSubstituteDialogOpen] = useState(false);
+  const [bulkSubstituteTutorOptions, setBulkSubstituteTutorOptions] = useState<{ _id: string; name: string; email?: string }[]>([]);
+  const [bulkSubstituteTutorId, setBulkSubstituteTutorId] = useState("");
+  const [bulkSubstituteReason, setBulkSubstituteReason] = useState("Tutor unavailable");
+  const [bulkSubstituteLoading, setBulkSubstituteLoading] = useState(false);
 
   // BeeBright Scheduling Spec, Section 3a — Suspension (system-wide auto-reschedule).
   const [suspendDialogOpen, setSuspendDialogOpen] = useState(false);
@@ -1355,83 +1375,128 @@ export default function AdminDashboard() {
     }
   };
 
-  const openMarkUnavailableDialog = () => {
-    if (!selectedSchedule?.date || (!selectedSchedule?.tutor?._id && (!selectedSchedule?.tutors || selectedSchedule.tutors.length === 0))) {
-      toast.error("Select a schedule first.");
-      return;
+  // "what to do (10).pdf" — one-click swap of the PRIMARY tutor back to whoever this
+  // schedule's own substitution history says was there before any substitution ever
+  // happened. Reuses the exact same assignSubstitute endpoint (and therefore the exact
+  // same availability-window + no-conflict checks) as any other substitute assignment —
+  // this is not a separate "undo" mechanism, just a pre-filled version of the same action.
+  const handleRevertToOriginalTutor = async (schedule: AdminSchedule) => {
+    const originalTutor = schedule.originalTutor;
+    if (!originalTutor || typeof originalTutor === "string") return;
+    const currentPrimaryTutorId = schedule.tutor?._id;
+    if (!currentPrimaryTutorId) return;
+    const originalTutorName = [originalTutor.firstName, originalTutor.middleName, originalTutor.lastName].filter(Boolean).join(" ") || "the original tutor";
+    setRevertingScheduleId(schedule._id);
+    try {
+      const res = await scheduleService.assignSubstitute(schedule._id, {
+        replacementTutorId: originalTutor._id,
+        replacedTutorId: currentPrimaryTutorId,
+        reason: "Reverted to original tutor",
+      });
+      if (res.data?.success) {
+        toast.success(`Reverted to ${originalTutorName}.`);
+        const updated = (res.data as { schedule?: AdminSchedule }).schedule;
+        if (updated) {
+          setSelectedSchedule(updated);
+          setSchedules((prev) => prev.map((item) => (item._id === updated._id ? updated : item)));
+        } else {
+          fetchSchedules();
+        }
+      } else {
+        toast.error(res.data?.message || "Failed to revert to original tutor");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to revert to original tutor";
+      toast.error(msg);
+    } finally {
+      setRevertingScheduleId(null);
     }
-    const allTutors = (selectedSchedule.tutors && selectedSchedule.tutors.length > 0)
-      ? selectedSchedule.tutors
-      : selectedSchedule.tutor ? [selectedSchedule.tutor] : [];
-    setMarkUnavailableTutors(allTutors.map((t) => ({
-      _id: t._id,
-      name: [t.firstName, t.middleName, t.lastName].filter(Boolean).join(" ") || "Tutor",
-    })));
-    // Only one tutor on this session — nothing to pick, no ambiguity (matches how the
-    // "Tutor to replace" selector on Assign Substitute Tutor behaves). More than one
-    // (Playgroup) — start with nothing checked, the admin picks who's unavailable.
-    setMarkUnavailableTutorIds(allTutors.length === 1 ? [allTutors[0]._id] : []);
-    setMarkUnavailableDialogOpen(true);
   };
 
-  const handleConfirmMarkUnavailable = async () => {
-    if (!selectedSchedule?.date) return;
-    if (markUnavailableTutorIds.length === 0) {
-      toast.error("Please select which tutor(s) are unavailable.");
+  // Bulk "Assign Substitute Tutor" ("what to do (11).pdf") — the checkbox multi-select
+  // already wired up for "Delete selected" previously had no substitute-assignment
+  // counterpart at all: the single-schedule dialog only ever acted on `selectedSchedule`
+  // (whichever one entry's detail panel was last opened), completely ignoring
+  // `selectedScheduleIds`, so picking a replacement while several boxes were checked
+  // silently only ever affected that one open schedule. This opens a dedicated dialog for
+  // the checked set instead.
+  const openBulkSubstituteDialog = async () => {
+    if (selectedScheduleIds.length === 0) return;
+    const selected = schedules.filter((s) => selectedScheduleIds.includes(s._id));
+    if (selected.length === 0) return;
+    const subjectId = selected[0].subject?._id;
+    if (!subjectId) {
+      toast.error("Selected sessions are missing subject info.");
       return;
     }
-    // The stored date is a UTC-midnight instant (e.g. "2026-10-05T00:00:00.000Z") — local
-    // Date getters (getFullYear/getMonth/getDate) read it back in the BROWSER's own
-    // timezone, which silently shifts it a day for anyone west of UTC. Use the UTC getters
-    // instead, matching how the backend's own toDateOnly() helper does the same thing.
-    const day = new Date(selectedSchedule.date);
-    const dayStr = `${day.getUTCFullYear()}-${String(day.getUTCMonth() + 1).padStart(2, "0")}-${String(day.getUTCDate()).padStart(2, "0")}`;
-    const tutorLabel = markUnavailableTutorIds.length === 1
-      ? (markUnavailableTutors.find((t) => t._id === markUnavailableTutorIds[0])?.name || "Tutor")
-      : `${markUnavailableTutorIds.length} tutors`;
-    setMarkUnavailableLoading(true);
+    // A broad candidate list, not scoped to any single selected schedule's own date/time —
+    // the selection can span different days entirely, so no one availability window
+    // applies to all of them. Each schedule's own availability + conflict check still runs
+    // server-side, independently, on every individual assignment below; this list is only
+    // a convenience filter excluding tutors already teaching one of the selected sessions.
+    const alreadyAssignedIds = Array.from(new Set(
+      selected.flatMap((s) => (s.tutors && s.tutors.length > 0 ? s.tutors : s.tutor ? [s.tutor] : []).map((t) => t._id))
+    ));
     try {
-      // One call per selected tutor — same endpoint "Assign Substitute Tutor" style
-      // multi-replace uses, run sequentially, totals combined into one summary toast.
-      let totalAffected = 0;
-      let totalReassigned = 0;
-      let totalUnresolved = 0;
-      const failures: string[] = [];
-      for (const tutorId of markUnavailableTutorIds) {
-        const name = markUnavailableTutors.find((t) => t._id === tutorId)?.name || "Tutor";
-        try {
-          const res = await scheduleService.markTutorUnavailability({
-            tutorId,
-            startDate: dayStr,
-            endDate: dayStr,
-            reason: "Marked unavailable by admin",
-            autoAssign: true,
-          });
-          if (res.data?.success) {
-            totalAffected += res.data?.affectedSchedules ?? 0;
-            totalReassigned += Array.isArray(res.data?.reassigned) ? res.data.reassigned.length : 0;
-            totalUnresolved += Array.isArray(res.data?.unresolved) ? res.data.unresolved.length : 0;
-          } else {
-            failures.push(`${name}: ${res.data?.message || "failed"}`);
-          }
-        } catch (err: unknown) {
-          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "failed";
-          failures.push(`${name}: ${msg}`);
+      const res = await scheduleService.getTutorsBySubject(subjectId, { excludeTutorIds: alreadyAssignedIds });
+      const tutors = Array.isArray(res.data?.tutors) ? res.data.tutors : [];
+      setBulkSubstituteTutorOptions(tutors);
+      setBulkSubstituteTutorId("");
+      setBulkSubstituteReason("Tutor unavailable");
+      setBulkSubstituteDialogOpen(true);
+    } catch {
+      toast.error("Failed to load substitute tutor options");
+    }
+  };
+
+  const handleBulkAssignSubstitute = async () => {
+    if (!bulkSubstituteTutorId) {
+      toast.error("Please select a replacement tutor.");
+      return;
+    }
+    const targets = schedules.filter((s) => selectedScheduleIds.includes(s._id));
+    if (targets.length === 0) return;
+    setBulkSubstituteLoading(true);
+    const succeededIds: string[] = [];
+    const failed: { id: string; label: string; reason: string }[] = [];
+    // Sequential, not parallel — each call re-fetches and re-saves the same-ish shared
+    // tutor-availability picture (conflict checks against other sessions), so running them
+    // one at a time avoids two selected sessions racing to double-book the replacement.
+    for (const s of targets) {
+      const dateLabel = s.date ? new Date(s.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "?";
+      const label = `${s.subject?.name || "Session"} ${dateLabel} ${formatTime12h(s.startTime)}`;
+      try {
+        const res = await scheduleService.assignSubstitute(s._id, {
+          replacementTutorId: bulkSubstituteTutorId,
+          reason: bulkSubstituteReason || undefined,
+        });
+        if (res.data?.success) {
+          succeededIds.push(s._id);
+        } else {
+          failed.push({ id: s._id, label, reason: res.data?.message || "failed" });
         }
+      } catch (err: unknown) {
+        const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "failed";
+        failed.push({ id: s._id, label, reason: msg });
       }
-      if (totalAffected === 0 && failures.length === 0) {
-        toast.success(`${tutorLabel} marked unavailable for ${dayStr} — no sessions that day, nothing to reassign.`);
-      } else {
-        const parts = [`${tutorLabel} marked unavailable for ${dayStr}.`];
-        if (totalAffected > 0) parts.push(`${totalReassigned} of ${totalAffected} affected session${totalAffected === 1 ? "" : "s"} reassigned automatically.`);
-        if (totalUnresolved > 0) parts.push(`${totalUnresolved} still need${totalUnresolved === 1 ? "s" : ""} a manual substitute — flagged as "Substitute Required" on each session.`);
-        if (failures.length > 0) parts.push(`${failures.length} tutor(s) failed: ${failures.join("; ")}`);
-        if (totalUnresolved > 0 || failures.length > 0) { toast.error(parts.join(" ")); } else { toast.success(parts.join(" ")); }
-      }
-      setMarkUnavailableDialogOpen(false);
+    }
+    setBulkSubstituteLoading(false);
+    const total = targets.length;
+    const summary = `${succeededIds.length} of ${total} assigned.`;
+    if (failed.length === 0) {
+      toast.success(summary);
+    } else if (succeededIds.length > 0) {
+      toast.error(`${summary} ${failed.length} skipped — ${failed.map((f) => `${f.label}: ${f.reason}`).join("; ")}`);
+    } else {
+      toast.error(`0 of ${total} assigned. ${failed.map((f) => `${f.label}: ${f.reason}`).join("; ")}`);
+    }
+    if (succeededIds.length > 0) {
+      setBulkSubstituteDialogOpen(false);
+      // Leave any failures still checked, so the admin can see which ones need a different
+      // tutor/time without re-selecting from scratch; drop the ones that already succeeded.
+      setSelectedScheduleIds(failed.map((f) => f.id));
+      setSelectedSchedule(null);
       fetchSchedules();
-    } finally {
-      setMarkUnavailableLoading(false);
     }
   };
 
@@ -1772,6 +1837,71 @@ export default function AdminDashboard() {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to mark as paid onsite";
       toast.error(msg);
     } finally { setPaidOnsiteLoading(false); }
+  };
+
+  // "bug (12).pdf" — Payments tab actions for remaining-balance payments only. "Verify"
+  // just confirms the proof looks legitimate; "Approve" is the separate step that actually
+  // finalizes the balance as paid, and is blocked server-side until Verify has run.
+  const handleVerifyRemainingPaymentProof = async (paymentId: string) => {
+    setRemainingVerifyingId(paymentId);
+    try {
+      const res = await paymentService.verifyPayment(paymentId, true);
+      if (res.data?.success) {
+        toast.success("Payment proof verified.");
+        fetchAdminPayments();
+      } else {
+        toast.error(res.data?.message || "Failed to verify payment proof");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to verify payment proof";
+      toast.error(msg);
+    } finally { setRemainingVerifyingId(null); }
+  };
+
+  const handleApproveRemainingPayment = async (paymentId: string) => {
+    setRemainingApprovingId(paymentId);
+    try {
+      const res = await paymentService.approveRemainingPayment(paymentId);
+      if (res.data?.success) {
+        toast.success("Payment approved. Balance marked as paid.");
+        fetchAdminPayments(); fetchDashboardStats(); notifyBadgesChanged();
+      } else {
+        toast.error(res.data?.message || "Failed to approve payment");
+      }
+    } catch (err: unknown) {
+      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
+      if (data?.code === "PROOF_NOT_VERIFIED") {
+        // Blocked server-side, same idiom as the Enrollments tab's own Approve gate
+        // (Group AH) — no override, the admin must Verify first.
+        setRemainingProofNotVerifiedOpen(true);
+      } else {
+        toast.error(data?.message ?? "Failed to approve payment");
+      }
+    } finally { setRemainingApprovingId(null); }
+  };
+
+  const openRemainingRejectDialog = (paymentId: string) => {
+    setRemainingRejectPaymentId(paymentId);
+    setRemainingRejectReason("");
+  };
+
+  const handleConfirmRemainingReject = async () => {
+    if (!remainingRejectPaymentId) return;
+    if (!remainingRejectReason.trim()) { toast.error("Please provide a rejection reason."); return; }
+    setRemainingRejectLoading(true);
+    try {
+      const res = await paymentService.verifyPayment(remainingRejectPaymentId, false, remainingRejectReason.trim());
+      if (res.data?.success) {
+        toast.success("Payment rejected. The amount is outstanding again.");
+        fetchAdminPayments(); fetchDashboardStats(); notifyBadgesChanged();
+        setRemainingRejectPaymentId(null);
+      } else {
+        toast.error(res.data?.message || "Failed to reject payment");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to reject payment";
+      toast.error(msg);
+    } finally { setRemainingRejectLoading(false); }
   };
 
   const openRejectDialog = (enrollmentId: string) => {
@@ -3031,14 +3161,54 @@ export default function AdminDashboard() {
                                     <span className="text-xs px-2 py-1 rounded-full font-medium bg-warning/10 text-warning">Pending review</span>
                                   </td>
                                   <td className="p-4">
-                                    {/* Approve/reject now happens only on the Enrollments tab (per
-                                        "bug (5).pdf" Group V) — this action is view-only. */}
-                                    {(payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
-                                      <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
-                                        View Proof
-                                      </Button>
+                                    {payment.paymentType === "remaining" ? (
+                                      // "bug (12).pdf" — remaining-balance payments have no Enrollments-tab
+                                      // equivalent (the enrollment already happened), so this is the only
+                                      // place they can be actioned: View Proof + Verify + Approve + Reject.
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {(payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
+                                          <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
+                                            View Proof
+                                          </Button>
+                                        ) : (
+                                          <span className="text-xs text-muted-foreground">No proof uploaded</span>
+                                        )}
+                                        {payment.proofVerifiedAt ? (
+                                          <span className="text-xs px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-800">Proof verified</span>
+                                        ) : (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={remainingVerifyingId === payment._id}
+                                            onClick={() => handleVerifyRemainingPaymentProof(payment._id)}
+                                          >
+                                            {remainingVerifyingId === payment._id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                                            Verify
+                                          </Button>
+                                        )}
+                                        <Button
+                                          size="sm"
+                                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                          disabled={remainingApprovingId === payment._id}
+                                          onClick={() => handleApproveRemainingPayment(payment._id)}
+                                        >
+                                          {remainingApprovingId === payment._id ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                                          Approve
+                                        </Button>
+                                        <Button variant="destructive" size="sm" onClick={() => openRemainingRejectDialog(payment._id)}>
+                                          Reject
+                                        </Button>
+                                      </div>
                                     ) : (
-                                      <span className="text-xs text-muted-foreground">No proof uploaded</span>
+                                      // Down/initial payments — Approve/reject only happens on the
+                                      // Enrollments tab (per "bug (5).pdf" Group V) — view-only here.
+                                      (payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
+                                        <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
+                                          View Proof
+                                        </Button>
+                                      ) : (
+                                        <span className="text-xs text-muted-foreground">No proof uploaded</span>
+                                      )
                                     )}
                                   </td>
                                 </tr>
@@ -3468,12 +3638,14 @@ export default function AdminDashboard() {
                       <Button variant="ghost" size="sm" onClick={() => setSelectedScheduleIds([])}>
                         Clear selection
                       </Button>
+                      <Button variant="outline" size="sm" onClick={openBulkSubstituteDialog}>
+                        Assign substitute tutor ({selectedScheduleIds.length})
+                      </Button>
                       <Button
                         variant="destructive"
                         size="sm"
                         disabled={scheduleBulkDeleting}
-                        onClick={async () => {
-                          if (!confirm(`Delete ${selectedScheduleIds.length} selected session(s)?`)) return;
+                        onClick={() => requestDeleteConfirmation(selectedScheduleIds.length, async () => {
                           setScheduleBulkDeleting(true);
                           // One server-side operation — a browser-side loop of single deletes could
                           // fail partway and leave ghost sessions that still block new scheduling.
@@ -3492,7 +3664,7 @@ export default function AdminDashboard() {
                           fetchSchedules();
                           if (failed > 0) toast.error(`${done} deleted, ${failed} failed.`);
                           else toast.success(`${done} session(s) deleted.`);
-                        }}
+                        })}
                       >
                         {scheduleBulkDeleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
                         Delete selected ({selectedScheduleIds.length})
@@ -3592,7 +3764,7 @@ export default function AdminDashboard() {
                                         }}
                                         onClick={(e) => e.stopPropagation()}
                                         className="mt-0.5 shrink-0"
-                                        aria-label={`Select ${s.subject?.name ?? "session"} for deletion`}
+                                        aria-label={`Select ${s.subject?.name ?? "session"}`}
                                       />
                                       <div className="min-w-0 flex-1">
                                         <span className="font-medium block">{s.subject?.name ?? "—"}</span>
@@ -3667,7 +3839,7 @@ export default function AdminDashboard() {
                                                 }}
                                                 onClick={(e) => e.stopPropagation()}
                                                 className="mt-0.5 shrink-0"
-                                                aria-label={`Select ${session.subject?.name ?? "session"} for deletion`}
+                                                aria-label={`Select ${session.subject?.name ?? "session"}`}
                                               />
                                               <div className="min-w-0 flex-1">
                                                 <span className="font-medium block">{session.subject?.name ?? "—"}</span>
@@ -3718,7 +3890,7 @@ export default function AdminDashboard() {
                                   }}
                                   onClick={(e) => e.stopPropagation()}
                                   className="mt-0.5"
-                                  aria-label={`Select ${s.subject?.name ?? "session"} for deletion`}
+                                  aria-label={`Select ${s.subject?.name ?? "session"}`}
                                 />
                                 <div className="min-w-0 flex-1">
                                   <p className="font-medium">{s.subject?.name ?? "—"}</p>
@@ -4033,9 +4205,32 @@ export default function AdminDashboard() {
                               )}
                             </div>
                             {s.isSubstitution ? (
-                              <div className="rounded-md border border-warning/30 bg-warning/10 p-2">
-                                <p className="text-xs font-medium text-warning">Substitute tutor assigned</p>
-                                <p className="text-xs text-muted-foreground mt-1">Reason: {s.substitutionReason || "Tutor unavailable"}</p>
+                              <div className="rounded-md border border-warning/30 bg-warning/10 p-2 space-y-2">
+                                <div>
+                                  <p className="text-xs font-medium text-warning">Substitute tutor assigned</p>
+                                  <p className="text-xs text-muted-foreground mt-1">Reason: {s.substitutionReason || "Tutor unavailable"}</p>
+                                </div>
+                                {/* Only when the PRIMARY tutor is actually the one substituted — originalTutor
+                                    is a single whole-schedule field that only reliably tracks the primary seat's
+                                    pre-substitution occupant, not an arbitrary Playgroup co-tutor's. */}
+                                {s.originalTutor && typeof s.originalTutor === "object" && s.tutor?._id && s.tutor._id !== s.originalTutor._id && (
+                                  <div className="pt-2 border-t border-warning/20 space-y-1.5">
+                                    <p className="text-xs text-muted-foreground">
+                                      Originally: <span className="font-medium text-foreground">{[s.originalTutor.firstName, s.originalTutor.middleName, s.originalTutor.lastName].filter(Boolean).join(" ")}</span>
+                                    </p>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="w-full"
+                                      disabled={revertingScheduleId === s._id}
+                                      onClick={() => handleRevertToOriginalTutor(s)}
+                                    >
+                                      {revertingScheduleId === s._id ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                                      Revert to {s.originalTutor.firstName}
+                                    </Button>
+                                  </div>
+                                )}
                               </div>
                             ) : s.substitutionStatus === "substitute_required" ? (
                               <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2">
@@ -4050,14 +4245,6 @@ export default function AdminDashboard() {
                               onClick={openSubstituteDialog}
                             >
                               Assign substitute tutor
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="w-full"
-                              onClick={openMarkUnavailableDialog}
-                            >
-                              Mark tutor unavailable (day)
                             </Button>
                             {isOneOnOneSession && (
                               <Button
@@ -4075,8 +4262,7 @@ export default function AdminDashboard() {
                               size="sm"
                               className="w-full text-destructive border-destructive/50 hover:bg-destructive/10"
                               disabled={isDeleting}
-                              onClick={async () => {
-                                if (!confirm("Delete this session?")) return;
+                              onClick={() => requestDeleteConfirmation(1, async () => {
                                 setScheduleDeletingId(s._id);
                                 try {
                                   const res = await scheduleService.delete(s._id);
@@ -4093,7 +4279,7 @@ export default function AdminDashboard() {
                                 } finally {
                                   setScheduleDeletingId(null);
                                 }
-                              }}
+                              })}
                             >
                               {isDeleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
                               Delete session
@@ -5217,59 +5403,85 @@ export default function AdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={markUnavailableDialogOpen} onOpenChange={setMarkUnavailableDialogOpen}>
+      {/* Bulk "Assign Substitute Tutor" across several checked calendar entries at once —
+          one replacement tutor applied to each selected session's PRIMARY tutor, every
+          session validated independently server-side. */}
+      <Dialog open={bulkSubstituteDialogOpen} onOpenChange={setBulkSubstituteDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Mark Tutor Unavailable</DialogTitle>
+            <DialogTitle>Assign Substitute Tutor to {selectedScheduleIds.length} session{selectedScheduleIds.length === 1 ? "" : "s"}</DialogTitle>
             <DialogDescription>
-              {selectedSchedule?.date
-                ? `Marks the selected tutor unavailable for ${new Date(selectedSchedule.date).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "short", day: "numeric", year: "numeric" })} and tries to automatically reassign each of their affected session(s) that day to another available tutor.`
-                : "Select a schedule first."}
+              Applies to each selected session independently. A session is skipped if this tutor isn't available or has a conflict at that session's own time — the rest still go through.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            {/* More than one tutor on this session (Toddlers Playgroup) — let the admin
-                check off several at once instead of repeating the flow one at a time.
-                A 1-on-1 session has exactly one, so this is pre-selected and never shown
-                (no ambiguity to resolve). */}
-            {markUnavailableTutors.length > 1 && (
-              <div className="space-y-2">
-                <Label>Which tutor(s) are unavailable?</Label>
-                <div className="space-y-2">
-                  {markUnavailableTutors.map((t) => (
-                    <div key={t._id} className="flex items-center gap-2">
-                      <Checkbox
-                        id={`mark-unavailable-${t._id}`}
-                        checked={markUnavailableTutorIds.includes(t._id)}
-                        onCheckedChange={(next) => {
-                          setMarkUnavailableTutorIds((prev) =>
-                            next ? [...prev, t._id] : prev.filter((id) => id !== t._id)
-                          );
-                        }}
-                      />
-                      <Label htmlFor={`mark-unavailable-${t._id}`} className="text-sm font-normal cursor-pointer">
+            <div className="space-y-2">
+              <Label>Replacement tutor</Label>
+              <Select value={bulkSubstituteTutorId} onValueChange={setBulkSubstituteTutorId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select tutor" />
+                </SelectTrigger>
+                <SelectContent>
+                  {bulkSubstituteTutorOptions.length === 0 ? (
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">No eligible tutors found.</div>
+                  ) : (
+                    bulkSubstituteTutorOptions.map((t) => (
+                      <SelectItem key={t._id} value={t._id}>
                         {t.name}
-                      </Label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {markUnavailableTutors.length === 1 && (
-              <p className="text-sm text-muted-foreground">Tutor: <span className="font-medium text-foreground">{markUnavailableTutors[0].name}</span></p>
-            )}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bulk-substitute-reason">Reason</Label>
+              <Input
+                id="bulk-substitute-reason"
+                value={bulkSubstituteReason}
+                onChange={(e) => setBulkSubstituteReason(e.target.value)}
+                placeholder="Tutor unavailable"
+              />
+            </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setMarkUnavailableDialogOpen(false)} disabled={markUnavailableLoading}>
+            <Button type="button" variant="outline" onClick={() => setBulkSubstituteDialogOpen(false)} disabled={bulkSubstituteLoading}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleBulkAssignSubstitute} disabled={bulkSubstituteLoading || !bulkSubstituteTutorId}>
+              {bulkSubstituteLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Assign Substitute
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Schedule deletion confirmation — replaces the native browser confirm() for both
+          "Delete session" (single) and "Delete selected (N)" (multi-select) so it matches
+          the rest of the app's dialog styling instead of a plain OS popup. */}
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete {deleteConfirmCount === 1 ? "session" : "sessions"}</DialogTitle>
+            <DialogDescription>
+              {deleteConfirmCount === 1
+                ? "Are you sure you want to delete this session?"
+                : `Are you sure you want to delete these ${deleteConfirmCount} sessions?`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteConfirmOpen(false)}>
               Cancel
             </Button>
             <Button
               type="button"
-              onClick={handleConfirmMarkUnavailable}
-              disabled={markUnavailableLoading || markUnavailableTutorIds.length === 0}
+              variant="destructive"
+              onClick={() => {
+                setDeleteConfirmOpen(false);
+                deleteConfirmAction?.();
+              }}
             >
-              {markUnavailableLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Mark Unavailable
+              Yes, delete
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -6038,6 +6250,49 @@ export default function AdminDashboard() {
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setPaymentNotVerifiedDialogOpen(false)}>Got it</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "bug (12).pdf" — same block-not-warn idiom as above, for the Payments tab's own
+          remaining-balance Approve action: no override, the admin must Verify first. */}
+      <Dialog open={remainingProofNotVerifiedOpen} onOpenChange={setRemainingProofNotVerifiedOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Payment Not Yet Verified</DialogTitle>
+            <DialogDescription>
+              This payment's proof has not been verified yet. Please verify it before approving, to avoid a conflict between the payment and balance status.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setRemainingProofNotVerifiedOpen(false)}>Got it</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "bug (12).pdf" — reject a remaining-balance payment; the amount goes back to
+          outstanding on the parent's invoice and they can resubmit proof. */}
+      <Dialog open={!!remainingRejectPaymentId} onOpenChange={(open) => !open && setRemainingRejectPaymentId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject Payment</DialogTitle>
+            <DialogDescription>
+              The parent will see this amount as outstanding again and can submit a new payment proof.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="remainingRejectReason">Reason *</Label>
+              <textarea id="remainingRejectReason" rows={3} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="e.g. Payment proof unclear or amount doesn't match."
+                value={remainingRejectReason} onChange={(e) => setRemainingRejectReason(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRemainingRejectPaymentId(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={remainingRejectLoading || !remainingRejectReason.trim()} onClick={handleConfirmRemainingReject}>
+              {remainingRejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Reject Payment
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -138,6 +138,18 @@ const paymentSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  // Remaining-balance payments only: the Payments tab's own "proof looks legitimate" check,
+  // deliberately separate from `status`/`verifiedAt` above — those still mean "this payment
+  // is fully accepted and counts toward the enrollment's total paid" (computeRemainingBalance
+  // relies on that). Setting `status: 'verified'` the moment proof is confirmed would make
+  // the parent's balance look settled before an admin has actually approved it. `Approve`
+  // is the step that promotes this into `status: 'verified'`.
+  proofVerifiedAt: { type: Date, default: null },
+  proofVerifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   rejectionReason: { type: String, default: null },
   notes: { type: String, default: null }
 }, {

@@ -247,8 +247,12 @@ export const paymentService = {
   /** Admin: parents who still owe the remaining 50% (one row per parent) + the grand total. */
   getPendingBalances: () =>
     api.get<{ success: boolean; totalUnpaid: number; count: number; items: PendingBalanceItem[] }>('/payments/admin/pending-balances'),
+  /** Remaining-balance payments only — marks the proof verified (verified: true) or rejects it (false). Down/initial payments are still verified from the Enrollments tab. */
   verifyPayment: (paymentId: string, verified: boolean, rejectionReason?: string) =>
     api.put(`/payments/admin/payments/${paymentId}/verify`, { verified, rejectionReason }),
+  /** Remaining-balance payments only — finalizes as paid; blocked server-side until verifyPayment(true) has run first. */
+  approveRemainingPayment: (paymentId: string) =>
+    api.patch(`/payments/admin/payments/${paymentId}/approve`),
 };
 
 export interface AdminPaymentItem {
@@ -260,6 +264,8 @@ export interface AdminPaymentItem {
   paymentMethod?: 'gcash' | 'maribank' | 'bdo' | 'blockchain';
   createdAt?: string;
   verifiedAt?: string;
+  /** Remaining-balance payments only — set by "Verify", cleared by "Reject"; "Approve" is blocked until this is set. */
+  proofVerifiedAt?: string | null;
   rejectionReason?: string;
   student?: { firstName?: string; lastName?: string; email?: string; phone?: string } | null;
   parent?: { firstName?: string; lastName?: string; email?: string; phone?: string } | null;
@@ -796,13 +802,6 @@ export const scheduleService = {
     startDate?: string;
     subjectId: string;
   }) => api.post('/schedules/playgroup-groups', data),
-  markTutorUnavailability: (data: {
-    tutorId: string;
-    startDate: string;
-    endDate: string;
-    reason?: string;
-    autoAssign?: boolean;
-  }) => api.post('/schedules/tutor-unavailability', data),
   /** Section 3a: system-wide — reschedules every affected session (1-on-1 + Playgroup) to the next conflict-free occurrence for that same pair. */
   suspendDates: (data: { startDate: string; endDate?: string; reason?: string }) =>
     api.post<{ success: boolean; message: string; suspension: SuspensionRecord }>('/schedules/suspend', data),

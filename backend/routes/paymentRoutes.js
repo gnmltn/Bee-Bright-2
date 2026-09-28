@@ -10,7 +10,8 @@ const {
   getAdminPayments,
   getPendingPayments,
   getPendingBalances,
-  verifyPayment
+  verifyPayment,
+  approveRemainingPayment
 } = require('../controllers/paymentController');
 const { protect, authorize, optionalProtect } = require('../middleware/auth');
 const { body } = require('express-validator');
@@ -111,6 +112,13 @@ router.put(
     body('verified').isBoolean().withMessage('Verified must be boolean')
   ]),
   verifyPayment
+);
+
+router.patch(
+  '/admin/payments/:paymentId/approve',
+  protect,
+  authorize('admin'),
+  approveRemainingPayment
 );
 
 module.exports = router;
