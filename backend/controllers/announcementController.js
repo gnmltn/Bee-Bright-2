@@ -160,8 +160,13 @@ const getForStudent = async (req, res) => {
     }
     const orConditions = [{ targetType: 'all' }];
     if (studentObjId) orConditions.push({ targetStudentIds: studentObjId });
+    // A new account has no connection to anything posted before it existed — never return
+    // (not just "don't flag as new") an announcement approved before THIS account's own
+    // createdAt. Applied here at the query level, not filtered client-side, so there is no
+    // view/tab/direct-link that can still reach it. See "bug (6).pdf".
     const list = await Announcement.find({
       status: 'approved',
+      approvedAt: { $gte: req.user.createdAt },
       $or: orConditions
     })
       .sort({ approvedAt: -1, createdAt: -1 })
@@ -184,10 +189,14 @@ const getForStudent = async (req, res) => {
 // @access  Private (tutor)
 const getForTutor = async (req, res) => {
   try {
+    // Same per-account creation-date filter as getForStudent — only applies to the admin
+    // broadcast branch; a tutor's OWN authored announcements (any status) are always
+    // theirs to see regardless of date, since they could never have authored one before
+    // their own account existed.
     const list = await Announcement.find({
       $or: [
         { author: req.user.id },
-        { authorRole: 'admin', status: 'approved', targetType: 'all' }
+        { authorRole: 'admin', status: 'approved', targetType: 'all', approvedAt: { $gte: req.user.createdAt } }
       ]
     })
       .sort({ approvedAt: -1, createdAt: -1 })

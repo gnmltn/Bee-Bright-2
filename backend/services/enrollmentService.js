@@ -119,7 +119,11 @@ async function sendEnrollmentApprovedEmail(to, { parentName, studentName, enroll
   ).catch((err) => logEmailError('enrollment approved email', err, { to, enrollmentId }));
 }
 
-async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enrollmentId, reason, allowResubmission }) {
+// The account this enrollment belonged to is permanently deleted right after this email is
+// sent (see enrollmentController.js's adminRejectEnrollment) — there is no dashboard left to
+// log into, so this never offers a "resubmit"/"log in" path, only a fresh application.
+async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enrollmentId, reason }) {
+  const enrollUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/enrollment`;
   return sendEmail(
     {
       to,
@@ -129,17 +133,18 @@ async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enroll
         accent: 'red',
         bodyHtml: `
           <p>Hi <strong>${parentName}</strong>,</p>
-          <p>Unfortunately, the enrollment for <strong>${studentName}</strong> (${enrollmentId}) was not approved.</p>
+          <p>We were unable to verify your payment for <strong>${studentName}</strong>'s enrollment (${enrollmentId}), so we could not approve it.</p>
           ${reason ? `
           <div style="background:#fff;border-left:4px solid #ef4444;border-radius:4px;padding:16px;margin:16px 0;">
             <p style="margin:0;"><strong>Reason:</strong> ${reason}</p>
           </div>` : ''}
-          ${allowResubmission ? `
-          <p>You may upload new payment proof and resubmit your application. Log in to your parent dashboard to do so.</p>` : ''}
+          <p>Please submit a new enrollment application if you'd like to try again.</p>
           <p style="color:#b91c1c;font-size:14px;margin-top:20px;">
             If you have questions, please contact us at beebrightph@gmail.com
           </p>
         `,
+        ctaLabel: 'Start a New Enrollment',
+        ctaUrl: enrollUrl,
       }),
     },
     'enrollment rejected'

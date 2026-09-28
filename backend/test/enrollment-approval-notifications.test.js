@@ -21,8 +21,21 @@ emailService.logEmailError = () => {};
 const auditService = require('../utils/auditService');
 auditService.logAudit = async () => {};
 
+// adminRejectEnrollment now hard-deletes instead of just flagging the enrollment — patch the
+// same module seam pattern as above, before the controller (which destructures these) is
+// first required, so its captured reference is already the stub.
+const hardDeleteUserModule = require('../utils/hardDeleteUser');
+const hardDeleteCalls = [];
+hardDeleteUserModule.hardDeleteUser = async (user, session) => {
+  hardDeleteCalls.push({ user, session });
+  return { deletedUsers: 1 };
+};
+const runTransactionSafeModule = require('../utils/runTransactionSafe');
+runTransactionSafeModule.runTransactionSafe = async (work) => work(null);
+
 const Enrollment = require('../models/Enrollment');
 const User = require('../models/User');
+const Payment = require('../models/Payment');
 const { adminApproveEnrollment, adminRejectEnrollment } = require('../controllers/enrollmentController');
 
 function mockRes() {
@@ -46,16 +59,33 @@ function makeEnrollment(overrides = {}) {
   return doc;
 }
 
+// Chainable AND directly-awaitable: adminApproveEnrollment calls
+// `User.findById(id).select(...).lean()` while adminRejectEnrollment calls plain
+// `await User.findById(id)` (it needs the full doc, not a lean projection, to pass into
+// hardDeleteUser) — this one mock satisfies both calling conventions.
+function findByIdMock(result) {
+  const chainable = {
+    select: () => chainable,
+    lean: async () => result,
+    then: (resolve) => resolve(result),
+  };
+  return chainable;
+}
+
 function stubCommon({ enrollment, parentUser }) {
   const origEnrollmentFindById = Enrollment.findById;
   const origEnrollmentCountDocuments = Enrollment.countDocuments;
   const origUserFindByIdAndUpdate = User.findByIdAndUpdate;
   const origUserFindById = User.findById;
+  const origPaymentDeleteMany = Payment.deleteMany;
+  const origEnrollmentDeleteOne = Enrollment.deleteOne;
 
   Enrollment.findById = async () => enrollment;
   Enrollment.countDocuments = async () => 0;
   User.findByIdAndUpdate = async () => ({});
-  User.findById = () => ({ select: () => ({ lean: async () => parentUser }) });
+  User.findById = () => findByIdMock(parentUser);
+  Payment.deleteMany = async () => ({});
+  Enrollment.deleteOne = async () => ({});
 
   return {
     restore() {
@@ -63,6 +93,8 @@ function stubCommon({ enrollment, parentUser }) {
       Enrollment.countDocuments = origEnrollmentCountDocuments;
       User.findByIdAndUpdate = origUserFindByIdAndUpdate;
       User.findById = origUserFindById;
+      Payment.deleteMany = origPaymentDeleteMany;
+      Enrollment.deleteOne = origEnrollmentDeleteOne;
     },
   };
 }
@@ -86,8 +118,9 @@ test('adminApproveEnrollment: emails the parent\'s registered address, naming th
   } finally { restore(); }
 });
 
-test('adminRejectEnrollment: emails the parent, naming the child and including the rejection reason', async () => {
+test('adminRejectEnrollment: emails the parent, naming the child and including the rejection reason, then hard-deletes the account', async () => {
   sentEmails.length = 0;
+  hardDeleteCalls.length = 0;
   const enrollment = makeEnrollment();
   const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
   const { restore } = stubCommon({ enrollment, parentUser });
@@ -96,21 +129,30 @@ test('adminRejectEnrollment: emails the parent, naming the child and including t
     await adminRejectEnrollment({
       params: { id: 'enr-1' },
       user: { _id: 'admin-1', role: 'admin' },
-      body: { reason: 'Payment proof was unreadable', allowResubmission: true },
+      body: { reason: 'Payment proof was unreadable' },
     }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
-    assert.equal(enrollment.status, 'rejected');
+    assert.equal(res._body.wholeAccountDeleted, true);
+
+    // Reused the same transaction-safe hard-delete utility the Archive → Delete flow uses.
+    assert.equal(hardDeleteCalls.length, 1, 'expected hardDeleteUser to be called once');
+    assert.equal(hardDeleteCalls[0].user, parentUser);
 
     const rejectionEmail = sentEmails.find((e) => e.label === 'enrollment rejected');
     assert.ok(rejectionEmail, 'expected an "enrollment rejected" email to be sent');
     assert.equal(rejectionEmail.opts.to, 'parent1@example.com');
     assert.match(rejectionEmail.opts.html, /Ana Cruz/);
     assert.match(rejectionEmail.opts.html, /Payment proof was unreadable/);
+    // The account no longer exists once this email is sent — never invite the parent to
+    // log in or resubmit into it.
+    assert.doesNotMatch(rejectionEmail.opts.html, /log ?in/i);
+    assert.match(rejectionEmail.opts.html, /new enrollment/i);
   } finally { restore(); }
 });
 
-test('adminRejectEnrollment: still emails the parent when no rejection reason is given', async () => {
+test('adminRejectEnrollment: still emails the parent and hard-deletes when no rejection reason is given', async () => {
   sentEmails.length = 0;
+  hardDeleteCalls.length = 0;
   const enrollment = makeEnrollment();
   const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
   const { restore } = stubCommon({ enrollment, parentUser });
@@ -122,9 +164,38 @@ test('adminRejectEnrollment: still emails the parent when no rejection reason is
       body: {},
     }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(hardDeleteCalls.length, 1);
 
     const rejectionEmail = sentEmails.find((e) => e.label === 'enrollment rejected');
     assert.ok(rejectionEmail, 'expected an "enrollment rejected" email to be sent even without an explicit reason');
     assert.equal(rejectionEmail.opts.to, 'parent1@example.com');
   } finally { restore(); }
+});
+
+test('adminRejectEnrollment: a parent with another enrollment keeps their account — only this enrollment is deleted', async () => {
+  sentEmails.length = 0;
+  hardDeleteCalls.length = 0;
+  const enrollment = makeEnrollment();
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  const { restore } = stubCommon({ enrollment, parentUser });
+  const origCount = Enrollment.countDocuments;
+  Enrollment.countDocuments = async () => 1; // an unrelated, already-approved enrollment exists
+  const deletedPaymentFilters = [];
+  const deletedEnrollmentFilters = [];
+  Payment.deleteMany = async (filter) => { deletedPaymentFilters.push(filter); return {}; };
+  Enrollment.deleteOne = async (filter) => { deletedEnrollmentFilters.push(filter); return {}; };
+  try {
+    const res = mockRes();
+    await adminRejectEnrollment({
+      params: { id: 'enr-1' },
+      user: { _id: 'admin-1', role: 'admin' },
+      body: { reason: 'Payment proof was unreadable' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.wholeAccountDeleted, false);
+    assert.equal(hardDeleteCalls.length, 0, 'the whole account must NOT be deleted when other enrollments exist');
+    assert.equal(deletedPaymentFilters.length, 1);
+    assert.equal(deletedEnrollmentFilters.length, 1);
+    assert.equal(String(deletedEnrollmentFilters[0]._id), 'enr-1');
+  } finally { restore(); Enrollment.countDocuments = origCount; }
 });

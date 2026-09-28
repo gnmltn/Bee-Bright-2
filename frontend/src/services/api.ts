@@ -412,8 +412,9 @@ export const enrollmentService = {
     api.put(`/enrollments/${enrollmentId}/verify-payment`, { verified, note }),
   approveEnrollment: (enrollmentId: string) =>
     api.put(`/enrollments/${enrollmentId}/approve`),
-  rejectEnrollment: (enrollmentId: string, reason: string, allowResubmission = true) =>
-    api.put(`/enrollments/${enrollmentId}/reject`, { reason, allowResubmission }),
+  /** Hard-deletes the account and all its enrollment/payment data — see Group W ("bug (5).pdf"). */
+  rejectEnrollment: (enrollmentId: string, reason: string) =>
+    api.put(`/enrollments/${enrollmentId}/reject`, { reason }),
   adminAddStudent: (data: {
     firstName: string; middleName?: string; lastName: string; email: string;
     phone: string; password: string; gradeLevel: string; guardianName: string;

@@ -13,7 +13,7 @@ auditService.logAudit = async () => {};
 
 const Announcement = require('../models/Announcement');
 const Enrollment = require('../models/Enrollment');
-const { getForStudent } = require('../controllers/announcementController');
+const { getForStudent, getForTutor } = require('../controllers/announcementController');
 
 function mockRes() {
   const res = { _status: 200, _body: null };
@@ -97,5 +97,61 @@ test('getForStudent: admin-authored announcements always show the author as "Bee
     const [admin, tutor] = res._body.announcements;
     assert.deepEqual(admin.author, { firstName: 'Bee Bright', lastName: 'Admin' });
     assert.deepEqual(tutor.author, { firstName: 'Tina', lastName: 'Reyes' });
+  } finally { Announcement.find = origFind; }
+});
+
+// "bug (6).pdf" — a new account must never see (in ANY view, not just "not flagged as
+// new") an announcement approved before that account's own createdAt. Query-level, so
+// there's no view/tab/direct-link that can still reach it.
+test('getForStudent: only returns announcements approved on/after THIS account\'s own createdAt', async () => {
+  const origFind = Announcement.find;
+  let capturedFilter = null;
+  Announcement.find = (filter) => {
+    capturedFilter = filter;
+    return { sort: () => ({ populate: () => ({ lean: async () => [] }) }) };
+  };
+  try {
+    const res = mockRes();
+    const accountCreatedAt = new Date('2026-09-27T00:00:00.000Z');
+    await getForStudent({ user: { id: '507f1f77bcf86cd799439022', role: 'student', createdAt: accountCreatedAt }, query: {} }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.deepEqual(capturedFilter.approvedAt, { $gte: accountCreatedAt });
+  } finally { Announcement.find = origFind; }
+});
+
+test('getForStudent: a parent\'s filter uses the PARENT\'s own createdAt, not the selected child\'s', async () => {
+  const origFind = Announcement.find;
+  const origExists = Enrollment.exists;
+  let capturedFilter = null;
+  Announcement.find = (filter) => {
+    capturedFilter = filter;
+    return { sort: () => ({ populate: () => ({ lean: async () => [] }) }) };
+  };
+  Enrollment.exists = async () => true;
+  try {
+    const res = mockRes();
+    const parentCreatedAt = new Date('2026-09-27T00:00:00.000Z');
+    await getForStudent({ user: { id: 'parent-1', _id: 'parent-1', role: 'parent', createdAt: parentCreatedAt }, query: { studentId: '507f1f77bcf86cd799439011' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.deepEqual(capturedFilter.approvedAt, { $gte: parentCreatedAt });
+  } finally { Announcement.find = origFind; Enrollment.exists = origExists; }
+});
+
+test('getForTutor: the admin-broadcast branch is scoped to the tutor\'s own createdAt; the tutor\'s own posts are not', async () => {
+  const origFind = Announcement.find;
+  let capturedFilter = null;
+  Announcement.find = (filter) => {
+    capturedFilter = filter;
+    return { sort: () => ({ populate: () => ({ lean: async () => [] }) }) };
+  };
+  try {
+    const res = mockRes();
+    const tutorCreatedAt = new Date('2026-09-27T00:00:00.000Z');
+    await getForTutor({ user: { id: 'tutor-1', createdAt: tutorCreatedAt }, query: {} }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const ownBranch = capturedFilter.$or.find((o) => o.author);
+    const adminBranch = capturedFilter.$or.find((o) => o.authorRole === 'admin');
+    assert.deepEqual(ownBranch, { author: 'tutor-1' }, 'the tutor\'s own posts must never be date-filtered');
+    assert.deepEqual(adminBranch.approvedAt, { $gte: tutorCreatedAt });
   } finally { Announcement.find = origFind; }
 });

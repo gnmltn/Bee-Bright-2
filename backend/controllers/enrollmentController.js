@@ -28,6 +28,8 @@ const { validateAndBuildAssessment } = require('../utils/validateAssessment');
 const { attachRemainingDueDates } = require('../utils/remainingDueDate');
 const Schedule = require('../models/Schedule');
 const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
+const { hardDeleteUser } = require('../utils/hardDeleteUser');
+const { runTransactionSafe } = require('../utils/runTransactionSafe');
 const { PROGRAM_POLICIES } = require('../utils/schedulingPolicy');
 const { canTutorHandleSchedule } = require('./scheduleController');
 const { permanentIdOf, findRenewalSource } = require('../utils/studentIdentity');
@@ -1347,35 +1349,66 @@ const adminApproveEnrollment = async (req, res) => {
 };
 
 // PUT /api/admin/enrollments/:id/reject
+// A rejected enrollment can never log in anyway (still needs admin approval), so there's no
+// reason to keep its data around — "Reject" hard-deletes the account instead of just flagging
+// it, reusing the same transaction-safe hardDeleteUser() the Archive → Delete flow already
+// uses. See "bug (5).pdf" Group W.
 const adminRejectEnrollment = async (req, res) => {
   try {
-    const { reason, allowResubmission = false } = req.body;
+    const { reason } = req.body;
     const enrollment = await Enrollment.findById(req.params.id);
     if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
 
-    enrollment.rejectionReason = String(reason || '').trim() || 'No reason provided.';
-    enrollment.allowResubmission = !!allowResubmission;
-    pushStatusHistory(enrollment, 'rejected', req.user._id, req.user.role, enrollment.rejectionReason);
-    enrollment.paymentStatus = 'failed';
-    await enrollment.save();
+    const rejectionReason = String(reason || '').trim() || 'No reason provided.';
+    const parentUser = await User.findById(enrollment.parent);
+    if (!parentUser) return res.status(404).json({ success: false, message: 'Parent account not found.' });
 
-    await User.findByIdAndUpdate(enrollment.parent, { enrollmentStatus: 'rejected' });
+    // A parent can have more than one Enrollment (e.g. a renewal or an additional program
+    // for a family that's already active). Hard-deleting the WHOLE account is only safe
+    // when this rejected enrollment is the parent's only one — otherwise it would wipe out
+    // an unrelated, already-approved child's data too. In that case only THIS enrollment
+    // (and its own payment records) is removed; the parent account and their other
+    // enrollment(s) are left untouched.
+    const otherEnrollmentCount = await Enrollment.countDocuments({ parent: enrollment.parent, _id: { $ne: enrollment._id } });
+    const wholeAccountDeleted = otherEnrollmentCount === 0;
 
-    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
-    if (parentUser?.email) {
+    const studentName = `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim();
+    const enrollmentIdLabel = permanentIdOf(enrollment);
+
+    // Kicked off before the delete — the parent's email/name only exist to read until then.
+    // Not awaited, matching every other outgoing email in this codebase (sendEmail's own
+    // SMTP round-trip must never block the request); sendEnrollmentRejectedEmail already
+    // swallows its own send failures internally (logs via logEmailError) either way.
+    if (parentUser.email) {
       sendEnrollmentRejectedEmail(parentUser.email, {
         parentName: `${parentUser.firstName} ${parentUser.lastName}`,
-        studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
-        enrollmentId: permanentIdOf(enrollment),
-        reason: enrollment.rejectionReason,
-        allowResubmission: !!allowResubmission,
-      }).catch(() => {});
+        studentName,
+        enrollmentId: enrollmentIdLabel,
+        reason: rejectionReason,
+      });
     }
 
-    logAudit({ req, userId: req.user._id, action: 'Reject Enrollment', module: 'Enrollment',
-      description: `Rejected ${enrollment.enrollmentId}: ${enrollment.rejectionReason}`, status: 'SUCCESS' }).catch(() => {});
+    await runTransactionSafe(async (session) => {
+      if (wholeAccountDeleted) {
+        await hardDeleteUser(parentUser, session);
+      } else {
+        const opts = session ? { session } : undefined;
+        await Payment.deleteMany({ enrollment: enrollment._id }, opts);
+        await Enrollment.deleteOne({ _id: enrollment._id }, opts);
+      }
+    });
 
-    return res.status(200).json({ success: true, message: 'Enrollment rejected.', enrollment });
+    logAudit({
+      req,
+      userId: req.user._id,
+      action: 'Reject Enrollment',
+      module: 'Enrollment',
+      description: `Rejected and deleted ${enrollment.enrollmentId}: ${rejectionReason}${wholeAccountDeleted ? ' (account permanently deleted)' : ' (enrollment deleted; parent account kept — other enrollments exist)'}`,
+      status: 'SUCCESS',
+      metadata: { enrollmentId: enrollment.enrollmentId, wholeAccountDeleted },
+    }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Enrollment rejected and the account was permanently deleted.', wholeAccountDeleted });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

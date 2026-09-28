@@ -539,7 +539,6 @@ export default function AdminDashboard() {
   // Reject dialog state
   const [rejectEnrollmentId, setRejectEnrollmentId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
-  const [rejectAllowResubmit, setRejectAllowResubmit] = useState(true);
   const [rejectLoading, setRejectLoading] = useState(false);
   // Verify payment dialog state
   const [verifyPaymentDialogOpen, setVerifyPaymentDialogOpen] = useState(false);
@@ -601,7 +600,6 @@ export default function AdminDashboard() {
   const [schedulesLoading, setSchedulesLoading] = useState(true);
   const [adminPayments, setAdminPayments] = useState<AdminPaymentItem[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
-  const [verifyingPaymentId, setVerifyingPaymentId] = useState<string | null>(null);
 
   const [scheduleDeletingId, setScheduleDeletingId] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
@@ -1598,7 +1596,6 @@ export default function AdminDashboard() {
   const openRejectDialog = (enrollmentId: string) => {
     setRejectEnrollmentId(enrollmentId);
     setRejectReason('');
-    setRejectAllowResubmit(true);
   };
 
   const handleConfirmReject = async () => {
@@ -1606,10 +1603,10 @@ export default function AdminDashboard() {
     if (!rejectReason.trim()) { toast.error("Please provide a rejection reason."); return; }
     setRejectLoading(true);
     try {
-      const res = await enrollmentService.rejectEnrollment(rejectEnrollmentId, rejectReason, rejectAllowResubmit);
+      const res = await enrollmentService.rejectEnrollment(rejectEnrollmentId, rejectReason);
       if (res.data?.success) {
-        toast.success("Enrollment rejected and parent notified.");
-        fetchEnrollments(); fetchUsers(); fetchDashboardStats(); notifyBadgesChanged();
+        toast.success("Enrollment rejected, parent notified by email, and the account was removed.");
+        fetchEnrollments(); fetchUsers(); fetchDashboardStats(); fetchAdminPayments(); notifyBadgesChanged();
         setRejectEnrollmentId(null); setViewEnrollmentId(null);
       } else { toast.error(res.data?.message || "Failed to reject"); }
     } catch (err: unknown) {
@@ -1661,28 +1658,6 @@ export default function AdminDashboard() {
     });
     setPaymentProofZoomed(false);
     setPaymentProofLoadState('loading');
-  };
-
-  const handlePaymentVerification = async (paymentId: string, verified: boolean, rejectionReason?: string) => {
-    setVerifyingPaymentId(paymentId);
-    try {
-      const res = await paymentService.verifyPayment(paymentId, verified, rejectionReason);
-      if (res.data?.success) {
-        toast.success(verified ? "Payment verified." : "Payment rejected.");
-        fetchAdminPayments();
-        fetchEnrollments();
-        notifyBadgesChanged();
-        fetchUsers();
-        fetchDashboardStats();
-      } else {
-        toast.error(res.data?.message || (verified ? "Failed to verify" : "Failed to reject"));
-      }
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? (verified ? "Failed to verify" : "Failed to reject");
-      toast.error(msg);
-    } finally {
-      setVerifyingPaymentId(null);
-    }
   };
 
   const confirmPendingUserAction = async () => {
@@ -2834,7 +2809,6 @@ export default function AdminDashboard() {
                               const dateLabel = payment.createdAt
                                 ? new Date(payment.createdAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
                                 : "—";
-                              const isVerifying = verifyingPaymentId === payment._id;
                               return (
                                 <tr key={payment._id} className="hover:bg-muted/50 transition-colors">
                                   <td className="p-4 font-mono text-sm text-foreground">{payment.referenceNumber ?? payment._id}</td>
@@ -2846,21 +2820,15 @@ export default function AdminDashboard() {
                                     <span className="text-xs px-2 py-1 rounded-full font-medium bg-warning/10 text-warning">Pending review</span>
                                   </td>
                                   <td className="p-4">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      {(payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
-                                        <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
-                                          Proof
-                                        </Button>
-                                      ) : null}
-                                      <Button variant="default" size="sm" disabled={isVerifying} onClick={() => handlePaymentVerification(payment._id, true)}>
-                                        {isVerifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-                                        Verify
+                                    {/* Approve/reject now happens only on the Enrollments tab (per
+                                        "bug (5).pdf" Group V) — this action is view-only. */}
+                                    {(payment.proofUrl || payment.gcashDetails?.screenshotUrl) ? (
+                                      <Button variant="outline" size="sm" onClick={() => openPaymentProof(payment.proofUrl || payment.gcashDetails?.screenshotUrl, payment.referenceNumber ?? payment._id)}>
+                                        View Proof
                                       </Button>
-                                      <Button variant="ghost" size="sm" disabled={isVerifying} onClick={() => handlePaymentVerification(payment._id, false, "Rejected by admin") }>
-                                        <X className="h-4 w-4" />
-                                        Reject
-                                      </Button>
-                                    </div>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground">No proof uploaded</span>
+                                    )}
                                   </td>
                                 </tr>
                               );
@@ -5638,24 +5606,23 @@ export default function AdminDashboard() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Reject Enrollment</DialogTitle>
-            <DialogDescription>Provide a reason. The parent will be notified by email.</DialogDescription>
+            <DialogDescription>
+              This permanently deletes the account and all its enrollment/payment data — this cannot be undone.
+              The parent will be notified by email and must submit a brand-new enrollment if they want to try again.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="rejectReason">Reason *</Label>
               <textarea id="rejectReason" rows={3} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                placeholder="e.g. Payment proof unclear, please resubmit a clearer screenshot."
+                placeholder="e.g. Payment proof unclear or could not be verified."
                 value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
-            </div>
-            <div className="flex items-center gap-2">
-              <Checkbox id="allowResubmit" checked={rejectAllowResubmit} onCheckedChange={(v) => setRejectAllowResubmit(Boolean(v))} />
-              <Label htmlFor="allowResubmit" className="cursor-pointer font-normal">Allow parent to resubmit payment proof</Label>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectEnrollmentId(null)}>Cancel</Button>
             <Button variant="destructive" disabled={rejectLoading || !rejectReason.trim()} onClick={handleConfirmReject}>
-              {rejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Confirm Rejection
+              {rejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Reject &amp; Delete Account
             </Button>
           </DialogFooter>
         </DialogContent>
