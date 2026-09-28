@@ -415,6 +415,9 @@ export const enrollmentService = {
   /** Hard-deletes the account and all its enrollment/payment data — see Group W ("bug (5).pdf"). */
   rejectEnrollment: (enrollmentId: string, reason: string) =>
     api.put(`/enrollments/${enrollmentId}/reject`, { reason }),
+  /** Group AI — remaining 50% paid in person (cash), admin-attested, no online proof. */
+  markPaidOnsite: (enrollmentId: string) =>
+    api.post<{ success: boolean; message?: string; amount?: number }>(`/enrollments/${enrollmentId}/mark-paid-onsite`),
   adminAddStudent: (data: {
     firstName: string; middleName?: string; lastName: string; email: string;
     phone: string; password: string; gradeLevel: string; guardianName: string;
@@ -929,6 +932,8 @@ export type PendingBalanceItem = {
   children: string[];
   /** One itemized bill per child enrollment. */
   bills?: {
+    /** Enrollment Mongo _id — what "Mark Paid Onsite" acts on. */
+    _id: string;
     enrollmentId: string;
     studentId: string;
     childName: string;

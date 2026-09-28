@@ -26,8 +26,10 @@ const User = require('../models/User');
 const TutorUnavailability = require('../models/TutorUnavailability');
 const Schedule = require('../models/Schedule');
 const ScheduleSubstitutionLog = require('../models/ScheduleSubstitutionLog');
+const Enrollment = require('../models/Enrollment');
 const emailService = require('../utils/emailService');
-emailService.sendEmail = async () => ({ success: true });
+const capturedEmails = [];
+emailService.sendEmail = async (opts) => { capturedEmails.push(opts); return { success: true }; };
 const auditService = require('../utils/auditService');
 auditService.logAudit = async () => {};
 
@@ -82,13 +84,14 @@ function makePlaygroupSchedule(overrides = {}) {
   return doc;
 }
 
-function stubCommon({ schedule, extraTutorLookups = {} }) {
+function stubCommon({ schedule, extraTutorLookups = {}, enrollments = [] }) {
   const origScheduleFindById = Schedule.findById;
   const origScheduleFind = Schedule.find;
   const origUserFindOne = User.findOne;
   const origUserFindById = User.findById;
   const origTutorUnavailabilityExists = TutorUnavailability.exists;
   const origLogCreate = ScheduleSubstitutionLog.create;
+  const origEnrollmentFind = Enrollment.find;
 
   // Same mutable doc returned every time — mutations from processSubstitutionForSchedule
   // are visible to the controller's own "refetch populated" query afterward, just like a
@@ -99,6 +102,9 @@ function stubCommon({ schedule, extraTutorLookups = {} }) {
   User.findById = (id) => mockQuery({ _id: id, firstName: extraTutorLookups[id]?.firstName || 'New', lastName: extraTutorLookups[id]?.lastName || 'Tutor', email: `${id}@example.com` });
   TutorUnavailability.exists = async () => false;
   ScheduleSubstitutionLog.create = async () => [{}];
+  // Playgroup parent-notification lookup — empty by default (no parent found => no parent
+  // emails sent); tests that care about it pass their own `enrollments` fixture.
+  Enrollment.find = () => mockQuery(enrollments);
 
   return {
     restore() {
@@ -108,6 +114,7 @@ function stubCommon({ schedule, extraTutorLookups = {} }) {
       User.findById = origUserFindById;
       TutorUnavailability.exists = origTutorUnavailabilityExists;
       ScheduleSubstitutionLog.create = origLogCreate;
+      Enrollment.find = origEnrollmentFind;
     },
   };
 }
@@ -155,6 +162,126 @@ test('assignSubstituteTutor: multi-tutor session — replacing the PRIMARY tutor
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(String(schedule.tutor), 'maria-co');
     assert.deepEqual(schedule.tutors.map(String), ['maria-co', 'mariana']);
+  } finally { restore(); }
+});
+
+// ── Substitution-notification email "Student" field ("Student: Unknown" bug) ──────────────
+test('notifyScheduleSubstitution: 1-on-1 session shows the enrolled student\'s real name, not "Unknown"', async () => {
+  capturedEmails.length = 0;
+  const schedule = makePlaygroupSchedule({
+    sessionType: 'one-on-one',
+    tutors: ['jake'],
+    student: { _id: 'kid-1', firstName: 'Ana', lastName: 'Cruz', email: 'ana.parent@example.com' },
+  });
+  const { restore } = stubCommon({ schedule });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({ params: { id: 'sched-pg-1' }, user: { id: 'admin-1' }, body: { replacementTutorId: 'maria' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const toReplacement = capturedEmails.find((e) => e.subject === 'Bee Bright schedule update: you were assigned as substitute tutor');
+    assert.ok(toReplacement, 'expected the "assigned as substitute tutor" email to have been sent');
+    assert.match(toReplacement.text, /Student: Ana Cruz/);
+    assert.doesNotMatch(toReplacement.text, /Student: Unknown/);
+    assert.match(toReplacement.html, /Ana Cruz/);
+  } finally { restore(); }
+});
+
+test('notifyScheduleSubstitution: Toddlers Playgroup session lists every enrolled child, not just "Unknown"', async () => {
+  capturedEmails.length = 0;
+  const schedule = makePlaygroupSchedule({
+    students: [
+      { _id: 'kid-1', firstName: 'Ana', lastName: 'Cruz', email: 'a@example.com' },
+      { _id: 'kid-2', firstName: 'Ben', lastName: 'Santos', email: 'b@example.com' },
+    ],
+  });
+  const { restore } = stubCommon({ schedule });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({
+      params: { id: 'sched-pg-1' },
+      user: { id: 'admin-1' },
+      body: { replacementTutorId: 'maria-co', replacedTutorId: 'mariana' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const toReplacement = capturedEmails.find((e) => e.subject === 'Bee Bright schedule update: you were assigned as substitute tutor');
+    assert.ok(toReplacement, 'expected the "assigned as substitute tutor" email to have been sent');
+    assert.match(toReplacement.text, /Student: Ana Cruz, Ben Santos/);
+    assert.doesNotMatch(toReplacement.text, /Student: Unknown/);
+  } finally { restore(); }
+});
+
+test('notifyScheduleSubstitution: a genuinely-empty Playgroup roster still falls back to "Unknown" (no crash)', async () => {
+  capturedEmails.length = 0;
+  const schedule = makePlaygroupSchedule(); // student: null, students: [] — nobody actually enrolled
+  const { restore } = stubCommon({ schedule });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({
+      params: { id: 'sched-pg-1' },
+      user: { id: 'admin-1' },
+      body: { replacementTutorId: 'maria-co', replacedTutorId: 'mariana' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const toReplacement = capturedEmails.find((e) => e.subject === 'Bee Bright schedule update: you were assigned as substitute tutor');
+    assert.match(toReplacement.text, /Student: Unknown/);
+  } finally { restore(); }
+});
+
+// ── Playgroup parent notification (each enrolled child's own parent, one email each) ──────
+test('notifyScheduleSubstitution: Toddlers Playgroup — each enrolled child\'s OWN parent gets a separate email with only their own child\'s info', async () => {
+  capturedEmails.length = 0;
+  const schedule = makePlaygroupSchedule({
+    students: [
+      { _id: 'kid-1', firstName: 'Ana', lastName: 'Cruz', email: 'a@example.com' },
+      { _id: 'kid-2', firstName: 'Ben', lastName: 'Santos', email: 'b@example.com' },
+    ],
+  });
+  const enrollments = [
+    { student: 'kid-1', parent: { _id: 'parent-1', firstName: 'Carla', lastName: 'Cruz', email: 'carla.cruz@example.com' } },
+    { student: 'kid-2', parent: { _id: 'parent-2', firstName: 'David', lastName: 'Santos', email: 'david.santos@example.com' } },
+  ];
+  const { restore } = stubCommon({ schedule, enrollments });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({
+      params: { id: 'sched-pg-1' },
+      user: { id: 'admin-1' },
+      body: { replacementTutorId: 'maria-co', replacedTutorId: 'mariana' },
+    }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+
+    const toParents = capturedEmails.filter((e) => e.to === 'carla.cruz@example.com' || e.to === 'david.santos@example.com');
+    assert.equal(toParents.length, 2, 'expected exactly one email per parent, not one combined email');
+
+    const toCarla = toParents.find((e) => e.to === 'carla.cruz@example.com');
+    assert.match(toCarla.text, /Ana Cruz/);
+    assert.doesNotMatch(toCarla.text, /Ben Santos/, 'a parent must never see another child\'s name');
+    assert.match(toCarla.text, /Toddlers Playgroup/);
+    assert.match(toCarla.html, /Ana Cruz/);
+
+    const toDavid = toParents.find((e) => e.to === 'david.santos@example.com');
+    assert.match(toDavid.text, /Ben Santos/);
+    assert.doesNotMatch(toDavid.text, /Ana Cruz/, 'a parent must never see another child\'s name');
+  } finally { restore(); }
+});
+
+test('notifyScheduleSubstitution: 1-on-1 session never triggers the Playgroup-parent path (existing student notification unaffected)', async () => {
+  capturedEmails.length = 0;
+  const schedule = makePlaygroupSchedule({
+    sessionType: 'one-on-one',
+    tutors: ['jake'],
+    student: { _id: 'kid-1', firstName: 'Ana', lastName: 'Cruz', email: 'ana.parent@example.com' },
+  });
+  const enrollments = [{ student: 'kid-1', parent: { _id: 'parent-1', firstName: 'Carla', lastName: 'Cruz', email: 'carla.cruz@example.com' } }];
+  const { restore } = stubCommon({ schedule, enrollments });
+  try {
+    const res = mockRes();
+    await assignSubstituteTutor({ params: { id: 'sched-pg-1' }, user: { id: 'admin-1' }, body: { replacementTutorId: 'maria' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const toParentEmail = capturedEmails.find((e) => e.to === 'carla.cruz@example.com');
+    assert.equal(toParentEmail, undefined, 'a 1-on-1 session must never trigger the new Playgroup parent-notification path');
+    const toStudent = capturedEmails.find((e) => e.to === 'ana.parent@example.com');
+    assert.ok(toStudent, 'the existing 1-on-1 student-notification email must be completely unaffected');
   } finally { restore(); }
 });
 

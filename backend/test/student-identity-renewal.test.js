@@ -122,6 +122,7 @@ test('adminApproveEnrollment: the Student ID is the permanent ID, so a renewal a
   const origFindById = Enrollment.findById;
   const origUpdate = User.findByIdAndUpdate;
   const origUFindById = User.findById;
+  const origPaymentFind = Payment.find;
   const doc = {
     _id: 'e2', enrollmentId: 'BB-20260924-0007', permanentStudentId: 'BB-20260924-0006', status: 'pending_approval',
     parent: PARENT_ID, studentSnapshot: { firstName: 'Leo', lastName: 'Soriano' }, statusHistory: [],
@@ -130,13 +131,16 @@ test('adminApproveEnrollment: the Student ID is the permanent ID, so a renewal a
   Enrollment.findById = async () => doc;
   User.findByIdAndUpdate = async () => ({});
   User.findById = () => ({ select: () => ({ lean: async () => ({ email: 'maria@example.com', firstName: 'Maria', lastName: 'Soriano' }) }) });
+  // Group AH's payment-verified gate — the down payment is verified here, matching this
+  // test's own premise ('pending_approval' is only reached after that happens).
+  Payment.find = () => ({ select: () => ({ lean: async () => [{ status: 'verified', paymentType: 'down' }] }) });
   try {
     const res = mockRes();
     await adminApproveEnrollment({ params: { id: 'e2' }, user: { _id: 'admin-1', role: 'admin' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(res._body.studentId, 'BB-20260924-0006');
     assert.equal(doc.studentId, 'BB-20260924-0006');
-  } finally { Enrollment.findById = origFindById; User.findByIdAndUpdate = origUpdate; User.findById = origUFindById; }
+  } finally { Enrollment.findById = origFindById; User.findByIdAndUpdate = origUpdate; User.findById = origUFindById; Payment.find = origPaymentFind; }
 });
 
 test('ensureStudentUserForEnrollment: a renewal reuses the sibling enrollment\'s student User instead of creating a second one', async () => {

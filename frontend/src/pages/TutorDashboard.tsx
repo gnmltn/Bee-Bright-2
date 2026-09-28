@@ -65,6 +65,7 @@ import {
 } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import { displayStudentId } from "@/lib/children";
+import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
 import { PROGRAM_CATEGORIES, PROGRAM_LABELS, type ActiveProgramCode } from "@/constants/programs";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
 import { RemarkForm } from "@/components/tutor/RemarkForm";
@@ -947,7 +948,7 @@ export default function TutorDashboard() {
     const slotSet = new Set<string>();
     const map = new Map<
       string,
-      { student: string; subject: string; scheduleId: string; attendanceStatus?: string }[]
+      { student: string; subject: string; subjectCode?: string; scheduleId: string; attendanceStatus?: string }[]
     >();
 
     sessions.forEach((s) => {
@@ -968,6 +969,7 @@ export default function TutorDashboard() {
       list.push({
         student,
         subject: s.subject?.name ?? "—",
+        subjectCode: s.subject?.code,
         scheduleId: s._id,
         attendanceStatus: s.attendanceStatus ?? "unmarked",
       });
@@ -1192,17 +1194,17 @@ export default function TutorDashboard() {
                                   attendanceStatus: session.attendanceStatus,
                                 })
                               }
-                              className="w-full p-2 bg-primary/10 hover:bg-primary/20 rounded-lg text-center cursor-pointer transition-colors hover:ring-2 hover:ring-primary/30"
+                              className={`w-full p-2 rounded-lg text-center cursor-pointer transition-colors hover:opacity-90 hover:ring-2 hover:ring-primary/30 ${scheduleEntryBgClass(session.subjectCode)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                             >
                               <p
-                                className="text-xs font-medium text-foreground truncate"
+                                className="text-xs font-medium truncate"
                                 title={session.student}
                               >
                                 {session.student}
                               </p>
-                              <p className="text-[10px] text-muted-foreground">{session.subject}</p>
+                              <p className="text-[10px] opacity-80">{session.subject}</p>
                               {session.attendanceStatus && session.attendanceStatus !== "unmarked" && (
-                                <p className="text-[10px] mt-0.5 text-muted-foreground capitalize">
+                                <p className="text-[10px] mt-0.5 opacity-80 capitalize">
                                   {session.attendanceStatus}
                                 </p>
                               )}
@@ -1797,7 +1799,7 @@ export default function TutorDashboard() {
                                     return (
                                       <div
                                         key={s._id}
-                                        className="w-full text-left p-2 rounded text-xs truncate transition-colors bg-primary/10 text-primary hover:bg-primary/20"
+                                        className={`w-full text-left p-2 rounded text-xs truncate transition-colors hover:opacity-90 ${scheduleEntryBgClass(s.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                                       >
                                         <span className="font-medium block">{s.subject?.name ?? "—"}</span>
                                         <span className="opacity-90">{formatSlotTime(s.startTime)}</span>
@@ -1853,7 +1855,7 @@ export default function TutorDashboard() {
                                             return (
                                               <div
                                                 key={session._id}
-                                                className="w-full text-left p-2 rounded text-xs truncate transition-colors bg-primary/10 text-primary hover:bg-primary/20"
+                                                className={`w-full text-left p-2 rounded text-xs truncate transition-colors hover:opacity-90 ${scheduleEntryBgClass(session.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                                               >
                                                 <span className="font-medium block">{session.subject?.name ?? "—"}</span>
                                                 <span className="opacity-75 block truncate">{studentName}</span>
@@ -1883,17 +1885,17 @@ export default function TutorDashboard() {
                             return (
                               <div
                                 key={s._id}
-                                className="p-3 rounded-md border border-border transition-colors bg-card hover:bg-muted/40"
+                                className={`p-3 rounded-md border border-border transition-colors hover:opacity-90 ${scheduleEntryBgClass(s.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                               >
                                 <div className="flex items-start gap-3">
                                   <div className="min-w-0 flex-1">
-                                    <p className="font-medium text-foreground">{s.subject?.name ?? "—"}</p>
-                                    <p className="text-sm text-muted-foreground">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
-                                    <p className="text-xs text-muted-foreground">
+                                    <p className="font-medium">{s.subject?.name ?? "—"}</p>
+                                    <p className="text-sm opacity-90">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
+                                    <p className="text-xs opacity-80">
                                       {s.sessionType === "playgroup" ? "Children" : "Student"}: {studentName}
                                     </p>
                                     {s.sessionType === "playgroup" && Array.isArray(s.students) && s.students.length > 0 && (
-                                      <p className="text-xs text-muted-foreground">{s.students.length} / 10 enrolled</p>
+                                      <p className="text-xs opacity-80">{s.students.length} / 10 enrolled</p>
                                     )}
                                   </div>
                                 </div>

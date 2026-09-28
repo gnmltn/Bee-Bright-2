@@ -6,6 +6,7 @@ const {
   submitEnrollment,
   submitPaymentProof,
   submitRemainingPaymentProof,
+  markRemainingBalancePaidOnsite,
   getMyEnrollments,
   trackEnrollment,
   getEnrollmentAvailability,
@@ -67,6 +68,7 @@ router.post('/:enrollmentId/submit-proof', protect, submitPaymentProof);
 router.post('/:enrollmentId/submit-remaining-proof', protect, submitRemainingPaymentProof);
 router.put('/:id/status', protect, authorize('admin'), updateEnrollmentStatus);
 router.put('/:id/verify-payment', protect, authorize('admin'), adminVerifyPayment);
+router.post('/:id/mark-paid-onsite', protect, authorize('admin'), markRemainingBalancePaidOnsite);
 router.put('/:id/approve', protect, authorize('admin'), adminApproveEnrollment);
 router.put('/:id/reject', protect, authorize('admin'), adminRejectEnrollment);
 // /:id GET must be absolute last — catches anything not matched above

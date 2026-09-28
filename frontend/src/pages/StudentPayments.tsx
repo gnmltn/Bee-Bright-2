@@ -51,6 +51,9 @@ interface EnrollmentItem {
   studentSnapshot?: { firstName?: string; lastName?: string };
   permanentStudentId?: string;
   studentId?: string;
+  /** ISO date of the package's LAST scheduled session, or null until the full package is
+   *  scheduled — backend/utils/remainingDueDate.js. Never a fixed day offset from createdAt. */
+  invoiceDueDate?: string | null;
 }
 
 // Every current write path (adminApproveEnrollment, adminVerifyPayment, the
@@ -111,7 +114,12 @@ const fallbackInvoices: InvoiceLike[] = [
 
 function mapEnrollmentToInvoice(e: EnrollmentItem): InvoiceLike {
   const date = e.createdAt ? new Date(e.createdAt).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) : "";
-  const dueDate = e.createdAt ? new Date(new Date(e.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) : "";
+  // The date of the package's actual LAST scheduled session — not a fixed offset from the
+  // issue date. Null until every session in the package has been scheduled; shown as an
+  // explanatory placeholder rather than left blank or silently falling back to a guess.
+  const dueDate = e.invoiceDueDate
+    ? new Date(e.invoiceDueDate).toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })
+    : "Pending — awaiting full session schedule";
   const items = (e.packages && e.packages.length > 0)
     ? e.packages.map((p) => ({ name: p.displayName || "Package", quantity: 1, price: p.price ?? 0 }))
     : (e.selectedSubjects && e.selectedSubjects.length > 0)

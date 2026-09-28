@@ -22,6 +22,7 @@ const {
   adminApproveEnrollment,
   adminVerifyPayment,
   submitRemainingPaymentProof,
+  markRemainingBalancePaidOnsite,
 } = require('../controllers/enrollmentController');
 
 const TINY_PNG_DATA_URL = 'data:image/png;base64,' + Buffer.from('fake-image-bytes').toString('base64');
@@ -65,16 +66,20 @@ function makePaymentDoc(overrides = {}) {
   return doc;
 }
 
-function stubEnrollmentAndUser({ enrollment, parentUser }) {
+function stubEnrollmentAndUser({ enrollment, parentUser, payments }) {
   const origEnrollmentFindById = Enrollment.findById;
   const origEnrollmentCountDocuments = Enrollment.countDocuments;
   const origUserFindByIdAndUpdate = User.findByIdAndUpdate;
   const origUserFindById = User.findById;
+  const origPaymentFind = Payment.find;
 
   Enrollment.findById = async () => enrollment;
   Enrollment.countDocuments = async () => 0;
   User.findByIdAndUpdate = async () => ({});
   User.findById = () => ({ select: () => ({ lean: async () => parentUser }) });
+  // Group AH's payment-verified gate on adminApproveEnrollment — a verified down payment by
+  // default (every test here approves an already-down-verified enrollment).
+  Payment.find = () => ({ select: () => ({ lean: async () => payments ?? [{ status: 'verified', paymentType: 'down' }] }) });
 
   return {
     restore() {
@@ -82,6 +87,7 @@ function stubEnrollmentAndUser({ enrollment, parentUser }) {
       Enrollment.countDocuments = origEnrollmentCountDocuments;
       User.findByIdAndUpdate = origUserFindByIdAndUpdate;
       User.findById = origUserFindById;
+      Payment.find = origPaymentFind;
     },
   };
 }
@@ -230,5 +236,118 @@ test('submitRemainingPaymentProof: computes the remaining amount as totalFee min
     fs.writeFileSync = origFsWrite;
     fs.existsSync = origFsExists;
     fs.mkdirSync = origFsMkdir;
+  }
+});
+
+// ── "bug (9).pdf" Group AI — "Paid Onsite" (remaining balance collected in person) ────────
+test('markRemainingBalancePaidOnsite: blocked until the down payment is verified (same rule as the online remaining-proof flow)', async () => {
+  const enrollment = makeEnrollment({ status: 'approved', paymentStatus: 'submitted' });
+  const downPayment = makePaymentDoc({ paymentType: 'down', status: 'submitted' });
+  const origEnrollmentFindById = Enrollment.findById;
+  const origPaymentFindOne = Payment.findOne;
+  Enrollment.findById = async () => enrollment;
+  Payment.findOne = (filter) => ({
+    sort: () => Promise.resolve(filter.paymentType?.$ne === 'remaining' ? downPayment : null),
+  });
+  try {
+    const res = mockRes();
+    await markRemainingBalancePaidOnsite({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' } }, res);
+    assert.equal(res._status, 400);
+    assert.match(res._body.message, /down payment must be verified/i);
+  } finally {
+    Enrollment.findById = origEnrollmentFindById;
+    Payment.findOne = origPaymentFindOne;
+  }
+});
+
+test('markRemainingBalancePaidOnsite: nothing owed (already fully paid) is rejected, not silently re-marked', async () => {
+  const enrollment = makeEnrollment({ status: 'approved', paymentStatus: 'paid', totalFee: 4000 });
+  const downPayment = makePaymentDoc({ paymentType: 'down', status: 'verified', amountPaid: 4000 });
+  const origEnrollmentFindById = Enrollment.findById;
+  const origPaymentFindOne = Payment.findOne;
+  Enrollment.findById = async () => enrollment;
+  Payment.findOne = (filter) => ({
+    sort: () => Promise.resolve(filter.paymentType?.$ne === 'remaining' ? downPayment : null),
+  });
+  try {
+    const res = mockRes();
+    await markRemainingBalancePaidOnsite({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' } }, res);
+    assert.equal(res._status, 400);
+    assert.match(res._body.message, /no remaining balance/i);
+  } finally {
+    Enrollment.findById = origEnrollmentFindById;
+    Payment.findOne = origPaymentFindOne;
+  }
+});
+
+test('markRemainingBalancePaidOnsite: creates a verified, cash-method Payment for the correct amount and marks the enrollment fully paid', async () => {
+  const enrollment = makeEnrollment({ status: 'approved', paymentStatus: 'partial', totalFee: 4000 });
+  const downPayment = makePaymentDoc({ paymentType: 'down', status: 'verified', amountPaid: 2000 });
+  const origEnrollmentFindById = Enrollment.findById;
+  const origPaymentFindOne = Payment.findOne;
+  const origPaymentSave = Payment.prototype.save;
+  const origUserFindById = User.findById;
+
+  let saved = null;
+  Enrollment.findById = async () => enrollment;
+  Payment.findOne = (filter) => ({
+    sort: () => Promise.resolve(filter.paymentType?.$ne === 'remaining' ? downPayment : null), // no existing remaining Payment yet
+  });
+  User.findById = () => ({ select: () => ({ lean: async () => ({ _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' }) }) });
+  Payment.prototype.save = async function () { saved = this; return this; };
+
+  const ADMIN_ID = '507f1f77bcf86cd799439099'; // valid ObjectId shape — verifiedBy is a real ref field on a real `new Payment(...)`
+  try {
+    const res = mockRes();
+    await markRemainingBalancePaidOnsite({ params: { id: 'enr-1' }, user: { _id: ADMIN_ID, role: 'admin' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.amount, 2000, 'remaining = totalFee(4000) - amountPaid(2000)');
+    assert.ok(saved, 'expected a new Payment document to be saved');
+    assert.equal(saved.paymentType, 'remaining');
+    assert.equal(saved.paymentMethod, 'cash', 'distinguishable from gcash/maribank/bdo — the actual online methods');
+    assert.equal(saved.status, 'verified', 'no separate verification step for an admin-attested onsite payment');
+    assert.equal(saved.amount, 2000);
+    assert.equal(saved.amountDue, 2000);
+    assert.equal(saved.amountPaid, 2000);
+    assert.ok(saved.verifiedAt instanceof Date);
+    assert.equal(String(saved.verifiedBy), ADMIN_ID);
+    assert.equal(saved.proofUrl, null, 'no proof upload for an onsite payment');
+    assert.equal(enrollment.paymentStatus, 'paid', 'matches the exact state a verified online remaining payment would leave — full parity');
+  } finally {
+    Enrollment.findById = origEnrollmentFindById;
+    Payment.findOne = origPaymentFindOne;
+    Payment.prototype.save = origPaymentSave;
+    User.findById = origUserFindById;
+  }
+});
+
+test('markRemainingBalancePaidOnsite: reuses an existing not-yet-verified remaining Payment instead of creating a duplicate', async () => {
+  const enrollment = makeEnrollment({ status: 'approved', paymentStatus: 'partial', totalFee: 4000 });
+  const downPayment = makePaymentDoc({ paymentType: 'down', status: 'verified', amountPaid: 2000 });
+  const existingRemaining = makePaymentDoc({ _id: 'pay-remaining-1', paymentType: 'remaining', status: 'submitted', amount: 2000, amountDue: 2000 });
+  let saveCallCount = 0;
+  existingRemaining.save = async function () { saveCallCount += 1; return this; };
+
+  const origEnrollmentFindById = Enrollment.findById;
+  const origPaymentFindOne = Payment.findOne;
+  const origUserFindById = User.findById;
+  Enrollment.findById = async () => enrollment;
+  Payment.findOne = (filter) => ({
+    sort: () => Promise.resolve(filter.paymentType?.$ne === 'remaining' ? downPayment : existingRemaining),
+  });
+  User.findById = () => ({ select: () => ({ lean: async () => ({ _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' }) }) });
+
+  try {
+    const res = mockRes();
+    await markRemainingBalancePaidOnsite({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(saveCallCount, 1, 'the existing Payment doc should be updated in place, not duplicated');
+    assert.equal(existingRemaining.status, 'verified');
+    assert.equal(existingRemaining.paymentMethod, 'cash');
+    assert.equal(enrollment.paymentStatus, 'paid');
+  } finally {
+    Enrollment.findById = origEnrollmentFindById;
+    Payment.findOne = origPaymentFindOne;
+    User.findById = origUserFindById;
   }
 });

@@ -108,6 +108,18 @@ function buildFullName(person) {
   return [person.firstName, person.middleName, person.lastName].filter(Boolean).join(' ').trim() || 'Unknown';
 }
 
+/** The "Student" line for a substitution-notification email — the single enrolled student
+ * for a 1-on-1 session (`schedule.student`), or every enrolled child for a Toddlers
+ * Playgroup session (`schedule.students[]`, which a 1-on-1 session never populates and a
+ * Playgroup session never mirrors into the singular field) — never just "Unknown" for a
+ * genuinely-enrolled Playgroup session. */
+function buildStudentLabel(schedule) {
+  if (schedule?.student) return buildFullName(schedule.student);
+  const students = Array.isArray(schedule?.students) ? schedule.students : [];
+  if (students.length === 0) return 'Unknown';
+  return students.map((s) => buildFullName(s)).join(', ');
+}
+
 /** Renders the "Subject / Date / Time / Reason / ..." pairs every scheduling notification
  * email already builds as a plain-text block, as the same styled detail box the branded
  * template uses elsewhere (e.g. enrollmentService.js's Student ID/Amount Due box). */
@@ -665,6 +677,7 @@ async function processSubstitutionForSchedule({
 }) {
   const scheduleQuery = Schedule.findById(scheduleId)
     .populate('student', 'firstName middleName lastName email')
+    .populate('students', 'firstName middleName lastName email')
     .populate('tutor', 'firstName middleName lastName email')
     .populate('subject', 'name code')
     .populate('originalTutor', 'firstName middleName lastName email');
@@ -674,7 +687,19 @@ async function processSubstitutionForSchedule({
     throw new Error('Schedule not found');
   }
 
-  if (!allowAlreadyAssigned && schedule.substitutionStatus === 'assigned' && !replacementTutorId) {
+  // Idempotency guard for auto-triggers that never say WHICH tutor they mean (implicit —
+  // falls back to the primary `tutor` field below): if this exact schedule already has a
+  // resolved substitution, a redundant re-fire (e.g. attendance-timeout retriggering) must
+  // not substitute out the substitute all over again. This must NOT apply when the caller
+  // explicitly names a `replacedTutorId` (Mark Tutor Unavailable's multi-select, Assign
+  // Substitute Tutor's "Tutor to replace") — a Playgroup session can legitimately need
+  // SEVERAL independent substitutions, one per co-tutor, and `schedule.substitutionStatus`
+  // is a single whole-session flag, not one per tutor. Without this exclusion, the second
+  // of two co-tutors marked unavailable in the same batch would be silently skipped the
+  // instant the first one's substitution succeeded — "bug (8).pdf" follow-up (Group AD).
+  // The explicit-target case is already made safe by the currentTutorIds membership check
+  // just below, which throws if that specific tutor isn't actually still assigned here.
+  if (!allowAlreadyAssigned && !replacedTutorId && schedule.substitutionStatus === 'assigned' && !replacementTutorId) {
     return {
       status: 'assigned',
       schedule,
@@ -846,6 +871,7 @@ async function processSubstitutionForSchedule({
 
 async function notifyScheduleSubstitution({ schedule, previousTutor, replacementTutor, reason }) {
   const student = schedule?.student;
+  const studentLabel = buildStudentLabel(schedule);
   const subject = schedule?.subject;
   const dateLabel = new Date(schedule.date).toLocaleDateString('en-US', {
     weekday: 'long', month: 'short', day: 'numeric', year: 'numeric'
@@ -867,6 +893,49 @@ async function notifyScheduleSubstitution({ schedule, previousTutor, replacement
       }),
     }, 'schedule substitution notification (student)'));
   }
+
+  // Toddlers Playgroup has no singular `student` — notify each enrolled child's OWN parent
+  // individually, one email per parent (never a single email listing every child, since a
+  // session's children can belong to different parents). Previously no Playgroup session
+  // ever notified a family about a substitute at all. A lookup failure here must never
+  // break the substitution itself (already saved by the time this runs) — logged and
+  // skipped, same fail-open convention as every other step in this function.
+  const playgroupChildren = (!student && Array.isArray(schedule?.students)) ? schedule.students : [];
+  if (playgroupChildren.length > 0) {
+    const parentByChildId = new Map();
+    try {
+      const childIds = playgroupChildren.map((c) => c?._id || c).filter(Boolean);
+      const enrollments = await Enrollment.find({
+        student: { $in: childIds },
+        status: { $nin: ['cancelled', 'rejected', 'draft'] }
+      })
+        .select('student parent')
+        .populate('parent', 'firstName middleName lastName email')
+        .lean();
+      for (const e of enrollments) {
+        const sid = String(e.student);
+        if (!parentByChildId.has(sid) && e.parent?.email) parentByChildId.set(sid, e.parent);
+      }
+    } catch (error) {
+      logEmailError('schedule substitution notification: failed to resolve Playgroup parents', error, { scheduleId: schedule?._id });
+    }
+
+    for (const child of playgroupChildren) {
+      const parent = parentByChildId.get(String(child?._id || child));
+      if (!parent?.email) continue;
+      const childName = buildFullName(child);
+      emails.push(sendEmail({
+        to: parent.email,
+        subject: `Bee Bright schedule update: substitute tutor for ${childName}'s Toddlers Playgroup session`,
+        text: `Hello ${buildFullName(parent)},\n\n${childName}'s Toddlers Playgroup session is still happening as scheduled, with a substitute tutor.\n\n${baseText}\n\nThank you.`,
+        html: buildBrandedEmailHtml({
+          title: 'Substitute Tutor Assigned',
+          bodyHtml: `<p>Hello ${buildFullName(parent)},</p><p>${childName}'s Toddlers Playgroup session is still happening as scheduled, with a substitute tutor.</p>${buildEmailDetailRowsHtml([['Child', childName], ...detailRows])}<p>Thank you.</p>`,
+        }),
+      }, 'schedule substitution notification (playgroup parent)'));
+    }
+  }
+
   if (previousTutor?.email) {
     emails.push(sendEmail({
       to: previousTutor.email,
@@ -882,10 +951,10 @@ async function notifyScheduleSubstitution({ schedule, previousTutor, replacement
     emails.push(sendEmail({
       to: replacementTutor.email,
       subject: 'Bee Bright schedule update: you were assigned as substitute tutor',
-      text: `Hello ${buildFullName(replacementTutor)},\n\nYou have been assigned as a substitute tutor.\n\n${baseText}\nStudent: ${buildFullName(student)}\n\nPlease check your dashboard schedule.`,
+      text: `Hello ${buildFullName(replacementTutor)},\n\nYou have been assigned as a substitute tutor.\n\n${baseText}\nStudent: ${studentLabel}\n\nPlease check your dashboard schedule.`,
       html: buildBrandedEmailHtml({
         title: 'You Were Assigned as Substitute Tutor',
-        bodyHtml: `<p>Hello ${buildFullName(replacementTutor)},</p><p>You have been assigned as a substitute tutor.</p>${buildEmailDetailRowsHtml([...detailRows, ['Student', buildFullName(student)]])}<p>Please check your dashboard schedule.</p>`,
+        bodyHtml: `<p>Hello ${buildFullName(replacementTutor)},</p><p>You have been assigned as a substitute tutor.</p>${buildEmailDetailRowsHtml([...detailRows, ['Student', studentLabel]])}<p>Please check your dashboard schedule.</p>`,
       }),
     }, 'schedule substitution notification (new tutor)'));
   }

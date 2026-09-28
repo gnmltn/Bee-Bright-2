@@ -1008,6 +1008,74 @@ const submitRemainingPaymentProof = async (req, res) => {
   }
 };
 
+// ── Admin: mark the remaining balance as Paid Onsite  POST /api/enrollments/:id/mark-paid-onsite ──
+// "bug (9).pdf" Group AI — some parents pay the remaining 50% in person (cash or otherwise)
+// directly to staff, never going through the online proof-upload flow. This is a distinct,
+// admin-attested action (staff directly confirms the money was received), not a shortcut
+// around verifying an online proof — there is no proof to verify here.
+const markRemainingBalancePaidOnsite = async (req, res) => {
+  try {
+    const enrollment = await Enrollment.findById(req.params.id);
+    if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    // Same computation as submitRemainingPaymentProof: the remaining balance only exists
+    // once the down payment is actually verified.
+    const downPayment = await Payment.findOne({ enrollment: enrollment._id, paymentType: { $ne: 'remaining' } }).sort({ createdAt: -1 });
+    if (!downPayment || downPayment.status !== 'verified') {
+      return res.status(400).json({ success: false, message: 'The down payment must be verified before the remaining balance can be marked paid.' });
+    }
+    const amountPaidSoFar = downPayment.amountPaid ?? downPayment.amountDue ?? downPayment.amount ?? 0;
+    const remainingAmount = Math.max(0, Math.round((enrollment.totalFee || 0) - amountPaidSoFar));
+    if (remainingAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'No remaining balance is due for this enrollment.' });
+    }
+
+    // Reuse an existing not-yet-verified 'remaining' Payment doc (e.g. one already submitted
+    // online but not yet reviewed) rather than creating a duplicate — same reuse rule
+    // submitRemainingPaymentProof already follows.
+    let remainingPayment = await Payment.findOne({ enrollment: enrollment._id, paymentType: 'remaining' }).sort({ createdAt: -1 });
+    if (!remainingPayment || remainingPayment.status === 'verified') {
+      remainingPayment = new Payment({
+        parent: enrollment.parent,
+        enrollment: enrollment._id,
+        paymentType: 'remaining',
+      });
+    }
+    remainingPayment.amount = remainingAmount;
+    remainingPayment.amountDue = remainingAmount;
+    remainingPayment.amountPaid = remainingAmount;
+    remainingPayment.paymentMethod = 'cash';
+    remainingPayment.status = 'verified';
+    remainingPayment.verifiedAt = new Date();
+    remainingPayment.verifiedBy = req.user._id;
+    remainingPayment.rejectionReason = null;
+    remainingPayment.notes = 'Marked Paid Onsite by admin — collected in person, no online proof submitted.';
+    await remainingPayment.save();
+
+    enrollment.paymentStatus = 'paid';
+    await enrollment.save();
+
+    const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
+    if (parentUser?.email) {
+      sendPaymentVerifiedEmail(parentUser.email, {
+        parentName: `${parentUser.firstName} ${parentUser.lastName}`,
+        studentName: `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim(),
+        enrollmentId: permanentIdOf(enrollment),
+      }).catch(() => {});
+    }
+
+    logAudit({
+      req, userId: req.user._id, action: 'Mark Remaining Balance Paid Onsite', module: 'Payment',
+      description: `Marked the remaining balance of ${remainingAmount} as paid onsite for ${enrollment.enrollmentId}`,
+      status: 'SUCCESS', metadata: { enrollmentId: enrollment.enrollmentId, amount: remainingAmount, paymentId: remainingPayment._id }
+    }).catch(() => {});
+
+    return res.status(200).json({ success: true, message: 'Remaining balance marked as paid onsite.', amount: remainingAmount, payment: remainingPayment });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Failed to mark remaining balance as paid onsite.' });
+  }
+};
+
 // ── Parent: get my enrollments  GET /api/enrollments/my-enrollments ───────
 const getMyEnrollments = async (req, res) => {
   try {
@@ -1289,6 +1357,22 @@ const adminApproveEnrollment = async (req, res) => {
       return res.status(400).json({ success: false, message: `Cannot approve enrollment with status: ${enrollment.status}` });
     }
 
+    // ── Payment must be verified first ────────────────────────────────────
+    // Blocking (not just warning) is the only way to guarantee an enrollment can never end
+    // up "approved" while its payment is still sitting unverified — a warn-and-allow-override
+    // dialog would still let that conflicting state happen on the very next click. Same
+    // idiom as utils/remainingBalance.js's computeRemainingBalance: the down payment (any
+    // non-'remaining' payment) must have at least one 'verified' record.
+    const payments = await Payment.find({ enrollment: enrollment._id }).select('status paymentType').lean();
+    const downVerified = payments.some((p) => p.status === 'verified' && p.paymentType !== 'remaining');
+    if (!downVerified) {
+      return res.status(400).json({
+        success: false,
+        code: 'PAYMENT_NOT_VERIFIED',
+        message: 'This enrollment\'s payment has not been verified yet. Please verify the payment before approving, to avoid a conflict between enrollment and payment status.'
+      });
+    }
+
     // ── Student ID ────────────────────────────────────────────────────────
     // The Student ID is the child's PERMANENT ID (the BB-… enrollmentId of their
     // first enrollment) — never a fresh one per approval, so Renew / Add Program
@@ -1559,6 +1643,7 @@ module.exports = {
   submitEnrollment,
   submitPaymentProof,
   submitRemainingPaymentProof,
+  markRemainingBalancePaidOnsite,
   getMyEnrollments,
   trackEnrollment,
   getEnrollmentAvailability,

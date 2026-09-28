@@ -72,12 +72,18 @@ function findByIdMock(result) {
   return chainable;
 }
 
-function stubCommon({ enrollment, parentUser }) {
+function mockQuery(result) {
+  const q = { select: () => q, lean: () => Promise.resolve(result) };
+  return q;
+}
+
+function stubCommon({ enrollment, parentUser, payments }) {
   const origEnrollmentFindById = Enrollment.findById;
   const origEnrollmentCountDocuments = Enrollment.countDocuments;
   const origUserFindByIdAndUpdate = User.findByIdAndUpdate;
   const origUserFindById = User.findById;
   const origPaymentDeleteMany = Payment.deleteMany;
+  const origPaymentFind = Payment.find;
   const origEnrollmentDeleteOne = Enrollment.deleteOne;
 
   Enrollment.findById = async () => enrollment;
@@ -85,6 +91,10 @@ function stubCommon({ enrollment, parentUser }) {
   User.findByIdAndUpdate = async () => ({});
   User.findById = () => findByIdMock(parentUser);
   Payment.deleteMany = async () => ({});
+  // adminApproveEnrollment's payment-verified gate — a verified down payment by default so
+  // every EXISTING test in this file (which assumes approval succeeds) keeps working; the
+  // unverified-block test below overrides this per-call.
+  Payment.find = () => mockQuery(payments ?? [{ status: 'verified', paymentType: 'down' }]);
   Enrollment.deleteOne = async () => ({});
 
   return {
@@ -94,6 +104,7 @@ function stubCommon({ enrollment, parentUser }) {
       User.findByIdAndUpdate = origUserFindByIdAndUpdate;
       User.findById = origUserFindById;
       Payment.deleteMany = origPaymentDeleteMany;
+      Payment.find = origPaymentFind;
       Enrollment.deleteOne = origEnrollmentDeleteOne;
     },
   };
@@ -115,6 +126,67 @@ test('adminApproveEnrollment: emails the parent\'s registered address, naming th
     assert.equal(approvalEmail.opts.to, 'parent1@example.com');
     assert.match(approvalEmail.opts.subject, /approved/i);
     assert.match(approvalEmail.opts.html, /Ana Cruz/);
+  } finally { restore(); }
+});
+
+// ── "bug (9).pdf" Group AH — Approve is BLOCKED (not warn-and-override) until the payment
+// is actually verified, so an enrollment can never end up "approved" while its payment is
+// still unverified. ────────────────────────────────────────────────────────────────────
+test('adminApproveEnrollment: BLOCKS approval when the down payment has not been verified — never approves, never emails', async () => {
+  sentEmails.length = 0;
+  const enrollment = makeEnrollment({ status: 'payment_under_verification' });
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  // No verified, non-remaining payment at all — proof was submitted but never verified.
+  const { restore } = stubCommon({ enrollment, parentUser, payments: [{ status: 'submitted', paymentType: 'down' }] });
+  try {
+    const res = mockRes();
+    await adminApproveEnrollment({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' }, body: {} }, res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.equal(res._body.code, 'PAYMENT_NOT_VERIFIED');
+    assert.match(res._body.message, /not been verified/i);
+    // The enrollment must be left completely untouched — no partial/conflicting state.
+    assert.equal(enrollment.status, 'payment_under_verification');
+    assert.equal(sentEmails.find((e) => e.label === 'enrollment approved'), undefined, 'must never send the approval email when blocked');
+  } finally { restore(); }
+});
+
+test('adminApproveEnrollment: a rejected/resubmitted payment (no currently-verified one) still blocks approval', async () => {
+  sentEmails.length = 0;
+  const enrollment = makeEnrollment({ status: 'payment_under_verification' });
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  const { restore } = stubCommon({ enrollment, parentUser, payments: [{ status: 'rejected', paymentType: 'down' }, { status: 'submitted', paymentType: 'down' }] });
+  try {
+    const res = mockRes();
+    await adminApproveEnrollment({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' }, body: {} }, res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.equal(res._body.code, 'PAYMENT_NOT_VERIFIED');
+  } finally { restore(); }
+});
+
+test('adminApproveEnrollment: a verified REMAINING payment alone does not count as the down payment being verified', async () => {
+  sentEmails.length = 0;
+  const enrollment = makeEnrollment({ status: 'payment_under_verification' });
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  const { restore } = stubCommon({ enrollment, parentUser, payments: [{ status: 'verified', paymentType: 'remaining' }] });
+  try {
+    const res = mockRes();
+    await adminApproveEnrollment({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' }, body: {} }, res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.equal(res._body.code, 'PAYMENT_NOT_VERIFIED');
+  } finally { restore(); }
+});
+
+test('adminApproveEnrollment: once the down payment IS verified, approval proceeds with no warning', async () => {
+  sentEmails.length = 0;
+  const enrollment = makeEnrollment({ status: 'pending_approval' });
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  const { restore } = stubCommon({ enrollment, parentUser, payments: [{ status: 'verified', paymentType: 'down' }] });
+  try {
+    const res = mockRes();
+    await adminApproveEnrollment({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' }, body: {} }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(enrollment.status, 'approved');
+    assert.ok(sentEmails.find((e) => e.label === 'enrollment approved'), 'expected the approval email once payment is verified');
   } finally { restore(); }
 });
 

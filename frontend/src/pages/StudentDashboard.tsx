@@ -42,6 +42,7 @@ import { useSelectedChild } from "@/hooks/useSelectedChild";
 import { resolveUploadUrl, displayStudentId } from "@/lib/children";
 import { remainingBalanceOf, isReminderDue, formatDueDate, peso, type BalanceEnrollment } from "@/lib/balance";
 import { notifyBadgesChanged } from "@/lib/navBadges";
+import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
 
 function formatTime12h(hhmm: string) {
   if (!hhmm) return "";
@@ -174,7 +175,7 @@ export default function StudentDashboard() {
     endTime: string;
     attendanceStatus?: 'unmarked' | 'present' | 'absent';
     sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
-    subject?: { name: string };
+    subject?: { name: string; code?: string };
     tutor?: { _id?: string; firstName?: string; lastName?: string; middleName?: string; email?: string; phone?: string };
     tutors?: Array<{ _id?: string; firstName?: string; lastName?: string; middleName?: string; email?: string; phone?: string }>;
   }[]>([]);
@@ -1298,7 +1299,7 @@ export default function StudentDashboard() {
                                     return (
                                       <div
                                         key={s._id}
-                                        className="w-full text-left p-2 rounded text-xs truncate transition-colors bg-primary/10 text-primary hover:bg-primary/20"
+                                        className={`w-full text-left p-2 rounded text-xs truncate transition-colors hover:opacity-90 ${scheduleEntryBgClass(s.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                                       >
                                         <span className="font-medium block">{s.subject?.name ?? "—"}</span>
                                         <span className="opacity-90">{formatSlotTime(s.startTime)}</span>
@@ -1354,7 +1355,7 @@ export default function StudentDashboard() {
                                             return (
                                               <div
                                                 key={session._id}
-                                                className="w-full text-left p-2 rounded text-xs truncate transition-colors bg-primary/10 text-primary hover:bg-primary/20"
+                                                className={`w-full text-left p-2 rounded text-xs truncate transition-colors hover:opacity-90 ${scheduleEntryBgClass(session.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                                               >
                                                 <span className="font-medium block">{session.subject?.name ?? "—"}</span>
                                                 <span className="opacity-75 block truncate">with {tutorName}</span>
@@ -1384,13 +1385,13 @@ export default function StudentDashboard() {
                             return (
                               <div
                                 key={s._id}
-                                className="p-3 rounded-md border border-border transition-colors bg-card hover:bg-muted/40"
+                                className={`p-3 rounded-md border border-border transition-colors hover:opacity-90 ${scheduleEntryBgClass(s.subject?.code)} ${SCHEDULE_ENTRY_TEXT_CLASS}`}
                               >
                                 <div className="flex items-start gap-3">
                                   <div className="min-w-0 flex-1">
-                                    <p className="font-medium text-foreground">{s.subject?.name ?? "—"}</p>
-                                    <p className="text-sm text-muted-foreground">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
-                                    <p className="text-xs text-muted-foreground">{s.sessionType === "playgroup" ? "Tutors" : "Tutor"}: {tutorName}</p>
+                                    <p className="font-medium">{s.subject?.name ?? "—"}</p>
+                                    <p className="text-sm opacity-90">{formatSlotTime(s.startTime)} - {formatSlotTime(s.endTime)}</p>
+                                    <p className="text-xs opacity-80">{s.sessionType === "playgroup" ? "Tutors" : "Tutor"}: {tutorName}</p>
                                   </div>
                                 </div>
                               </div>

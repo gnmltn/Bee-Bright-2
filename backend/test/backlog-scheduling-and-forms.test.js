@@ -18,6 +18,7 @@ const User = require('../models/User');
 const TutoringArea = require('../models/TutoringArea');
 const TutorUnavailability = require('../models/TutorUnavailability');
 const Schedule = require('../models/Schedule');
+const Pricing = require('../models/Pricing');
 const PlaygroupGroup = require('../models/PlaygroupGroup');
 const EmergencyReschedule = require('../models/EmergencyReschedule');
 const ScheduleSubstitutionLog = require('../models/ScheduleSubstitutionLog');
@@ -31,7 +32,7 @@ const {
 } = require('../controllers/scheduleController');
 const { ONE_ON_ONE_SLOT_CAP } = require('../utils/schedulingPolicy');
 const { validateAndBuildAssessment, requiredRatingKeys } = require('../utils/validateAssessment');
-const { dueDateFromSessions, halfwaySession } = require('../utils/remainingDueDate');
+const { dueDateFromSessions, halfwaySession, lastSessionDueDate, attachRemainingDueDates } = require('../utils/remainingDueDate');
 
 const mockQuery = (result) => {
   const q = {
@@ -497,6 +498,44 @@ test('item 23: the remaining 50% falls due at the halfway session; no due date b
   assert.equal(dueDateFromSessions(12, dates.slice(0, 5)), null, 'only 5 of the 6 sessions to halfway are scheduled yet');
   assert.equal(dueDateFromSessions(12, [...dates].reverse()).toISOString().slice(0, 10), '2026-10-16', 'the 6th session, whatever the order');
   assert.equal(dueDateFromSessions(null, dates), null);
+});
+
+// ── Invoice Due Date ("what to do (6).pdf") ───────────────────────────────────────────────
+test('invoice Due Date is the LAST scheduled session\'s date, not a fixed offset — null until the full package is scheduled', () => {
+  const dates = ['2026-10-05', '2026-10-07', '2026-10-09', '2026-10-12', '2026-10-14', '2026-10-16', '2026-10-19', '2026-10-21'];
+  assert.equal(lastSessionDueDate(8, dates.slice(0, 7)), null, 'only 7 of 8 sessions scheduled — no real "last session" yet');
+  assert.equal(lastSessionDueDate(8, [...dates].reverse()).toISOString().slice(0, 10), '2026-10-21', 'the 8th (final) session, whatever the order');
+  assert.equal(lastSessionDueDate(null, dates), null);
+});
+
+test('attachRemainingDueDates: invoiceDueDate (last session) and remainingDueDate (halfway session) are computed independently from the same schedule', async () => {
+  const studentId = new mongoose.Types.ObjectId().toString();
+  const subjectId = new mongoose.Types.ObjectId().toString();
+  // 8-session package: only 7 of 8 exist so far — halfway (4th) IS reached, final (8th) is NOT.
+  const scheduleDocs = ['2026-10-05', '2026-10-07', '2026-10-09', '2026-10-12', '2026-10-14', '2026-10-16', '2026-10-19']
+    .map((date) => ({ student: studentId, students: [], subject: { _id: subjectId, code: 'ACT102' }, date }));
+  const origScheduleFind = Schedule.find;
+  const origPricingFind = Pricing.find;
+  Schedule.find = () => mockQuery(scheduleDocs);
+  Pricing.find = () => mockQuery([{ programCode: 'ACT102', packageSlug: 'pkg-8', sessionCount: 8 }]);
+  try {
+    const [result] = await attachRemainingDueDates([
+      { student: studentId, packages: [{ programCode: 'ACT102', packageSlug: 'pkg-8' }] },
+    ]);
+    assert.equal(result.invoiceDueDate, null, 'only 7 of 8 sessions scheduled — invoice Due Date not determinable yet');
+    assert.equal(new Date(result.remainingDueDate).toISOString().slice(0, 10), '2026-10-12', 'halfway (4th) session already reached, unaffected by the invoice Due Date fix');
+
+    // Add the 8th session — now both should resolve, to their own distinct dates.
+    scheduleDocs.push({ student: studentId, students: [], subject: { _id: subjectId, code: 'ACT102' }, date: '2026-10-21' });
+    const [full] = await attachRemainingDueDates([
+      { student: studentId, packages: [{ programCode: 'ACT102', packageSlug: 'pkg-8' }] },
+    ]);
+    assert.equal(new Date(full.invoiceDueDate).toISOString().slice(0, 10), '2026-10-21', 'invoice Due Date = last (8th) session');
+    assert.equal(new Date(full.remainingDueDate).toISOString().slice(0, 10), '2026-10-12', 'reminder timing untouched by adding the final session');
+  } finally {
+    Schedule.find = origScheduleFind;
+    Pricing.find = origPricingFind;
+  }
 });
 
 // ── Parent signup: split name fields ──────────────────────────────────────────────────────

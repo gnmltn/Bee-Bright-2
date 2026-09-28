@@ -910,6 +910,7 @@ const getPendingBalances = async (req, res) => {
       row.remaining += remaining;
       // One itemized line per child enrollment - what the parent's bill(s) are made of.
       row.bills.push({
+        _id: String(enrollment._id), // Group AI — Mark Paid Onsite acts on this Mongo _id
         enrollmentId: enrollment.enrollmentId,
         studentId: enrollment.permanentStudentId || enrollment.studentId || enrollment.enrollmentId || '',
         childName: [enrollment.studentSnapshot?.firstName, enrollment.studentSnapshot?.lastName].filter(Boolean).join(' ').trim() || 'Child',

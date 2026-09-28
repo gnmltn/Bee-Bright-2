@@ -88,6 +88,9 @@ test('getPendingBalances: one row per parent, summing the remaining 50% across t
     assert.equal(first.remaining, 3200);
     assert.deepEqual(first.children.sort(), ['Ana Cruz', 'Ben Cruz']);
     assert.equal(second.remaining, 1500);
+    // Group AI — each itemized bill carries the enrollment's own Mongo _id, since "Mark Paid
+    // Onsite" acts on one specific enrollment, not the parent-level aggregate.
+    assert.deepEqual(first.bills.map((b) => b._id).sort(), ['e1', 'e2']);
   } finally { Enrollment.find = origEFind; Payment.find = origPFind; }
 });
 

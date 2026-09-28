@@ -37,6 +37,7 @@ import { PlaygroupSchedulingWizard } from "@/components/admin/PlaygroupSchedulin
 import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
 import { notifyBadgesChanged, useNavBadges } from "@/lib/navBadges";
 import { displayStudentId } from "@/lib/children";
+import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
 import { getEmailError, getEmailCharacterError } from "@/utils/emailRules";
 import { RemarksReviewHistory } from "@/components/admin/RemarksReviewHistory";
 import FilePreview from "@/components/enrollment/FilePreview";
@@ -405,31 +406,6 @@ const formatScheduleStudentNames = (schedule: AdminSchedule) => {
   return `${students.length} children`;
 };
 
-// "polishing prompt (1).pdf", Group I — schedule entries color-coded by program. Exact
-// hex values as specified (not Tailwind's built-in cyan/yellow/orange shades), applied as
-// the entry's own background so it reads as a colored chip in the calendar (there was no
-// existing per-entry dot/indicator style to match instead — every entry was previously the
-// same flat bg-primary/10, regardless of program).
-/** Tailwind arbitrary-value background class for a schedule entry's program, or the
- * previous neutral default when the program isn't one of the three colored ones. These
- * three class strings must appear literally in the source (not built via string
- * interpolation) for Tailwind's JIT scanner to generate the corresponding CSS at all.
- * TPG101 uses the same light-mode-adjusted cyan (#7DE0E0) in BOTH modes now — a separate,
- * paler dark-mode shade (the original spec's #E0FFFF) rendered as washed-out near-white
- * against the dark background, per "bug (4).pdf" Group O. */
-function scheduleEntryBgClass(code?: string): string {
-  if (code === "TPG101") return "bg-[#7DE0E0]"; // Toddlers Playgroup — cyan (same shade, both modes)
-  if (code === "ACT102") return "bg-[#ffff00]"; // Academic Tutorial — yellow
-  if (code === "EXP106") return "bg-[#ffa500]"; // Examination Preparation — orange
-  return "bg-primary/10";
-}
-
-/** Text is black in BOTH light and dark mode against these light program colors — per
- * "bug (4).pdf" Group O, superseding the original Group I spec's "white in dark mode" +
- * outline-shadow approach entirely. No dark: variant needed since black-on-light-color
- * reads the same regardless of theme. */
-const SCHEDULE_ENTRY_TEXT_CLASS = "text-black";
-
 const enrollmentIsReadyToSchedule = (enrollment: AdminEnrollment) => {
   const status = enrollment.status || "";
   return ["active", "approved"].includes(status) || (enrollment.paymentStatus === "paid" && status !== "cancelled" && status !== "rejected");
@@ -468,6 +444,10 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   maribank: "MariBank",
   bdo: "BDO",
   blockchain: "Blockchain (legacy)",
+  // Backend Payment.paymentMethod enum value 'cash' — the admin walk-in / Paid Onsite
+  // method (no online proof), labeled distinctly so it never reads as one of the three
+  // online methods.
+  cash: "Paid Onsite",
 };
 function paymentMethodLabel(method?: string | null): string {
   return PAYMENT_METHOD_LABELS[method || ""] || "GCash";
@@ -541,6 +521,9 @@ export default function AdminDashboard() {
   const [rejectEnrollmentId, setRejectEnrollmentId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectLoading, setRejectLoading] = useState(false);
+  // "bug (9).pdf" Group AH — Approve is blocked server-side when the down payment isn't
+  // verified yet; this just surfaces that block as a clear dialog instead of a bare toast.
+  const [paymentNotVerifiedDialogOpen, setPaymentNotVerifiedDialogOpen] = useState(false);
   // Verify payment dialog state
   const [verifyPaymentDialogOpen, setVerifyPaymentDialogOpen] = useState(false);
   const [verifyPaymentTarget, setVerifyPaymentTarget] = useState<{ enrollmentId: string; paymentId: string } | null>(null);
@@ -595,6 +578,10 @@ export default function AdminDashboard() {
   // Clicking a Pending Payments row opens a summary of that parent's bill(s), itemized per child.
   const [billParent, setBillParent] = useState<PendingBalanceItem | null>(null);
   const [totalUnpaid, setTotalUnpaid] = useState(0);
+  // "bug (9).pdf" Group AI — "Paid Onsite" confirmation (per bill/enrollment, since a
+  // parent's bills can have different remaining amounts across children).
+  const [paidOnsiteConfirm, setPaidOnsiteConfirm] = useState<{ enrollmentId: string; parentName: string; childName: string; remaining: number } | null>(null);
+  const [paidOnsiteLoading, setPaidOnsiteLoading] = useState(false);
   // Parent/Guardian rows in the Users table expand to show that parent's children.
   const [parentChildren, setParentChildren] = useState<Record<string, ParentChild[]>>({});
   const [expandedParentIds, setExpandedParentIds] = useState<string[]>([]);
@@ -1756,9 +1743,35 @@ export default function AdminDashboard() {
         toast.error(res.data?.message || "Failed to approve enrollment");
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to approve enrollment";
-      toast.error(msg);
+      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
+      if (data?.code === "PAYMENT_NOT_VERIFIED") {
+        // The backend blocks this outright (not a warn-and-override) — the enrollment is
+        // never actually approved, so there's no conflicting state to recover from here.
+        setPaymentNotVerifiedDialogOpen(true);
+      } else {
+        toast.error(data?.message ?? "Failed to approve enrollment");
+      }
     } finally { setVerifyingId(null); }
+  };
+
+  // "bug (9).pdf" Group AI — remaining balance paid in person, no online proof upload.
+  const handleConfirmPaidOnsite = async () => {
+    if (!paidOnsiteConfirm) return;
+    setPaidOnsiteLoading(true);
+    try {
+      const res = await enrollmentService.markPaidOnsite(paidOnsiteConfirm.enrollmentId);
+      if (res.data?.success) {
+        toast.success(`${paidOnsiteConfirm.childName}'s remaining balance marked as paid onsite.`);
+        setPaidOnsiteConfirm(null);
+        setBillParent(null);
+        fetchAdminPayments();
+      } else {
+        toast.error(res.data?.message || "Failed to mark as paid onsite");
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to mark as paid onsite";
+      toast.error(msg);
+    } finally { setPaidOnsiteLoading(false); }
   };
 
   const openRejectDialog = (enrollmentId: string) => {
@@ -5466,6 +5479,23 @@ export default function AdminDashboard() {
                     <span>Paid {"\u20B1"}{bill.paid.toLocaleString()}</span>
                     <span>Remaining {"\u20B1"}{bill.remaining.toLocaleString()}</span>
                   </div>
+                  <div className="pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setPaidOnsiteConfirm({
+                          enrollmentId: bill._id,
+                          parentName: billParent.parentName,
+                          childName: bill.childName,
+                          remaining: bill.remaining,
+                        })
+                      }
+                    >
+                      Paid Onsite
+                    </Button>
+                  </div>
                 </div>
               ))}
               {(!billParent.bills || billParent.bills.length === 0) && (
@@ -5477,6 +5507,30 @@ export default function AdminDashboard() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* "bug (9).pdf" Group AI — Paid Onsite: admin directly attests the remaining balance
+          was collected in person (cash), no online proof-upload/verification step. */}
+      <Dialog open={!!paidOnsiteConfirm} onOpenChange={(open) => { if (!open) setPaidOnsiteConfirm(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirm Paid Onsite</DialogTitle>
+            <DialogDescription>
+              {paidOnsiteConfirm
+                ? `Are you sure ${paidOnsiteConfirm.parentName} has already paid ${paidOnsiteConfirm.childName}'s remaining balance of ₱${paidOnsiteConfirm.remaining.toLocaleString()} onsite?`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPaidOnsiteConfirm(null)} disabled={paidOnsiteLoading}>
+              No, Cancel
+            </Button>
+            <Button type="button" onClick={handleConfirmPaidOnsite} disabled={paidOnsiteLoading}>
+              {paidOnsiteLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Yes, Paid Onsite
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <UserProfileDialog user={profileUser} parentChildren={parentChildren} onOpenChange={(open) => { if (!open) setProfileUser(null); }} />
@@ -5966,6 +6020,24 @@ export default function AdminDashboard() {
             <Button variant="destructive" disabled={rejectLoading || !rejectReason.trim()} onClick={handleConfirmReject}>
               {rejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Reject &amp; Delete Account
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* "bug (9).pdf" Group AH — Approve is blocked (not just warned-and-overridable) when
+          the payment hasn't been verified, so this enrollment can never end up "approved"
+          with a still-unverified payment. No override option — the admin must go verify
+          the payment (Enrollments tab -> "Verify Pay") before Approve will succeed. */}
+      <Dialog open={paymentNotVerifiedDialogOpen} onOpenChange={setPaymentNotVerifiedDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Payment Not Yet Verified</DialogTitle>
+            <DialogDescription>
+              This enrollment's payment has not been verified yet. Please verify the payment before approving, to avoid a conflict between enrollment and payment status.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setPaymentNotVerifiedDialogOpen(false)}>Got it</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

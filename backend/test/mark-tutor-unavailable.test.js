@@ -245,3 +245,81 @@ test('markTutorUnavailability: multi-tutor Playgroup session — marking a CO-tu
     TutorUnavailability.exists = origTutorUnavailabilityExists; ScheduleSubstitutionLog.create = origLogCreate;
   }
 });
+
+// ── Multi-select "Mark Tutor Unavailable" follow-up (Group AD) ────────────────────────────
+test('markTutorUnavailability: marking TWO different co-tutors unavailable (sequential calls, same session) reassigns BOTH — the second is not silently skipped once the first succeeds', async () => {
+  const origUserFindOne = User.findOne;
+  const origUserFind = User.find;
+  const origScheduleFindById = Schedule.findById;
+  const origScheduleFind = Schedule.find;
+  const origScheduleAggregate = Schedule.aggregate;
+  const origTutorUnavailabilityExists = TutorUnavailability.exists;
+  const origLogCreate = ScheduleSubstitutionLog.create;
+
+  const pgSchedule = {
+    _id: 'sched-pg-multi', sessionType: 'playgroup', date: TEST_DATE, startTime: '09:00', endTime: '11:00',
+    subject: { _id: 'subj-tpg101', name: 'Toddlers Playgroup', code: 'TPG101' },
+    student: null, students: [],
+    tutor: { _id: 'jake', firstName: 'Jake', lastName: 'Soriano', email: 'jake@example.com' },
+    tutors: ['jake', 'mariana', 'carlos'], originalTutor: null, substituteTutor: null,
+    substitutionStatus: 'none', substitutionAttemptCount: 0,
+  };
+  pgSchedule.save = async () => pgSchedule;
+
+  User.findOne = ({ _id }) => mockQuery({ _id, ...TUTOR_STUB });
+  User.find = (query) => {
+    if (query.role?.$in) return mockQuery([]);
+    if (query._id?.$nin) {
+      // Whichever candidate the FIRST call already picked is excluded from the second call's
+      // pool (it's now in tutors[]) — exactly like two real sequential requests.
+      const excluded = query._id.$nin;
+      const pool = [
+        { _id: 'replacement-x', employmentType: 'full-time', createdAt: new Date('2026-01-01') },
+        { _id: 'replacement-y', employmentType: 'full-time', createdAt: new Date('2026-01-02') },
+      ];
+      return mockQuery(pool.filter((c) => !excluded.includes(c._id)));
+    }
+    return mockQuery([]);
+  };
+  Schedule.findById = () => mockQuery(pgSchedule);
+  Schedule.find = (query) => {
+    if (query.$or && query.date) return mockQuery([pgSchedule]);
+    return mockQuery([]);
+  };
+  Schedule.aggregate = async () => [];
+  TutorUnavailability.exists = async () => false;
+  ScheduleSubstitutionLog.create = async () => [{}];
+
+  try {
+    const res1 = mockRes();
+    await markTutorUnavailability({
+      user: { id: 'admin-1' },
+      body: { tutorId: 'mariana', startDate: '2026-10-05', endDate: '2026-10-05', reason: 'Sick', autoAssign: true },
+    }, res1);
+    assert.equal(res1._status, 200, JSON.stringify(res1._body));
+    assert.equal(res1._body.reassigned.length, 1, 'first co-tutor should be reassigned');
+
+    // Before the fix: processSubstitutionForSchedule's idempotency guard checked the
+    // WHOLE schedule's substitutionStatus ('assigned' after the first call above) rather
+    // than whether THIS specific tutor still needed resolving — so this second call would
+    // hit `skipped: true` and silently do nothing, even though Carlos was never touched.
+    const res2 = mockRes();
+    await markTutorUnavailability({
+      user: { id: 'admin-1' },
+      body: { tutorId: 'carlos', startDate: '2026-10-05', endDate: '2026-10-05', reason: 'Sick', autoAssign: true },
+    }, res2);
+    assert.equal(res2._status, 200, JSON.stringify(res2._body));
+    assert.equal(res2._body.reassigned.length, 1, 'second co-tutor must ALSO be reassigned, not silently skipped');
+    assert.equal(res2._body.unresolved.length, 0);
+
+    assert.deepEqual(
+      pgSchedule.tutors.map(String),
+      ['jake', 'replacement-x', 'replacement-y'],
+      'Jake untouched; Mariana and Carlos each independently replaced by a different tutor'
+    );
+  } finally {
+    User.findOne = origUserFindOne; User.find = origUserFind;
+    Schedule.findById = origScheduleFindById; Schedule.find = origScheduleFind; Schedule.aggregate = origScheduleAggregate;
+    TutorUnavailability.exists = origTutorUnavailabilityExists; ScheduleSubstitutionLog.create = origLogCreate;
+  }
+});

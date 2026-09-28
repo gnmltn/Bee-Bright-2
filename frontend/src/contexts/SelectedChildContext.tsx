@@ -67,12 +67,18 @@ function readStored(): string {
  * survives a reload. Mounted app-wide so it outlives page navigation.
  */
 export function SelectedChildProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, authLoading } = useAuth();
   const isParent = user?.role === "parent";
   const enabled = user?.role === "parent" || user?.role === "student";
 
   const [enrollments, setEnrollments] = useState<DashboardEnrollment[]>([]);
-  const [loading, setLoading] = useState(enabled);
+  // Starts true unconditionally (not `useState(enabled)`) — on a hard refresh, `user` is
+  // still null for a moment while AuthContext's own session restore is in flight, which
+  // would otherwise make `enabled` false too early. If `loading` followed that transient
+  // false-enabled state to `false`, the fallback effect below would see an empty childList
+  // and read it as "this parent genuinely has no children," wiping the persisted selection
+  // before the real enrollments ever arrive — "bug (9).pdf" Group AJ.
+  const [loading, setLoading] = useState(true);
   const [activeChildId, setActiveChildIdState] = useState<string>(readStored);
 
   const refresh = useCallback(async () => {
@@ -90,10 +96,12 @@ export function SelectedChildProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // Don't decide anything about this user's role yet — `user` is still being resolved.
+    if (authLoading) return;
     if (!enabled) { setEnrollments([]); setLoading(false); return; }
     setLoading(true);
     void refresh();
-  }, [enabled, user?.id, refresh]);
+  }, [authLoading, enabled, user?.id, refresh]);
 
   const setActiveChildId = useCallback((id: string) => {
     setActiveChildIdState(id);

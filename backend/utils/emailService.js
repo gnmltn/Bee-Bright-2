@@ -1,4 +1,6 @@
 const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
 
 let cachedTransporter = null;
 let cachedTransportFingerprint = null;
@@ -140,6 +142,9 @@ function logEmailError(context, error, meta = {}) {
 }
 
 async function verifyEmailTransport() {
+  if (isEmailSandboxed()) {
+    return { ok: true, service: 'sandbox', user: '(EMAIL_SANDBOX_MODE — no real SMTP connection attempted)' };
+  }
   const { transporter, config } = getTransporter();
 
   if (!verifyPromise) {
@@ -163,7 +168,36 @@ async function verifyEmailTransport() {
   }
 }
 
+const SANDBOX_LOG_PATH = path.join(__dirname, '..', 'sandbox-emails.log');
+
+/** When true, no email ever actually leaves this machine — every send is logged instead.
+ * Set EMAIL_SANDBOX_MODE=true in .env for local/dev testing (anything that triggers a
+ * notification: substitute-tutor assignment, tutor-unavailability auto-resolve, enrollment
+ * approvals, OTPs, etc.) so a live-testing run can never reach a real inbox — a real,
+ * currently-configured SMTP account is wired up here, so without this flag every send is
+ * genuinely delivered. Unset (or set to anything else) to send for real again. */
+function isEmailSandboxed() {
+  return normalizeBoolean(process.env.EMAIL_SANDBOX_MODE, false);
+}
+
 async function sendEmail(message, context = 'email send') {
+  if (isEmailSandboxed()) {
+    const entry = {
+      at: new Date().toISOString(),
+      context,
+      to: message.to,
+      subject: message.subject,
+      text: message.text,
+    };
+    console.log(`[EMAIL SANDBOX] "${message.subject}" -> ${message.to} (${context}) — NOT actually sent. Full content: sandbox-emails.log`);
+    try {
+      fs.appendFileSync(SANDBOX_LOG_PATH, `${JSON.stringify(entry)}\n`);
+    } catch (err) {
+      console.error('[EMAIL SANDBOX] failed to write sandbox-emails.log', err.message);
+    }
+    return { sandboxed: true, messageId: `sandbox-${Date.now()}` };
+  }
+
   const { transporter, config } = getTransporter();
 
   try {
