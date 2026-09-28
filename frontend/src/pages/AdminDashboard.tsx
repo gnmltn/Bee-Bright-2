@@ -93,6 +93,7 @@ import {
   getPhMobileError,
   getPasswordError,
   getConfirmPasswordError,
+  formatNameCapitalize,
 } from "@/utils/validation";
 import { PROGRAM_LABELS } from "@/constants/programs";
 import UserProfileDialog, { ChildrenInfo, childrenForUser } from "@/components/admin/UserProfileDialog";
@@ -578,6 +579,13 @@ export default function AdminDashboard() {
   // (a 404) rendered as a totally blank box with no error message, indistinguishable from
   // a broken feature. Track load state explicitly so a failure is visible instead of silent.
   const [paymentProofLoadState, setPaymentProofLoadState] = useState<'loading' | 'loaded' | 'error'>('loading');
+  // A PDF proof was ALWAYS rendered via the plain <img> below, which can never display a
+  // PDF — it silently failed onError, showing "failed to load" + an "Open the file
+  // directly" link that opened the raw file in a new tab (what "bug (7).pdf" Group AC
+  // described as looking like a directory listing requiring an extra click). Fixed by
+  // reusing the exact same PDF detection + fetch-to-blob-then-<object> approach already
+  // working on the Enrollments tab's proof view (FilePreview.tsx / Group G).
+  const [paymentProofPdfUrl, setPaymentProofPdfUrl] = useState<string | null>(null);
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
@@ -661,8 +669,28 @@ export default function AdminDashboard() {
   const [substituteDialogOpen, setSubstituteDialogOpen] = useState(false);
   const [substituteTutorOptions, setSubstituteTutorOptions] = useState<{ _id: string; name: string; email?: string }[]>([]);
   const [substituteTutorId, setSubstituteTutorId] = useState("");
+  // Only shown/used for a Toddlers Playgroup session with more than one tutor currently
+  // assigned — which one is being substituted out. A 1-on-1 session has exactly one
+  // tutor, so this stays empty and unused there (no ambiguity to resolve).
+  const [substituteCurrentTutors, setSubstituteCurrentTutors] = useState<{ _id: string; name: string }[]>([]);
+  const [replacedTutorId, setReplacedTutorId] = useState("");
+  // Toddlers Playgroup only (2+ tutors on the session): one-to-one outgoing->incoming
+  // pairing, so it's unambiguous which replacement goes to which outgoing tutor.
+  const [substituteSelectedOutgoingIds, setSubstituteSelectedOutgoingIds] = useState<string[]>([]);
+  const [substituteReplacementMap, setSubstituteReplacementMap] = useState<Record<string, string>>({});
   const [substituteReason, setSubstituteReason] = useState("Tutor unavailable");
   const [substituteLoading, setSubstituteLoading] = useState(false);
+
+  // "Mark tutor unavailable (day)" — see "bug (8).pdf". Same "which tutor" ambiguity as
+  // Assign Substitute Tutor for a multi-tutor Playgroup session; also doubles as the
+  // missing confirmation step Repro 1 flagged (it previously fired with a single click
+  // and no confirmation at all, for either session type).
+  const [markUnavailableDialogOpen, setMarkUnavailableDialogOpen] = useState(false);
+  const [markUnavailableTutors, setMarkUnavailableTutors] = useState<{ _id: string; name: string }[]>([]);
+  // Playgroup (2+ tutors on the session) allows marking several unavailable in one action;
+  // for a 1-on-1 session this array always holds exactly the one tutor, pre-selected.
+  const [markUnavailableTutorIds, setMarkUnavailableTutorIds] = useState<string[]>([]);
+  const [markUnavailableLoading, setMarkUnavailableLoading] = useState(false);
 
   // BeeBright Scheduling Spec, Section 3a — Suspension (system-wide auto-reschedule).
   const [suspendDialogOpen, setSuspendDialogOpen] = useState(false);
@@ -1210,13 +1238,32 @@ export default function AdminDashboard() {
       toast.error("Select a schedule with a valid tutor and subject first.");
       return;
     }
+    // Every tutor actually on this session right now (Playgroup can have several; a
+    // 1-on-1 session's own `tutors` mirrors its single `tutor`) — none of them are a
+    // valid replacement for themselves or for each other.
+    const allTutors = (selectedSchedule.tutors && selectedSchedule.tutors.length > 0)
+      ? selectedSchedule.tutors
+      : selectedSchedule.tutor ? [selectedSchedule.tutor] : [];
     try {
-      const res = await scheduleService.getTutorsBySubject(selectedSchedule.subject._id);
-      const tutors = Array.isArray(res.data?.tutors)
-        ? res.data.tutors.filter((t: { _id: string }) => t._id !== selectedSchedule.tutor?._id)
-        : [];
+      const res = await scheduleService.getTutorsBySubject(selectedSchedule.subject._id, {
+        date: selectedSchedule.date,
+        startTime: selectedSchedule.startTime,
+        endTime: selectedSchedule.endTime,
+        excludeScheduleId: selectedSchedule._id,
+        excludeTutorIds: allTutors.map((t) => t._id),
+      });
+      const tutors = Array.isArray(res.data?.tutors) ? res.data.tutors : [];
       setSubstituteTutorOptions(tutors);
       setSubstituteTutorId("");
+      setSubstituteCurrentTutors(allTutors.map((t) => ({
+        _id: t._id,
+        name: [t.firstName, t.middleName, t.lastName].filter(Boolean).join(" ") || "Tutor",
+      })));
+      // Only one tutor on this session — nothing to pick, no ambiguity. More than one
+      // (Playgroup) — the admin must say which one is being replaced.
+      setReplacedTutorId(allTutors.length === 1 ? allTutors[0]._id : "");
+      setSubstituteSelectedOutgoingIds([]);
+      setSubstituteReplacementMap({});
       setSubstituteReason("Tutor unavailable");
       setSubstituteDialogOpen(true);
     } catch {
@@ -1226,22 +1273,92 @@ export default function AdminDashboard() {
 
   const handleAssignSubstitute = async () => {
     if (!selectedSchedule?._id) return;
-    if (!substituteTutorId) {
+    const isMultiTutorSession = substituteCurrentTutors.length > 1;
+    if (!isMultiTutorSession && !substituteTutorId) {
       toast.error("Please select a replacement tutor.");
       return;
     }
+    if (isMultiTutorSession) {
+      if (substituteSelectedOutgoingIds.length === 0) {
+        toast.error("Select at least one tutor to replace.");
+        return;
+      }
+      if (substituteSelectedOutgoingIds.some((id) => !substituteReplacementMap[id])) {
+        toast.error("Choose a replacement for each selected tutor.");
+        return;
+      }
+    }
     setSubstituteLoading(true);
     try {
-      const res = await scheduleService.assignSubstitute(selectedSchedule._id, {
-        replacementTutorId: substituteTutorId,
-        reason: substituteReason || undefined,
-      });
-      if (res.data?.success) {
-        toast.success("Substitute tutor assigned.");
-        setSubstituteDialogOpen(false);
-        fetchSchedules();
+      if (!isMultiTutorSession) {
+        const res = await scheduleService.assignSubstitute(selectedSchedule._id, {
+          replacementTutorId: substituteTutorId,
+          replacedTutorId: replacedTutorId || undefined,
+          reason: substituteReason || undefined,
+        });
+        if (res.data?.success) {
+          toast.success("Substitute tutor assigned.");
+          setSubstituteDialogOpen(false);
+          // The panel is bound to `selectedSchedule`, a separate piece of state from the
+          // `schedules` list — fetchSchedules() alone refreshes the list but leaves this
+          // still-open detail panel showing the stale pre-assignment data. Sync both from
+          // the response the same way every other schedule mutation here already does.
+          const updated = (res.data as { schedule?: AdminSchedule }).schedule;
+          if (updated) {
+            setSelectedSchedule(updated);
+            setSchedules((prev) => prev.map((item) => (item._id === updated._id ? updated : item)));
+          } else {
+            fetchSchedules();
+          }
+        } else {
+          toast.error(res.data?.message || "Failed to assign substitute tutor");
+        }
+        return;
+      }
+
+      // Playgroup, multiple outgoing tutors: one call per outgoing->incoming pair, run
+      // sequentially against the same schedule doc (each call re-fetches it from the DB,
+      // so earlier pairs' mutations are already reflected before the next one runs).
+      let successCount = 0;
+      const failures: string[] = [];
+      let latestSchedule: AdminSchedule | undefined;
+      for (const outgoingId of substituteSelectedOutgoingIds) {
+        const outgoingName = substituteCurrentTutors.find((t) => t._id === outgoingId)?.name || "Tutor";
+        try {
+          const res = await scheduleService.assignSubstitute(selectedSchedule._id, {
+            replacementTutorId: substituteReplacementMap[outgoingId],
+            replacedTutorId: outgoingId,
+            reason: substituteReason || undefined,
+          });
+          if (res.data?.success) {
+            successCount += 1;
+            const updated = (res.data as { schedule?: AdminSchedule }).schedule;
+            if (updated) latestSchedule = updated;
+          } else {
+            failures.push(`${outgoingName}: ${res.data?.message || "failed"}`);
+          }
+        } catch (err: unknown) {
+          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "failed";
+          failures.push(`${outgoingName}: ${msg}`);
+        }
+      }
+      const total = substituteSelectedOutgoingIds.length;
+      const summary = `${successCount} of ${total} tutor${total === 1 ? "" : "s"} replaced successfully.`;
+      if (successCount > 0 && failures.length === 0) {
+        toast.success(summary);
+      } else if (successCount > 0) {
+        toast.error(`${summary} ${failures.length} failed: ${failures.join("; ")}`);
       } else {
-        toast.error(res.data?.message || "Failed to assign substitute tutor");
+        toast.error(`Failed to replace any tutors: ${failures.join("; ")}`);
+      }
+      if (successCount > 0) {
+        setSubstituteDialogOpen(false);
+        if (latestSchedule) {
+          setSelectedSchedule(latestSchedule);
+          setSchedules((prev) => prev.map((item) => (item._id === latestSchedule!._id ? latestSchedule! : item)));
+        } else {
+          fetchSchedules();
+        }
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to assign substitute tutor";
@@ -1251,32 +1368,83 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleMarkTutorUnavailableForSessionDate = async () => {
-    if (!selectedSchedule?.tutor?._id || !selectedSchedule?.date) {
+  const openMarkUnavailableDialog = () => {
+    if (!selectedSchedule?.date || (!selectedSchedule?.tutor?._id && (!selectedSchedule?.tutors || selectedSchedule.tutors.length === 0))) {
       toast.error("Select a schedule first.");
       return;
     }
+    const allTutors = (selectedSchedule.tutors && selectedSchedule.tutors.length > 0)
+      ? selectedSchedule.tutors
+      : selectedSchedule.tutor ? [selectedSchedule.tutor] : [];
+    setMarkUnavailableTutors(allTutors.map((t) => ({
+      _id: t._id,
+      name: [t.firstName, t.middleName, t.lastName].filter(Boolean).join(" ") || "Tutor",
+    })));
+    // Only one tutor on this session — nothing to pick, no ambiguity (matches how the
+    // "Tutor to replace" selector on Assign Substitute Tutor behaves). More than one
+    // (Playgroup) — start with nothing checked, the admin picks who's unavailable.
+    setMarkUnavailableTutorIds(allTutors.length === 1 ? [allTutors[0]._id] : []);
+    setMarkUnavailableDialogOpen(true);
+  };
+
+  const handleConfirmMarkUnavailable = async () => {
+    if (!selectedSchedule?.date) return;
+    if (markUnavailableTutorIds.length === 0) {
+      toast.error("Please select which tutor(s) are unavailable.");
+      return;
+    }
+    // The stored date is a UTC-midnight instant (e.g. "2026-10-05T00:00:00.000Z") — local
+    // Date getters (getFullYear/getMonth/getDate) read it back in the BROWSER's own
+    // timezone, which silently shifts it a day for anyone west of UTC. Use the UTC getters
+    // instead, matching how the backend's own toDateOnly() helper does the same thing.
     const day = new Date(selectedSchedule.date);
-    const dayStr = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    const dayStr = `${day.getUTCFullYear()}-${String(day.getUTCMonth() + 1).padStart(2, "0")}-${String(day.getUTCDate()).padStart(2, "0")}`;
+    const tutorLabel = markUnavailableTutorIds.length === 1
+      ? (markUnavailableTutors.find((t) => t._id === markUnavailableTutorIds[0])?.name || "Tutor")
+      : `${markUnavailableTutorIds.length} tutors`;
+    setMarkUnavailableLoading(true);
     try {
-      const res = await scheduleService.markTutorUnavailability({
-        tutorId: selectedSchedule.tutor._id,
-        startDate: dayStr,
-        endDate: dayStr,
-        reason: "Marked unavailable by admin",
-        autoAssign: true,
-      });
-      if (res.data?.success) {
-        const reassignedCount = Array.isArray(res.data?.reassigned) ? res.data.reassigned.length : 0;
-        const unresolvedCount = Array.isArray(res.data?.unresolved) ? res.data.unresolved.length : 0;
-        toast.success(`Unavailability saved. Reassigned: ${reassignedCount}, unresolved: ${unresolvedCount}.`);
-        fetchSchedules();
-      } else {
-        toast.error(res.data?.message || "Failed to mark tutor unavailable");
+      // One call per selected tutor — same endpoint "Assign Substitute Tutor" style
+      // multi-replace uses, run sequentially, totals combined into one summary toast.
+      let totalAffected = 0;
+      let totalReassigned = 0;
+      let totalUnresolved = 0;
+      const failures: string[] = [];
+      for (const tutorId of markUnavailableTutorIds) {
+        const name = markUnavailableTutors.find((t) => t._id === tutorId)?.name || "Tutor";
+        try {
+          const res = await scheduleService.markTutorUnavailability({
+            tutorId,
+            startDate: dayStr,
+            endDate: dayStr,
+            reason: "Marked unavailable by admin",
+            autoAssign: true,
+          });
+          if (res.data?.success) {
+            totalAffected += res.data?.affectedSchedules ?? 0;
+            totalReassigned += Array.isArray(res.data?.reassigned) ? res.data.reassigned.length : 0;
+            totalUnresolved += Array.isArray(res.data?.unresolved) ? res.data.unresolved.length : 0;
+          } else {
+            failures.push(`${name}: ${res.data?.message || "failed"}`);
+          }
+        } catch (err: unknown) {
+          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "failed";
+          failures.push(`${name}: ${msg}`);
+        }
       }
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to mark tutor unavailable";
-      toast.error(msg);
+      if (totalAffected === 0 && failures.length === 0) {
+        toast.success(`${tutorLabel} marked unavailable for ${dayStr} — no sessions that day, nothing to reassign.`);
+      } else {
+        const parts = [`${tutorLabel} marked unavailable for ${dayStr}.`];
+        if (totalAffected > 0) parts.push(`${totalReassigned} of ${totalAffected} affected session${totalAffected === 1 ? "" : "s"} reassigned automatically.`);
+        if (totalUnresolved > 0) parts.push(`${totalUnresolved} still need${totalUnresolved === 1 ? "s" : ""} a manual substitute — flagged as "Substitute Required" on each session.`);
+        if (failures.length > 0) parts.push(`${failures.length} tutor(s) failed: ${failures.join("; ")}`);
+        if (totalUnresolved > 0 || failures.length > 0) { toast.error(parts.join(" ")); } else { toast.success(parts.join(" ")); }
+      }
+      setMarkUnavailableDialogOpen(false);
+      fetchSchedules();
+    } finally {
+      setMarkUnavailableLoading(false);
     }
   };
 
@@ -1659,6 +1827,36 @@ export default function AdminDashboard() {
     setPaymentProofZoomed(false);
     setPaymentProofLoadState('loading');
   };
+
+  const paymentProofIsPdf = paymentProofPreview ? /\.pdf(?:$|\?)/i.test(paymentProofPreview.src) : false;
+
+  // Same fetch-to-blob-then-<object> mechanism as FilePreview.tsx (Group G): a PDF served
+  // from the backend's own origin fails silently when embedded directly, so fetch it into
+  // a same-origin blob URL first.
+  useEffect(() => {
+    if (!paymentProofPreview || !paymentProofIsPdf) { setPaymentProofPdfUrl(null); return; }
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setPaymentProofPdfUrl(null);
+    fetch(paymentProofPreview.src, { credentials: 'include' })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to load file (${res.status})`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPaymentProofPdfUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setPaymentProofLoadState('error');
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentProofPreview?.src, paymentProofIsPdf]);
 
   const confirmPendingUserAction = async () => {
     if (!pendingUserAction) return;
@@ -3826,6 +4024,11 @@ export default function AdminDashboard() {
                                 <p className="text-xs font-medium text-warning">Substitute tutor assigned</p>
                                 <p className="text-xs text-muted-foreground mt-1">Reason: {s.substitutionReason || "Tutor unavailable"}</p>
                               </div>
+                            ) : s.substitutionStatus === "substitute_required" ? (
+                              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2">
+                                <p className="text-xs font-medium text-destructive">Substitute Required — no eligible tutor was found automatically</p>
+                                <p className="text-xs text-muted-foreground mt-1">Reason: {s.substitutionReason || "Tutor unavailable"}. Use "Assign substitute tutor" below to pick one manually.</p>
+                              </div>
                             ) : null}
                             <Button
                               variant="outline"
@@ -3839,7 +4042,7 @@ export default function AdminDashboard() {
                               variant="outline"
                               size="sm"
                               className="w-full"
-                              onClick={handleMarkTutorUnavailableForSessionDate}
+                              onClick={openMarkUnavailableDialog}
                             >
                               Mark tutor unavailable (day)
                             </Button>
@@ -3910,7 +4113,7 @@ export default function AdminDashboard() {
               <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="p-4 border-b border-border flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-display font-bold text-lg text-foreground">Users / User Accounts</h3>
+                    <h3 className="font-display font-bold text-lg text-foreground">User Accounts</h3>
                     <div className="flex rounded-lg border border-border p-0.5 bg-muted/50">
                         <button
                           type="button"
@@ -4507,6 +4710,7 @@ export default function AdminDashboard() {
                   id="tutor-firstName"
                   value={addTutorForm.firstName}
                   onChange={(e) => setAddTutorForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))}
+                  onBlur={(e) => { const cleaned = formatNameCapitalize(e.target.value); if (cleaned && cleaned !== e.target.value) setAddTutorForm((f) => ({ ...f, firstName: cleaned })); }}
                   placeholder="Maria"
                   aria-invalid={!!getNameError(addTutorForm.firstName, "First name")}
                   required
@@ -4521,6 +4725,7 @@ export default function AdminDashboard() {
                   id="tutor-middleName"
                   value={addTutorForm.middleName}
                   onChange={(e) => setAddTutorForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))}
+                  onBlur={(e) => { const cleaned = formatNameCapitalize(e.target.value); if (cleaned && cleaned !== e.target.value) setAddTutorForm((f) => ({ ...f, middleName: cleaned })); }}
                   placeholder="Santos"
                   aria-invalid={!!getNameError(addTutorForm.middleName, "Middle name", false)}
                 />
@@ -4535,6 +4740,7 @@ export default function AdminDashboard() {
                 id="tutor-lastName"
                 value={addTutorForm.lastName}
                 onChange={(e) => setAddTutorForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))}
+                onBlur={(e) => { const cleaned = formatNameCapitalize(e.target.value); if (cleaned && cleaned !== e.target.value) setAddTutorForm((f) => ({ ...f, lastName: cleaned })); }}
                 placeholder="Dela Cruz"
                 aria-invalid={!!getNameError(addTutorForm.lastName, "Last name")}
                 required
@@ -4797,14 +5003,14 @@ export default function AdminDashboard() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="admin-firstName">First Name</Label>
-                <Input id="admin-firstName" value={addAdminForm.firstName} onChange={(e) => setAddAdminForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))} placeholder="Maria" aria-invalid={!!getNameError(addAdminForm.firstName, "First name")} required />
+                <Input id="admin-firstName" value={addAdminForm.firstName} onChange={(e) => setAddAdminForm((f) => ({ ...f, firstName: sanitizeName(e.target.value) }))} onBlur={(e) => { const cleaned = formatNameCapitalize(e.target.value); if (cleaned && cleaned !== e.target.value) setAddAdminForm((f) => ({ ...f, firstName: cleaned })); }} placeholder="Maria" aria-invalid={!!getNameError(addAdminForm.firstName, "First name")} required />
                 {addAdminForm.firstName && getNameError(addAdminForm.firstName, "First name") && (
                   <p role="alert" className="text-xs text-destructive">{getNameError(addAdminForm.firstName, "First name")}</p>
                 )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="admin-middleName">Middle Name</Label>
-                <Input id="admin-middleName" value={addAdminForm.middleName} onChange={(e) => setAddAdminForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))} placeholder="Optional" aria-invalid={!!getNameError(addAdminForm.middleName, "Middle name", false)} />
+                <Input id="admin-middleName" value={addAdminForm.middleName} onChange={(e) => setAddAdminForm((f) => ({ ...f, middleName: sanitizeName(e.target.value) }))} onBlur={(e) => { const cleaned = formatNameCapitalize(e.target.value); if (cleaned && cleaned !== e.target.value) setAddAdminForm((f) => ({ ...f, middleName: cleaned })); }} placeholder="Optional" aria-invalid={!!getNameError(addAdminForm.middleName, "Middle name", false)} />
                 {getNameError(addAdminForm.middleName, "Middle name", false) && (
                   <p role="alert" className="text-xs text-destructive">{getNameError(addAdminForm.middleName, "Middle name", false)}</p>
                 )}
@@ -4812,7 +5018,7 @@ export default function AdminDashboard() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="admin-lastName">Last Name</Label>
-              <Input id="admin-lastName" value={addAdminForm.lastName} onChange={(e) => setAddAdminForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))} placeholder="Dela Cruz" aria-invalid={!!getNameError(addAdminForm.lastName, "Last name")} required />
+              <Input id="admin-lastName" value={addAdminForm.lastName} onChange={(e) => setAddAdminForm((f) => ({ ...f, lastName: sanitizeName(e.target.value) }))} onBlur={(e) => { const cleaned = formatNameCapitalize(e.target.value); if (cleaned && cleaned !== e.target.value) setAddAdminForm((f) => ({ ...f, lastName: cleaned })); }} placeholder="Dela Cruz" aria-invalid={!!getNameError(addAdminForm.lastName, "Last name")} required />
               {addAdminForm.lastName && getNameError(addAdminForm.lastName, "Last name") && (
                 <p role="alert" className="text-xs text-destructive">{getNameError(addAdminForm.lastName, "Last name")}</p>
               )}
@@ -4883,21 +5089,90 @@ export default function AdminDashboard() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Replacement tutor</Label>
-              <Select value={substituteTutorId} onValueChange={setSubstituteTutorId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select tutor" />
-                </SelectTrigger>
-                <SelectContent>
-                  {substituteTutorOptions.map((t) => (
-                    <SelectItem key={t._id} value={t._id}>
-                      {t.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* This session has more than one tutor (Toddlers Playgroup) — the admin can
+                check off several outgoing tutors and pair each one with its own
+                replacement (one-to-one, so there's no ambiguity about who replaces whom).
+                A 1-on-1 session only ever has one tutor, so this never shows there. */}
+            {substituteCurrentTutors.length > 1 ? (
+              <div className="space-y-2">
+                <Label>Tutor(s) to replace, paired with their replacement</Label>
+                <div className="space-y-2">
+                  {substituteCurrentTutors.map((t) => {
+                    const checked = substituteSelectedOutgoingIds.includes(t._id);
+                    const usedElsewhere = Object.entries(substituteReplacementMap)
+                      .filter(([outId]) => outId !== t._id)
+                      .map(([, repId]) => repId);
+                    const optionsForRow = substituteTutorOptions.filter((o) => !usedElsewhere.includes(o._id));
+                    return (
+                      <div key={t._id} className="rounded-md border border-border p-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`substitute-outgoing-${t._id}`}
+                            checked={checked}
+                            onCheckedChange={(next) => {
+                              setSubstituteSelectedOutgoingIds((prev) =>
+                                next ? [...prev, t._id] : prev.filter((id) => id !== t._id)
+                              );
+                              if (!next) {
+                                setSubstituteReplacementMap((prev) => {
+                                  const nextMap = { ...prev };
+                                  delete nextMap[t._id];
+                                  return nextMap;
+                                });
+                              }
+                            }}
+                          />
+                          <Label htmlFor={`substitute-outgoing-${t._id}`} className="text-sm font-normal cursor-pointer">
+                            {t.name}
+                          </Label>
+                        </div>
+                        {checked && (
+                          <Select
+                            value={substituteReplacementMap[t._id] || ""}
+                            onValueChange={(value) => setSubstituteReplacementMap((prev) => ({ ...prev, [t._id]: value }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Replace with..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {optionsForRow.length === 0 ? (
+                                <div className="px-2 py-1.5 text-sm text-muted-foreground">No eligible, available tutors found.</div>
+                              ) : (
+                                optionsForRow.map((o) => (
+                                  <SelectItem key={o._id} value={o._id}>
+                                    {o.name}
+                                  </SelectItem>
+                                ))
+                              )}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>Replacement tutor</Label>
+                <Select value={substituteTutorId} onValueChange={setSubstituteTutorId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select tutor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {substituteTutorOptions.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No eligible, available tutors found.</div>
+                    ) : (
+                      substituteTutorOptions.map((t) => (
+                        <SelectItem key={t._id} value={t._id}>
+                          {t.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="substitute-reason">Reason</Label>
               <Input
@@ -4912,9 +5187,76 @@ export default function AdminDashboard() {
             <Button type="button" variant="outline" onClick={() => setSubstituteDialogOpen(false)} disabled={substituteLoading}>
               Cancel
             </Button>
-            <Button type="button" onClick={handleAssignSubstitute} disabled={substituteLoading || !substituteTutorId}>
+            <Button
+              type="button"
+              onClick={handleAssignSubstitute}
+              disabled={
+                substituteLoading ||
+                (substituteCurrentTutors.length > 1
+                  ? substituteSelectedOutgoingIds.length === 0 || substituteSelectedOutgoingIds.some((id) => !substituteReplacementMap[id])
+                  : !substituteTutorId)
+              }
+            >
               {substituteLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Assign Substitute
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={markUnavailableDialogOpen} onOpenChange={setMarkUnavailableDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark Tutor Unavailable</DialogTitle>
+            <DialogDescription>
+              {selectedSchedule?.date
+                ? `Marks the selected tutor unavailable for ${new Date(selectedSchedule.date).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "short", day: "numeric", year: "numeric" })} and tries to automatically reassign each of their affected session(s) that day to another available tutor.`
+                : "Select a schedule first."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* More than one tutor on this session (Toddlers Playgroup) — let the admin
+                check off several at once instead of repeating the flow one at a time.
+                A 1-on-1 session has exactly one, so this is pre-selected and never shown
+                (no ambiguity to resolve). */}
+            {markUnavailableTutors.length > 1 && (
+              <div className="space-y-2">
+                <Label>Which tutor(s) are unavailable?</Label>
+                <div className="space-y-2">
+                  {markUnavailableTutors.map((t) => (
+                    <div key={t._id} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`mark-unavailable-${t._id}`}
+                        checked={markUnavailableTutorIds.includes(t._id)}
+                        onCheckedChange={(next) => {
+                          setMarkUnavailableTutorIds((prev) =>
+                            next ? [...prev, t._id] : prev.filter((id) => id !== t._id)
+                          );
+                        }}
+                      />
+                      <Label htmlFor={`mark-unavailable-${t._id}`} className="text-sm font-normal cursor-pointer">
+                        {t.name}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {markUnavailableTutors.length === 1 && (
+              <p className="text-sm text-muted-foreground">Tutor: <span className="font-medium text-foreground">{markUnavailableTutors[0].name}</span></p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setMarkUnavailableDialogOpen(false)} disabled={markUnavailableLoading}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleConfirmMarkUnavailable}
+              disabled={markUnavailableLoading || markUnavailableTutorIds.length === 0}
+            >
+              {markUnavailableLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Mark Unavailable
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -5659,6 +6001,7 @@ export default function AdminDashboard() {
             setPaymentProofPreview(null);
             setPaymentProofZoomed(false);
             setPaymentProofLoadState('loading');
+            setPaymentProofPdfUrl(null);
           }
         }}
       >
@@ -5666,7 +6009,9 @@ export default function AdminDashboard() {
           <DialogHeader>
             <DialogTitle>Proof of Payment</DialogTitle>
             <DialogDescription>
-              {paymentProofPreview ? `Reference ${paymentProofPreview.reference}. Click the image to toggle zoom.` : "Preview payment proof."}
+              {paymentProofPreview
+                ? `Reference ${paymentProofPreview.reference}.${paymentProofIsPdf ? '' : ' Click the image to toggle zoom.'}`
+                : "Preview payment proof."}
             </DialogDescription>
           </DialogHeader>
           {paymentProofPreview ? (
@@ -5674,11 +6019,26 @@ export default function AdminDashboard() {
               {paymentProofLoadState === 'error' ? (
                 <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
                   <AlertTriangle className="h-8 w-8 text-destructive" />
-                  <p>This proof image failed to load — the file may be missing or moved.</p>
+                  <p>This proof file failed to load — it may be missing or moved.</p>
                   <a href={paymentProofPreview.src} target="_blank" rel="noopener noreferrer" className="text-amber-600 underline">
                     Open the file directly
                   </a>
                 </div>
+              ) : paymentProofIsPdf ? (
+                paymentProofPdfUrl ? (
+                  <object data={paymentProofPdfUrl} type="application/pdf" className="h-[80vh] w-full rounded">
+                    <div className="p-6 text-center text-sm text-muted-foreground">
+                      Preview not supported here.{' '}
+                      <a href={paymentProofPreview.src} target="_blank" rel="noopener noreferrer" className="text-amber-600 underline">
+                        Download the file
+                      </a>
+                    </div>
+                  </object>
+                ) : (
+                  <div className="flex h-[75vh] items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  </div>
+                )
               ) : (
                 <div className={paymentProofZoomed ? "min-w-max" : "min-w-0"}>
                   {paymentProofLoadState === 'loading' && (
@@ -5712,6 +6072,7 @@ export default function AdminDashboard() {
               onClick={() => {
                 setPaymentProofPreview(null);
                 setPaymentProofZoomed(false);
+                setPaymentProofPdfUrl(null);
               }}
             >
               Close

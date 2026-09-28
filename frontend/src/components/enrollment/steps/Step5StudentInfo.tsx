@@ -15,6 +15,7 @@ import {
   computeAgeYears,
   MIN_ENROLL_AGE,
 } from '@/lib/enrollmentValidation';
+import { sanitizeName } from '@/utils/validation';
 
 interface Props { data: WizardData; update: (p: Partial<WizardData>) => void; onNext: () => void; onBack: () => void; }
 
@@ -71,7 +72,7 @@ export default function Step5StudentInfo({ data, update, onNext, onBack }: Props
               placeholder={f.placeholder}
               className={errors[f.key] ? 'border-destructive' : ''}
               value={data[f.key]}
-              onChange={(e) => { update({ [f.key]: e.target.value }); setErrors((p) => ({ ...p, [f.key]: '' })); }}
+              onChange={(e) => { update({ [f.key]: sanitizeName(e.target.value) }); setErrors((p) => ({ ...p, [f.key]: '' })); }}
               onBlur={(e) => {
                 const cleaned = toTitleCase(e.target.value);
                 if (cleaned && cleaned !== e.target.value) update({ [f.key]: cleaned });

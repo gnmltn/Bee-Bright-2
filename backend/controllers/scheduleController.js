@@ -654,6 +654,12 @@ async function processSubstitutionForSchedule({
   reason,
   actedBy,
   replacementTutorId = null,
+  // Which of the session's CURRENTLY-assigned tutors is being substituted out. Only
+  // meaningful (and only ever passed) for a multi-tutor Playgroup session — a 1-on-1
+  // session, or a Playgroup session with just one tutor, has no ambiguity and this is
+  // ignored. Every existing auto-substitution caller leaves this null and keeps working
+  // exactly as before (falls back to the primary `tutor` field). See "bug (7).pdf" X/Y.
+  replacedTutorId = null,
   allowAlreadyAssigned = false,
   session = null
 }) {
@@ -680,6 +686,23 @@ async function processSubstitutionForSchedule({
 
   const previousTutor = schedule.tutor;
   const originalTutorId = schedule.originalTutor || (previousTutor?._id || previousTutor);
+
+  // Every tutor actually assigned to this session right now (Playgroup can have several;
+  // a 1-on-1 session's `tutors` array mirrors its single `tutor`). Raw ObjectIds here —
+  // `tutors` isn't populated by the query above — `String(t)` handles that directly.
+  const currentTutorIds = (Array.isArray(schedule.tutors) && schedule.tutors.length > 0)
+    ? schedule.tutors.map((t) => String(t?._id || t))
+    : [String(previousTutor?._id || previousTutor)].filter(Boolean);
+
+  let resolvedReplacedTutorId = replacedTutorId ? String(replacedTutorId) : null;
+  if (resolvedReplacedTutorId && !currentTutorIds.includes(resolvedReplacedTutorId)) {
+    throw new Error('The selected tutor is not currently assigned to this session.');
+  }
+  if (!resolvedReplacedTutorId) {
+    // No ambiguity to resolve (single tutor), or an auto-substitution caller that never
+    // passes this — the primary `tutor` field is who's actually being substituted.
+    resolvedReplacedTutorId = String(previousTutor?._id || previousTutor);
+  }
 
   schedule.substitutionStatus = 'in_progress';
   schedule.substitutionRequestSource = triggerSource;
@@ -712,8 +735,11 @@ async function processSubstitutionForSchedule({
 
   let resolvedReplacementTutorId = replacementTutorId;
   if (!resolvedReplacementTutorId) {
+    // Every tutor already on this session (not just the primary) — a Playgroup co-tutor
+    // must never get auto-picked as "the replacement" for themselves or for the other
+    // co-tutor sitting right next to them.
     const excludedTutorIds = [
-      previousTutor?._id || previousTutor,
+      ...currentTutorIds,
       originalTutorId,
       schedule.substituteTutor
     ].filter(Boolean);
@@ -744,8 +770,11 @@ async function processSubstitutionForSchedule({
     };
   }
 
-  if (String(previousTutor?._id || previousTutor) === String(resolvedReplacementTutorId)) {
+  if (resolvedReplacedTutorId === String(resolvedReplacementTutorId)) {
     throw new Error('Replacement tutor must be different from the current tutor');
+  }
+  if (currentTutorIds.includes(String(resolvedReplacementTutorId))) {
+    throw new Error('That tutor is already assigned to this session.');
   }
 
   const tutorCheck = await canTutorHandleSchedule({
@@ -767,9 +796,27 @@ async function processSubstitutionForSchedule({
     throw new Error('Replacement tutor not found');
   }
 
+  // The user-facing "who got replaced" — the populated primary `tutor` when that's who it
+  // was, otherwise a fresh lookup for the specific co-tutor (schedule.tutors isn't
+  // populated, so it's never already a full user doc).
+  const replacedTutorIsPrimary = String(previousTutor?._id || previousTutor) === resolvedReplacedTutorId;
+  let actualPreviousTutor = previousTutor;
+  if (!replacedTutorIsPrimary) {
+    const replacedTutorQuery = User.findById(resolvedReplacedTutorId).select('firstName middleName lastName email').lean();
+    actualPreviousTutor = session ? await replacedTutorQuery.session(session) : await replacedTutorQuery;
+  }
+
   schedule.originalTutor = schedule.originalTutor || originalTutorId;
   schedule.substituteTutor = resolvedReplacementTutorId;
-  schedule.tutor = resolvedReplacementTutorId;
+  // Replace only the specific tutor being substituted within the roster — any other
+  // co-tutor (Playgroup) is left exactly as they were. This is the actual fix for the
+  // "assigned tutor doesn't appear after assignment" bug: the old code only ever touched
+  // `schedule.tutor`, never `schedule.tutors[]`, so the Schedule Details panel (which
+  // reads `tutors[]` for Playgroup) kept showing the stale roster no matter what.
+  schedule.tutors = currentTutorIds.map((id) => (id === resolvedReplacedTutorId ? resolvedReplacementTutorId : id));
+  if (replacedTutorIsPrimary) {
+    schedule.tutor = resolvedReplacementTutorId;
+  }
   schedule.isSubstitution = true;
   schedule.substitutionStatus = 'assigned';
   schedule.substitutedAt = new Date();
@@ -792,7 +839,7 @@ async function processSubstitutionForSchedule({
   return {
     status: 'assigned',
     schedule,
-    previousTutor,
+    previousTutor: actualPreviousTutor,
     replacementTutor
   };
 }
@@ -1018,29 +1065,57 @@ const getScheduleOptions = async (req, res) => {
   }
 };
 
-// @desc    Get tutors who can teach a given subject
-// @route   GET /api/schedules/tutors?subjectId=...
+// @desc    Every active tutor — ALL tutors can handle any program (Toddlers Playgroup,
+//          Academic Tutorial, Examination Preparation); there is no per-subject
+//          qualification restriction — optionally narrowed to only those genuinely free
+//          at a specific day+time (used by the Assign Substitute Tutor dialog,
+//          "bug (7).pdf" Group X, corrected per a follow-up: an earlier version of this
+//          fix incorrectly filtered by `subjectsTaught`, wrongly excluding valid tutors).
+//          Reuses canTutorHandleSchedule — the same availability-window/conflict check the
+//          actual assignment enforces server-side — so this list can never offer an option
+//          the assignment would then reject.
+// @route   GET /api/schedules/tutors?subjectId=...&date=&startTime=&endTime=&excludeScheduleId=&excludeTutorIds=
 // @access  Private (Admin)
 const getTutorsBySubject = async (req, res) => {
   try {
-    const { subjectId } = req.query;
+    const { subjectId, date, startTime, endTime, excludeScheduleId, excludeTutorIds } = req.query;
     if (!subjectId) {
       return res.status(400).json({
         success: false,
         message: 'subjectId is required'
       });
     }
+    // Currently-assigned tutor(s) on this same session — never valid replacements for
+    // themselves or a co-tutor they're already sitting alongside.
+    const excludedIds = String(excludeTutorIds || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => mongoose.Types.ObjectId.isValid(s));
+
     const tutors = await User.find({
       role: 'tutor',
       isActive: true,
-      deletedAt: null
+      deletedAt: null,
+      ...(excludedIds.length ? { _id: { $nin: excludedIds } } : {})
     })
       .select('firstName lastName middleName email availability employmentType')
-      .populate('subjectsTaught', 'name code')
       .sort({ firstName: 1, lastName: 1 })
       .lean();
 
-    const list = tutors.map(t => ({
+    let candidates = tutors;
+    if (date && startTime) {
+      const checks = await Promise.all(candidates.map((t) => canTutorHandleSchedule({
+        tutorId: t._id,
+        subjectId,
+        date,
+        startTime,
+        endTime,
+        excludeScheduleId: excludeScheduleId || undefined
+      })));
+      candidates = candidates.filter((_, i) => checks[i].ok);
+    }
+
+    const list = candidates.map(t => ({
       _id: t._id,
       firstName: t.firstName,
       lastName: t.lastName,
@@ -2940,7 +3015,7 @@ const markAttendance = async (req, res) => {
 const assignSubstituteTutor = async (req, res) => {
   try {
     const { id } = req.params;
-    const { replacementTutorId, reason } = req.body || {};
+    const { replacementTutorId, replacedTutorId, reason } = req.body || {};
 
     if (!replacementTutorId) {
       return res.status(400).json({
@@ -2955,6 +3030,7 @@ const assignSubstituteTutor = async (req, res) => {
       reason: String(reason || 'Tutor unavailable').trim() || 'Tutor unavailable',
       actedBy: req.user.id,
       replacementTutorId,
+      replacedTutorId: replacedTutorId || null,
       allowAlreadyAssigned: true,
       session
     }));
@@ -2992,6 +3068,7 @@ const assignSubstituteTutor = async (req, res) => {
     const updated = await Schedule.findById(txResult.schedule._id)
       .populate('student', 'firstName lastName middleName email gradeLevel profileImage')
       .populate('tutor', 'firstName lastName middleName email profileImage')
+      .populate('tutors', 'firstName lastName middleName email profileImage')
       .populate('originalTutor', 'firstName lastName middleName email profileImage')
       .populate('substituteTutor', 'firstName lastName middleName email profileImage')
       .populate('subject', 'name code')
@@ -3053,8 +3130,11 @@ const markTutorUnavailability = async (req, res) => {
       autoAssigned: Boolean(autoAssign)
     });
 
+    // A Playgroup session can have this tutor as a CO-tutor (in `tutors[]`) rather than the
+    // primary `tutor` field — matching only `tutor` silently skipped every such session
+    // ("bug (8).pdf": Repro 2's "0 reassigned, 0 unresolved" on a multi-tutor session).
     const schedules = await Schedule.find({
-      tutor: tutorId,
+      $or: [{ tutor: tutorId }, { tutors: tutorId }],
       date: { $gte: start, $lte: end }
     })
       .populate('student', 'firstName middleName lastName email')
@@ -3102,6 +3182,11 @@ const markTutorUnavailability = async (req, res) => {
         reason: String(reason || 'Tutor unavailable').trim() || 'Tutor unavailable',
         actedBy: req.user.id,
         replacementTutorId: null,
+        // On a multi-tutor Playgroup session, this is what actually says WHICH of the
+        // assigned tutors is the one being marked unavailable — without it, the default
+        // (the primary `tutor` field) could substitute out the WRONG tutor, leaving the
+        // genuinely-unavailable one still on the session.
+        replacedTutorId: tutorId,
         allowAlreadyAssigned: false,
         session
       }));

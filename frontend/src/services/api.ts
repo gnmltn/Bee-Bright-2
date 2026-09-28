@@ -624,6 +624,7 @@ export interface AdminSchedule {
   dayOfWeek?: number;
   tutoringAreaId?: { _id: string; name?: string; areaType?: 'tutoring_area' | 'toddler_room' } | string | null;
   isSubstitution?: boolean;
+  substitutionStatus?: 'none' | 'in_progress' | 'assigned' | 'substitute_required';
   substitutionReason?: string;
   originalTutor?: { _id: string; firstName: string; lastName: string; middleName?: string; email?: string } | string | null;
   student?: { _id: string; firstName: string; lastName: string; middleName?: string; email?: string; gradeLevel?: string; profileImage?: string };
@@ -724,7 +725,15 @@ export interface MonthlyScheduleCheck {
 
 export const scheduleService = {
   getOptions: () => api.get('/schedules/options'),
-  getTutorsBySubject: (subjectId: string) => api.get('/schedules/tutors', { params: { subjectId } }),
+  getTutorsBySubject: (subjectId: string, opts?: { date?: string; startTime?: string; endTime?: string; excludeScheduleId?: string; excludeTutorIds?: string[] }) =>
+    api.get('/schedules/tutors', { params: {
+      subjectId,
+      date: opts?.date,
+      startTime: opts?.startTime,
+      endTime: opts?.endTime,
+      excludeScheduleId: opts?.excludeScheduleId,
+      excludeTutorIds: opts?.excludeTutorIds?.length ? opts.excludeTutorIds.join(',') : undefined,
+    } }),
   /**
    * Returns the minimum required tutor count for a Toddlers Playgroup session
    * based on child count. Uses the ratio: ceil(childCount / 2). There is no
@@ -798,7 +807,7 @@ export const scheduleService = {
   /** Section 3b: single-student — admin picks the new date/time directly. One-on-one sessions only. */
   emergencyReschedule: (scheduleId: string, data: { newDate: string; newStartTime: string; newEndTime: string; reason: string }) =>
     api.post(`/schedules/${scheduleId}/emergency-reschedule`, data),
-  assignSubstitute: (scheduleId: string, data: { replacementTutorId: string; reason?: string }) =>
+  assignSubstitute: (scheduleId: string, data: { replacementTutorId: string; replacedTutorId?: string; reason?: string }) =>
     api.patch(`/schedules/${scheduleId}/substitute`, data),
   cleanupDuplicates: () => api.post('/schedules/cleanup-duplicates'),
   list: () => api.get('/schedules', { params: { _t: Date.now() } }),
