@@ -65,14 +65,14 @@ export function ContactTutorPanel({ schedules }: Props) {
                       <p className="text-sm font-medium text-foreground">{tutorFullName(t)}</p>
                       <div className="mt-1 space-y-0.5">
                         {t.phone && (
-                          <a href={`tel:${t.phone}`} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary">
+                          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             <Phone className="h-3 w-3" /> {t.phone}
-                          </a>
+                          </p>
                         )}
                         {t.email && (
-                          <a href={`mailto:${t.email}`} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary">
+                          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             <Mail className="h-3 w-3" /> {t.email}
-                          </a>
+                          </p>
                         )}
                         {!t.phone && !t.email && (
                           <p className="text-xs text-muted-foreground">No contact details on file.</p>

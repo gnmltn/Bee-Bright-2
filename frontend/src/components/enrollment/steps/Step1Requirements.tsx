@@ -25,14 +25,15 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
   const { toast } = useToast();
   const isAddChildMode = !!addChild || typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'add-child';
 
-  const allDocsUploaded =
-    !!data.docBirthCertificate && !!data.docStudentPhoto && !!data.docGuardianId;
+  // Owner direction ("bug (13).pdf" Group AQ): enrollment only requires the 2x2 photo now —
+  // Birth Certificate and Guardian Valid ID were removed entirely.
+  const allDocsUploaded = !!data.docStudentPhoto;
 
   const handleNext = () => {
     if (!allDocsUploaded) {
       toast({
-        title: 'Documents required',
-        description: 'Please upload all three required documents before continuing.',
+        title: 'Photo required',
+        description: 'Please upload the student\'s 2×2 photo before continuing.',
         variant: 'destructive',
       });
       return;
@@ -48,8 +49,8 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
         <h2 className="text-xl font-bold text-foreground">Enrollment Requirements</h2>
         <p className="text-muted-foreground text-sm mt-1">
           {isAddChildMode
-            ? 'Upload the three required documents below before continuing with this child\'s enrollment.'
-            : 'Upload the three required documents below before creating your account. You can take a clear photo of physical documents.'}
+            ? 'Upload the required photo below before continuing with this child\'s enrollment.'
+            : 'Upload the required photo below before creating your account. You can take a clear photo of a physical print.'}
         </p>
       </div>
 
@@ -59,17 +60,9 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
           <FileText className="h-4 w-4 text-amber-600" />
           <span className="font-semibold text-foreground text-sm">Required Documents</span>
           <span className="text-xs text-muted-foreground ml-auto">
-            {[data.docBirthCertificate, data.docStudentPhoto, data.docGuardianId].filter(Boolean).length}/3 uploaded
+            {[data.docStudentPhoto].filter(Boolean).length}/1 uploaded
           </span>
         </div>
-
-        <DocUploadField
-          label="Student Birth Certificate"
-          desc="Original or photocopy — used for age verification."
-          value={data.docBirthCertificate}
-          onChange={(doc) => update({ docBirthCertificate: doc })}
-          onRemove={() => update({ docBirthCertificate: null })}
-        />
 
         <DocUploadField
           label="Recent 2×2 Photo of Student"
@@ -79,14 +72,6 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
           onRemove={() => update({ docStudentPhoto: null })}
           accept=".jpg,.jpeg,.png,image/jpeg,image/png"
         />
-
-        <DocUploadField
-          label="Guardian Valid ID"
-          desc="Any government-issued ID of the parent or guardian."
-          value={data.docGuardianId}
-          onChange={(doc) => update({ docGuardianId: doc })}
-          onRemove={() => update({ docGuardianId: null })}
-        />
       </div>
 
       {/* All-uploaded confirmation badge */}
@@ -94,7 +79,7 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
         <div className="flex items-center gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-300 rounded-xl">
           <CheckCircle2 className="h-5 w-5 text-emerald-600 flex-shrink-0" />
           <p className="text-sm text-emerald-800 dark:text-emerald-300 font-medium">
-            All documents uploaded — you're ready to continue!
+            Photo uploaded — you're ready to continue!
           </p>
         </div>
       )}
@@ -145,7 +130,7 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
         <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/10 border border-amber-200 rounded-xl">
           <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-amber-700">
-            Upload all 3 documents above to proceed. These are kept confidential and used for enrollment verification only.
+            Upload the photo above to proceed. It's kept confidential and used for enrollment verification only.
           </p>
         </div>
       )}

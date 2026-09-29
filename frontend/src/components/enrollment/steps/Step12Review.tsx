@@ -46,9 +46,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         birthdate: data.birthdate,
         renewalOfEnrollmentId: data.renewalOfEnrollmentId || undefined,
         requirementDocuments: {
-          birthCertificate: data.docBirthCertificate ? { dataUrl: data.docBirthCertificate.dataUrl, fileName: data.docBirthCertificate.fileName } : undefined,
           studentPhoto: data.docStudentPhoto ? { dataUrl: data.docStudentPhoto.dataUrl, fileName: data.docStudentPhoto.fileName } : undefined,
-          guardianId: data.docGuardianId ? { dataUrl: data.docGuardianId.dataUrl, fileName: data.docGuardianId.fileName } : undefined,
         },
         preferredStartDate: data.preferredStartDate || undefined,
         preferredDaysByProgram: data.preferredDaysByProgram.length > 0 ? data.preferredDaysByProgram : undefined,
@@ -133,9 +131,7 @@ export default function Step12Review({ data, update, onBack, submitting, setSubm
         </Section>
 
         <Section title="Documents">
-          <Row label="Birth Certificate" value={data.docBirthCertificate ? data.docBirthCertificate.fileName : 'Not uploaded'} />
           <Row label="2×2 Student Photo" value={data.docStudentPhoto ? data.docStudentPhoto.fileName : 'Not uploaded'} />
-          <Row label="Guardian Valid ID" value={data.docGuardianId ? data.docGuardianId.fileName : 'Not uploaded'} />
         </Section>
 
         <Section title="Health & Learning">

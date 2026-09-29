@@ -2,9 +2,50 @@ const mongoose = require('mongoose');
 const Announcement = require('../models/Announcement');
 const User = require('../models/User');
 const Schedule = require('../models/Schedule');
+const Enrollment = require('../models/Enrollment');
 const { sendAnnouncementEmail } = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
+
+// A student User's own `.email` is always the internal placeholder
+// "child.<enrollmentId>@students.beebright.internal" (see scheduleController.js's
+// resolveOrCreateStudentUser) — never a real, deliverable address. Every announcement
+// email must go to the actual PARENT's registered email instead ("bug (13).pdf" Group AS —
+// every announcement notification was silently bouncing off that placeholder domain).
+// Group-aware (a Playgroup tutor's roster includes both `tutor`/`student` and the
+// `tutors[]`/`students[]` array fields) — same shape as aiController.js's getTutorStudents.
+async function getTutorRosterStudentIds(tutorId) {
+  const schedules = await Schedule.find({ $or: [{ tutor: tutorId }, { tutors: tutorId }] })
+    .select('student students')
+    .lean();
+  const ids = new Set();
+  for (const s of schedules) {
+    if (s.student) ids.add(String(s.student));
+    for (const sid of s.students || []) ids.add(String(sid));
+  }
+  return ids;
+}
+
+/** One real parent email per targeted student, deduped (a parent with 2 targeted children in
+ * the same announcement only gets one email), never the students' own placeholder emails. */
+async function notifyParentsOfStudents(studentIds, { title, body, category }) {
+  if (!studentIds || studentIds.length === 0) return;
+  const enrollments = await Enrollment.find({
+    student: { $in: studentIds },
+    status: { $nin: ['cancelled', 'rejected', 'draft'] },
+  })
+    .select('student parent')
+    .populate('parent', 'firstName lastName email')
+    .lean();
+  const parentByEmail = new Map();
+  for (const e of enrollments) {
+    if (e.parent?.email && !parentByEmail.has(e.parent.email)) parentByEmail.set(e.parent.email, e.parent);
+  }
+  for (const p of parentByEmail.values()) {
+    const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Parent';
+    sendAnnouncementEmail(p.email, name, title, body, category).catch(() => {});
+  }
+}
 
 const TUTOR_CATEGORIES = ['sick_leave', 'exam', 'quiz', 'materials', 'reschedule', 'reminder', 'general'];
 const ADMIN_CATEGORIES = ['suspension', 'maintenance', 'holiday', 'general'];
@@ -28,6 +69,18 @@ function parseScheduledDate(value) {
 
   const parsed = new Date(trimmed);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// A forward-looking announcement can't happen in the past. The shared Create/Edit
+// Announcement date field (Tutor + Admin) already blocks it client-side via the input's
+// `min`; this stops a hand-crafted request the same way enrollmentController.js's own
+// past-date guard does. One day of grace so a client in a different time zone than the
+// server isn't wrongly rejected.
+function isScheduledDateInPast(scheduledDateVal) {
+  if (!scheduledDateVal) return false;
+  const graceStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  graceStart.setHours(0, 0, 0, 0);
+  return scheduledDateVal < graceStart;
 }
 
 function resetTutorAnnouncementApproval(announcement) {
@@ -60,6 +113,9 @@ const createAnnouncement = async (req, res) => {
     if (scheduledDate && !scheduledDateVal) {
       return res.status(400).json({ success: false, message: 'Invalid scheduled date' });
     }
+    if (isScheduledDateInPast(scheduledDateVal)) {
+      return res.status(400).json({ success: false, message: 'The announcement date cannot be in the past.' });
+    }
 
     if (req.user.role === 'admin' || req.user.role === 'super_admin') {
       const doc = await Announcement.create({
@@ -76,12 +132,16 @@ const createAnnouncement = async (req, res) => {
         approvedAt: new Date()
       });
       const populated = await Announcement.findById(doc._id).populate('author', 'firstName lastName email');
-      // Notify all students by email (get all active students)
-      const students = await User.find({ role: 'student', isActive: true, isArchived: { $ne: true } }).select('email firstName lastName').lean();
-      for (const s of students) {
-        if (s.email) {
-          const name = [s.firstName, s.lastName].filter(Boolean).join(' ') || 'Student';
-          sendAnnouncementEmail(s.email, name, doc.title, doc.body, doc.category).catch(() => {});
+      // Admin announcement = broadcast-wide: EVERY parent and EVERY tutor, notified at
+      // their own real registered email (never a student account's placeholder address).
+      const [parents, tutors] = await Promise.all([
+        User.find({ role: 'parent', isActive: true, isArchived: { $ne: true } }).select('email firstName lastName').lean(),
+        User.find({ role: 'tutor', isActive: true, isArchived: { $ne: true } }).select('email firstName lastName').lean(),
+      ]);
+      for (const recipient of [...parents, ...tutors]) {
+        if (recipient.email) {
+          const name = [recipient.firstName, recipient.lastName].filter(Boolean).join(' ') || 'there';
+          sendAnnouncementEmail(recipient.email, name, doc.title, doc.body, doc.category).catch(() => {});
         }
       }
       logAudit({
@@ -99,6 +159,14 @@ const createAnnouncement = async (req, res) => {
     if (req.user.role === 'tutor') {
       if (targetType !== 'specific_students' || !Array.isArray(targetStudentIds) || targetStudentIds.length === 0) {
         return res.status(400).json({ success: false, message: 'Select at least one student to notify' });
+      }
+      // Never trust the picker alone — the frontend already scopes it to getMyStudents,
+      // but a tutor-authored announcement must never be able to target (and eventually
+      // email the parent of) a student this tutor doesn't actually handle.
+      const roster = await getTutorRosterStudentIds(req.user.id);
+      const notHandled = targetStudentIds.filter((id) => !roster.has(String(id)));
+      if (notHandled.length > 0) {
+        return res.status(403).json({ success: false, message: 'You can only target students you currently handle.' });
       }
       const doc = await Announcement.create({
         title: title.trim(),
@@ -246,14 +314,10 @@ const approveAnnouncement = async (req, res) => {
     ann.rejectionReason = null;
     await ann.save();
 
+    // Tutor-authored = scoped to specific students -> only THEIR parents, never the
+    // students' own placeholder emails, and never every parent/tutor.
     const targetIds = [].concat(ann.targetStudentIds || []).filter(Boolean);
-    const students = await User.find({ _id: { $in: targetIds } }).select('email firstName lastName').lean();
-    for (const s of students) {
-      if (s.email) {
-        const name = [s.firstName, s.lastName].filter(Boolean).join(' ') || 'Student';
-        sendAnnouncementEmail(s.email, name, ann.title, ann.body, ann.category).catch(() => {});
-      }
-    }
+    await notifyParentsOfStudents(targetIds, { title: ann.title, body: ann.body, category: ann.category });
 
     const populated = await Announcement.findById(ann._id)
       .populate('author', 'firstName lastName email')
@@ -322,8 +386,11 @@ const rejectAnnouncement = async (req, res) => {
 const getMyStudents = async (req, res) => {
   try {
     const tutorId = req.user.id;
-    const schedules = await Schedule.find({ tutor: tutorId }).distinct('student');
-    const students = await User.find({ _id: { $in: schedules }, role: 'student' })
+    // Group-aware (was `Schedule.find({ tutor: tutorId }).distinct('student')` — the
+    // singular field only, so a Toddlers Playgroup tutor's own roster from `tutors[]`/
+    // `students[]` never showed up here at all).
+    const roster = await getTutorRosterStudentIds(tutorId);
+    const students = await User.find({ _id: { $in: [...roster] }, role: 'student' })
       .select('firstName lastName email')
       .sort({ firstName: 1, lastName: 1 })
       .lean();
@@ -366,6 +433,9 @@ const updateAnnouncement = async (req, res) => {
     const scheduledDateVal = parseScheduledDate(scheduledDate);
     if (scheduledDate && !scheduledDateVal) {
       return res.status(400).json({ success: false, message: 'Invalid scheduled date' });
+    }
+    if (isScheduledDateInPast(scheduledDateVal)) {
+      return res.status(400).json({ success: false, message: 'The announcement date cannot be in the past.' });
     }
 
     ann.title = title.trim();

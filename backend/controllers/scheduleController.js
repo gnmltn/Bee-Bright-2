@@ -2927,9 +2927,14 @@ const getMyStudentCards = async (req, res) => {
       }
     }
 
+    // Also resolves each child's real PARENT (via Enrollment, never the student User's own
+    // placeholder `child.<id>@students.beebright.internal` email — same root cause and fix
+    // as the announcement-email bug, "bug (14).pdf" Group 2) so the "Assigned Students" mail
+    // icon can address the parent directly instead of the fake internal domain.
     const enrollments = byStudent.size
       ? await Enrollment.find({ student: { $in: [...byStudent.keys()] }, status: { $nin: ['cancelled', 'rejected', 'draft'] } })
-          .select('student permanentStudentId enrollmentId studentId packages')
+          .select('student permanentStudentId enrollmentId studentId packages parent')
+          .populate('parent', 'firstName lastName email')
           .lean()
       : [];
     const enrollmentsByStudent = new Map();
@@ -2959,13 +2964,17 @@ const getMyStudentCards = async (req, res) => {
       const scheduleSummary = summarizeSchedulePattern(upcoming.length ? upcoming : entry.schedules);
       const name = [entry.user.firstName, entry.user.lastName].filter(Boolean).join(' ') || 'Student';
 
+      const parentUser = enr[0]?.parent;
+      const parentEmail = parentUser?.email || null;
+      const parentName = parentUser ? ([parentUser.firstName, parentUser.lastName].filter(Boolean).join(' ') || null) : null;
+
       const key = studentId || `user-${id}`;
       const existing = cards.get(key);
       if (existing) {
         for (const p of programs) if (!existing.programs.includes(p)) existing.programs.push(p);
         continue;
       }
-      cards.set(key, { studentUserId: id, name, programs, studentId, schedule: scheduleSummary });
+      cards.set(key, { studentUserId: id, name, programs, studentId, schedule: scheduleSummary, parentEmail, parentName });
     }
 
     res.status(200).json({
@@ -3152,18 +3161,27 @@ const assignSubstituteTutor = async (req, res) => {
       session
     }));
 
+    // Fire-and-forget, like every other notification path in this file (schedule
+    // assignment/reschedule) — the substitution itself is already durably saved by this
+    // point, and this function internally emails up to 2-4 real people (student/parent,
+    // outgoing tutor, incoming tutor) over real SMTP. Awaiting it here made every single
+    // `assignSubstitute` call take as long as the slowest of those sends, which made the
+    // bulk multi-select flow ("bug (11).pdf") take many seconds per schedule under real
+    // (non-sandboxed) SMTP — long enough that an admin could plausibly navigate away or
+    // refresh mid-loop, silently losing later schedules with no error at all. Both
+    // notify* helpers already catch and log their own failures internally.
     if (txResult.status === 'assigned') {
-      await notifyScheduleSubstitution({
+      notifyScheduleSubstitution({
         schedule: txResult.schedule,
         previousTutor: txResult.previousTutor,
         replacementTutor: txResult.replacementTutor,
         reason: txResult.schedule.substitutionReason
-      });
+      }).catch((error) => logEmailError('schedule substitution notification', error, { scheduleId: txResult.schedule?._id }));
     } else {
-      await notifyNoSubstituteAlert({
+      notifyNoSubstituteAlert({
         schedule: txResult.schedule,
         reason: txResult.schedule.substitutionReason
-      });
+      }).catch((error) => logEmailError('schedule substitution alert', error, { scheduleId: txResult.schedule?._id }));
     }
 
     logAudit({
@@ -3726,18 +3744,19 @@ const announceTutorAbsence = async (req, res) => {
       };
     });
 
+    // Fire-and-forget — see the same note in assignSubstituteTutor.
     if (txResult.substitutionResult.status === 'assigned' && !txResult.substitutionResult.skipped) {
-      await notifyScheduleSubstitution({
+      notifyScheduleSubstitution({
         schedule: txResult.substitutionResult.schedule,
         previousTutor: txResult.substitutionResult.previousTutor,
         replacementTutor: txResult.substitutionResult.replacementTutor,
         reason: txResult.substitutionResult.schedule.substitutionReason
-      });
+      }).catch((error) => logEmailError('schedule substitution notification', error, { scheduleId: txResult.substitutionResult.schedule?._id }));
     } else if (txResult.substitutionResult.status !== 'assigned') {
-      await notifyNoSubstituteAlert({
+      notifyNoSubstituteAlert({
         schedule: txResult.substitutionResult.schedule,
         reason: txResult.substitutionResult.schedule.substitutionReason
-      });
+      }).catch((error) => logEmailError('schedule substitution alert', error, { scheduleId: txResult.substitutionResult.schedule?._id }));
     }
 
     logAudit({
@@ -3797,18 +3816,19 @@ const triggerAttendanceTimeoutSubstitution = async (req, res) => {
       session
     }));
 
+    // Fire-and-forget — see the same note in assignSubstituteTutor.
     if (txResult.status === 'assigned' && !txResult.skipped) {
-      await notifyScheduleSubstitution({
+      notifyScheduleSubstitution({
         schedule: txResult.schedule,
         previousTutor: txResult.previousTutor,
         replacementTutor: txResult.replacementTutor,
         reason: txResult.schedule.substitutionReason
-      });
+      }).catch((error) => logEmailError('schedule substitution notification', error, { scheduleId: txResult.schedule?._id }));
     } else if (txResult.status !== 'assigned') {
-      await notifyNoSubstituteAlert({
+      notifyNoSubstituteAlert({
         schedule: txResult.schedule,
         reason: txResult.schedule.substitutionReason
-      });
+      }).catch((error) => logEmailError('schedule substitution alert', error, { scheduleId: txResult.schedule?._id }));
     }
 
     const updatedSchedule = await Schedule.findById(id)

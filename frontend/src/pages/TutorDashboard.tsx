@@ -307,7 +307,12 @@ export default function TutorDashboard() {
   const [studentCards, setStudentCards] = useState<TutorStudentCard[]>([]);
   const [studentCardsLoading, setStudentCardsLoading] = useState(false);
   useEffect(() => {
-    if (location.hash !== "#students") return;
+    // Fetch on both hashes that render the "Assigned Students" panel (renderTeachingPage) —
+    // the "#students" tab AND the default "overview" tab ("" or "#assessments") — since the
+    // mail icon there also depends on this data (parentEmail/parentName), not just the
+    // "My Students" cards grid.
+    const showsTeachingPage = location.hash === "#students" || location.hash === "#assessments" || location.hash === "";
+    if (!showsTeachingPage) return;
     setStudentCardsLoading(true);
     scheduleService
       .getMyStudentCards()
@@ -479,6 +484,7 @@ export default function TutorDashboard() {
     const map = new Map<
       string,
       {
+        studentId: string;
         name: string;
         grade: string;
         subject: string;
@@ -502,6 +508,7 @@ export default function TutorDashboard() {
           })} ${formatTime12h(s.startTime)}`;
         } else {
           map.set(key, {
+            studentId: student._id,
             name,
             grade: student.gradeLevel ?? "—",
             subject: s.subject!.name,
@@ -518,6 +525,19 @@ export default function TutorDashboard() {
     });
     return Array.from(map.values());
   }, [sessions]);
+
+  // Student User id -> real PARENT contact (via Enrollment, from getMyStudentCards) — the
+  // "Assigned Students" mail icon must address the parent, never the student User's own
+  // placeholder `child.<id>@students.beebright.internal` email ("bug (14).pdf" Group 2).
+  const parentContactByStudentId = useMemo(() => {
+    const map = new Map<string, { email: string; name: string }>();
+    studentCards.forEach((card) => {
+      if (card.studentUserId && card.parentEmail) {
+        map.set(String(card.studentUserId), { email: card.parentEmail, name: card.parentName || "the parent" });
+      }
+    });
+    return map;
+  }, [studentCards]);
 
   // ─── Grades state ─────────────────────────────────────────────────────────────
   const [grades, setGrades] = useState<GradeItem[]>([]);
@@ -1510,15 +1530,24 @@ export default function TutorDashboard() {
                                   </div>
                                 </div>
                                 <div className="hidden md:flex items-center gap-2">
-                                  {student.email && (
-                                    <a
-                                      href={`mailto:${student.email}`}
-                                      className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted transition-colors"
-                                      title={`Email ${student.name}`}
-                                    >
-                                      <Mail className="h-4 w-4" />
-                                    </a>
-                                  )}
+                                  {(() => {
+                                    // Addresses the student's real PARENT (resolved via Enrollment), not the
+                                    // student User's own placeholder account email — matches how Admin's Users
+                                    // tab email icon opens a Gmail compose draft rather than a mailto: link.
+                                    const parentContact = parentContactByStudentId.get(student.studentId);
+                                    if (!parentContact) return null;
+                                    return (
+                                      <a
+                                        href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(parentContact.email)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-muted transition-colors"
+                                        title={`Email ${student.name}'s parent (${parentContact.name})`}
+                                      >
+                                        <Mail className="h-4 w-4" />
+                                      </a>
+                                    );
+                                  })()}
                                 </div>
                               </div>
                               <div className="ml-14 mt-1">
@@ -2639,8 +2668,15 @@ export default function TutorDashboard() {
                 <Label>Date when it happens</Label>
                 <Input
                   type="date"
+                  min={todayStr}
                   value={announcementForm.scheduledDate}
-                  onChange={(e) => setAnnouncementForm((f) => ({ ...f, scheduledDate: e.target.value }))}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    // A forward-looking announcement can't happen in the past — `min` blocks the
+                    // native picker's own calendar; this also rejects a hand-typed past date.
+                    if (v && v < todayStr) return;
+                    setAnnouncementForm((f) => ({ ...f, scheduledDate: v }));
+                  }}
                 />
               </div>
             </div>

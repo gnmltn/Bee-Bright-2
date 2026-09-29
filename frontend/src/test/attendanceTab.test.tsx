@@ -29,6 +29,24 @@ function makeTodaySession(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function daysAgoDateStr(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function makePastSession(daysAgo: number, overrides: Record<string, unknown> = {}) {
+  return {
+    _id: `sched-past-${daysAgo}`,
+    date: `${daysAgoDateStr(daysAgo)}T00:00:00.000Z`,
+    startTime: "08:00",
+    endTime: "09:00",
+    student: { _id: "student-1", firstName: "Ana", lastName: "Cruz" },
+    subject: { name: "Academic Tutorial" },
+    ...overrides,
+  };
+}
+
 describe("AttendanceTab: Present/Absent button locking", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -93,5 +111,52 @@ describe("AttendanceTab: Present/Absent button locking", () => {
       expect(screen.queryByText(/change attendance to absent\?/i)).toBeNull();
     });
     expect(scheduleService.markAttendance).not.toHaveBeenCalled();
+  });
+});
+
+// "bug (13).pdf" Group AR — tutors get a 3-day grace period after a session date to mark
+// Present/Absent; past that, an unmarked session auto-resolves to Absent (display-only,
+// never written to the DB until the tutor actually acts on it).
+describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past session to Absent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("more than 3 days old, still unmarked: reads as Absent — clicking Absent is a no-op, clicking Present asks to confirm overwriting it", async () => {
+    const session = makePastSession(4); // 4 days ago -> past the grace period
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /^absent$/i }));
+    expect(scheduleService.markAttendance).not.toHaveBeenCalled();
+    expect(screen.queryByText(/change attendance/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^present$/i }));
+    expect(await screen.findByText(/change attendance to present\?/i)).toBeTruthy();
+    expect(scheduleService.markAttendance).not.toHaveBeenCalled();
+  });
+
+  it("within the 3-day window, still unmarked: does NOT get forced to Absent — Present submits immediately, no confirmation", async () => {
+    const session = makePastSession(2); // 2 days ago -> still inside the grace window
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /^present$/i }));
+    await waitFor(() => {
+      expect(scheduleService.markAttendance).toHaveBeenCalledWith(session._id, "present");
+    });
+    expect(screen.queryByText(/change attendance/i)).toBeNull();
+  });
+
+  it("exactly 3 days old is still within the grace period — \"more than 3 days\" means day 4 onward, not day 3", async () => {
+    const session = makePastSession(3);
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /^present$/i }));
+    await waitFor(() => {
+      expect(scheduleService.markAttendance).toHaveBeenCalledWith(session._id, "present");
+    });
+    expect(screen.queryByText(/change attendance/i)).toBeNull();
   });
 });

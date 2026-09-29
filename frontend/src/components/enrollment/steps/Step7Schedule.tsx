@@ -56,6 +56,18 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   maxDate.setMonth(maxDate.getMonth() + 6);
   const maxDateStr = toLocalISODate(maxDate);
 
+  // There are no classes on Sunday, so it can never be a valid starting date. A native
+  // `<input type="date">` has no cross-browser way to gray out individual dates in its own
+  // picker popup (unlike `min`/`max`, which the browser does enforce) — so, same as the
+  // past-date rule right below, an out-of-range pick is rejected here with an inline error
+  // and blocked at Continue, rather than silently accepted.
+  const isSunday = (dateStr: string): boolean => {
+    if (!dateStr) return false;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, (m || 1) - 1, d || 1).getDay() === 0;
+  };
+  const SUNDAY_ERROR = 'There are no classes on Sunday. Please choose a different starting date.';
+
   const setDaysForProgram = (programCode: string, days: string[]) => {
     const rest = data.preferredDaysByProgram.filter((p) => p.programCode !== programCode);
     update({ preferredDaysByProgram: [...rest, { programCode, days }] });
@@ -107,6 +119,8 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
       errs.preferredStartDate = 'Please choose a preferred start date.';
     } else if (data.preferredStartDate < today) {
       errs.preferredStartDate = 'The start date cannot be in the past. Please choose today or a later date.';
+    } else if (isSunday(data.preferredStartDate)) {
+      errs.preferredStartDate = SUNDAY_ERROR;
     }
     const firstUnmetIndex = selectedProgramCodes.findIndex((code) => !programDaysSatisfied(code));
     if (firstUnmetIndex !== -1) {
@@ -195,15 +209,20 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
           className={errors.preferredStartDate ? 'border-destructive' : ''}
           onChange={(e) => {
             update({ preferredStartDate: e.target.value });
-            // Typing a past date by hand bypasses the picker's `min` — flag it (validate() blocks Continue).
-            setErrors((prev) => ({ ...prev, preferredStartDate: e.target.value && e.target.value < today ? 'The start date cannot be in the past. Please choose today or a later date.' : '' }));
+            // Typing a past date (or a Sunday) by hand bypasses the picker's own constraints —
+            // flag it immediately (validate() also blocks Continue).
+            const v = e.target.value;
+            let err = '';
+            if (v && v < today) err = 'The start date cannot be in the past. Please choose today or a later date.';
+            else if (v && isSunday(v)) err = SUNDAY_ERROR;
+            setErrors((prev) => ({ ...prev, preferredStartDate: err }));
           }}
         />
         {errors.preferredStartDate && (
           <p className="text-xs text-destructive">{errors.preferredStartDate}</p>
         )}
         <p className="text-xs text-muted-foreground">
-          Choose a date within the next 6 months. Sessions will not start before this date.
+          Choose a date within the next 6 months. Sessions will not start before this date. Sundays are not available — there are no classes.
         </p>
       </div>
 

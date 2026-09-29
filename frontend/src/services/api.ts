@@ -333,9 +333,7 @@ export const enrollmentService = {
     studentMiddleName?: string;
     birthdate: string;
     requirementDocuments?: {
-      birthCertificate?: { dataUrl: string; fileName: string };
       studentPhoto?: { dataUrl: string; fileName: string };
-      guardianId?: { dataUrl: string; fileName: string };
     };
     preferredStartDate?: string;
     /** Available Days, kept per program — Mon to Sat. Empty days[] = no preference. */
@@ -951,6 +949,10 @@ export type TutorStudentCard = {
   studentId: string | null;
   /** e.g. "Mon/Tue/Wed, 9:00–10:00 AM"; empty when nothing is scheduled. */
   schedule: string;
+  /** The child's real registered PARENT contact (via Enrollment) — never the student's own
+   *  placeholder account email. Null when no approved/active Enrollment is on file. */
+  parentEmail: string | null;
+  parentName: string | null;
 };
 
 export const uploadsBaseUrl =apiBase.replace(/\/api\/?$/, '');

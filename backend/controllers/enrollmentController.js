@@ -168,6 +168,13 @@ const verifyEnrollmentEmailCode = async (req, res) => {
   }
 };
 
+// There are no classes on Sunday — the shared Step7Schedule.tsx date picker (Main
+// Enrollment, Add Child, Renew/Add Program, Admin Walk-in) already rejects it client-side;
+// this stops a hand-crafted request the same way the adjacent past-date check does.
+function isSundayDate(d) {
+  return d instanceof Date && !Number.isNaN(d.getTime()) && d.getDay() === 0;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  NEW WIZARD SUBMIT  — POST /api/enrollments/submit
 //  Accepts the finalized wizard payload, creates Enrollment + Payment records.
@@ -325,6 +332,9 @@ const submitEnrollment = async (req, res) => {
       if (preferredStartDate < yesterday) {
         return res.status(400).json({ success: false, message: 'The preferred start date cannot be in the past.' });
       }
+      if (isSundayDate(preferredStartDate)) {
+        return res.status(400).json({ success: false, message: 'There are no classes on Sunday. Please choose a different starting date.' });
+      }
     }
 
     // Available Days, kept per program (Admin_Schedule_and_MultiProgram_Days_Fixes.pdf
@@ -368,12 +378,14 @@ const submitEnrollment = async (req, res) => {
     const enrollmentId = await generateEnrollmentId();
 
     // ── Requirement documents (optional; saved to disk, linked to this enrollment) ──
+    // Birth Certificate + Guardian Valid ID removed entirely ("bug (13).pdf" Group AQ, per
+    // owner direction) — the 2x2 photo is the only requirement now. The Enrollment schema
+    // still has the two old sub-fields (never written to going forward) so any enrollment
+    // submitted before this change keeps its existing documents on file, unaffected.
     const reqDocsInput = body.requirementDocuments || {};
     const requirementDocuments = {};
     for (const [field, kind] of [
-      ['birthCertificate', 'birth-certificate'],
       ['studentPhoto', 'student-photo'],
-      ['guardianId', 'guardian-id'],
     ]) {
       const doc = reqDocsInput[field];
       if (doc && doc.dataUrl) {
@@ -707,6 +719,9 @@ const adminWalkInEnroll = async (req, res) => {
 
     // ── Preferred schedule (optional at a walk-in — admin may not always ask) ──
     const preferredStartDate = body.preferredStartDate ? new Date(body.preferredStartDate) : null;
+    if (preferredStartDate && !Number.isNaN(preferredStartDate.getTime()) && isSundayDate(preferredStartDate)) {
+      return res.status(400).json({ success: false, message: 'There are no classes on Sunday. Please choose a different starting date.' });
+    }
     const VALID_PREFERRED_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const preferredDaysByProgram = Array.isArray(body.preferredDaysByProgram)
       ? body.preferredDaysByProgram

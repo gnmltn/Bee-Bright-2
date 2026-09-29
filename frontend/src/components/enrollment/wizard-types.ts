@@ -31,9 +31,9 @@ export interface UploadedDoc {
 
 export interface WizardData {
   // ── Step 1 – Requirements / document uploads ──────────────────────────
-  docBirthCertificate: UploadedDoc | null;
+  // Birth Certificate + Guardian Valid ID removed entirely ("bug (13).pdf" Group AQ) —
+  // the 2x2 photo is now the only enrollment requirement.
   docStudentPhoto: UploadedDoc | null;
-  docGuardianId: UploadedDoc | null;
 
   // ── Step 2 – Parent registration ──────────────────────────────────────
   /** Full display name — always kept in sync with the three fields below. */
@@ -132,9 +132,7 @@ export const DEFAULT_CONSENT_ITEMS: Omit<ConsentItem, 'accepted'>[] = [
 
 export const INITIAL_WIZARD_DATA: WizardData = {
   // Step 1 documents
-  docBirthCertificate: null,
   docStudentPhoto: null,
-  docGuardianId: null,
 
   // Step 2
   parentName: '', parentFirstName: '', parentMiddleName: '', parentLastName: '', parentEmail: '', parentMobile: '', parentPassword: '',

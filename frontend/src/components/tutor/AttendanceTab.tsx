@@ -61,6 +61,24 @@ function dateOnly(d: string): string {
   return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`;
 }
 
+// "bug (13).pdf" Group AR — a tutor gets a 3-day grace period after a session date to mark
+// Present/Absent; past that, an unmarked session auto-resolves to Absent. Computed on read,
+// never written to the database until (if ever) a tutor explicitly marks it — same pattern
+// as backend/utils/remainingDueDate.js's schedule-derived due dates, the closest existing
+// precedent in this codebase for a time-based auto-status. No cron/scheduled-job
+// infrastructure exists anywhere in this backend (confirmed), so a background sweep would
+// be a new pattern; this fits how the codebase already does this kind of thing.
+const ATTENDANCE_GRACE_DAYS = 3;
+
+/** Whole-calendar-day difference between two YYYY-MM-DD strings, independent of local timezone. */
+function daysBetweenDateOnly(fromStr: string, toStr: string): number {
+  const [fy, fm, fd] = fromStr.split("-").map(Number);
+  const [ty, tm, td] = toStr.split("-").map(Number);
+  const from = Date.UTC(fy, (fm || 1) - 1, fd || 1);
+  const to = Date.UTC(ty, (tm || 1) - 1, td || 1);
+  return Math.round((to - from) / (1000 * 60 * 60 * 24));
+}
+
 export interface AttendanceTabProps {
   sessions: SessionItem[];
   onRefresh: () => void;
@@ -109,6 +127,20 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       .slice(0, 30);
   }, [uniqueSessions, todayStr]);
 
+  // Resolves what a session's status effectively IS right now — the stored value if
+  // present/absent, otherwise Absent once more than ATTENDANCE_GRACE_DAYS have passed
+  // since the session date, otherwise still Unmarked (the tutor's grace window hasn't
+  // closed yet). Defined once here (not written to the DB) and reused everywhere this
+  // component shows or counts a status, so the History view, the Summary tab, and the
+  // Present/Absent buttons themselves never disagree with each other.
+  const getStatus = useCallback((s: SessionItem): AttendanceStatus => {
+    const v = s.attendanceStatus as string | undefined;
+    if (v === "present" || v === "absent") return v;
+    const sessionDay = dateOnly(s.date);
+    if (sessionDay && daysBetweenDateOnly(sessionDay, todayStr) > ATTENDANCE_GRACE_DAYS) return "absent";
+    return "unmarked";
+  }, [todayStr]);
+
   const studentSummaries = useMemo(() => {
     const byStudent = new Map<string, { name: string; total: number; present: number; overall: number }>();
 
@@ -120,9 +152,11 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       byStudent.get(name)!.overall += 1;
     });
 
-    const doneSessions = uniqueSessions.filter(
-      (s) => dateOnly(s.date) < todayStr && (s.attendanceStatus === "present" || s.attendanceStatus === "absent")
-    );
+    const doneSessions = uniqueSessions.filter((s) => {
+      if (dateOnly(s.date) >= todayStr) return false;
+      const status = getStatus(s);
+      return status === "present" || status === "absent";
+    });
 
     doneSessions.forEach((s) => {
       const name = s.student
@@ -131,10 +165,10 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       if (!byStudent.has(name)) byStudent.set(name, { name, total: 0, present: 0, overall: 0 });
       const rec = byStudent.get(name)!;
       rec.total += 1;
-      if (s.attendanceStatus === "present") rec.present += 1;
+      if (getStatus(s) === "present") rec.present += 1;
     });
     return Array.from(byStudent.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [uniqueSessions, todayStr]);
+  }, [uniqueSessions, todayStr, getStatus]);
 
   const submitAttendance = useCallback((session: SessionItem, status: "present" | "absent") => {
     const sessionDay = dateOnly(session.date);
@@ -156,12 +190,6 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       })
       .finally(() => setMarkingId(null));
   }, [onRefresh, todayStr]);
-
-  const getStatus = (s: SessionItem): AttendanceStatus => {
-    const v = s.attendanceStatus as string | undefined;
-    if (v === "present" || v === "absent") return v;
-    return "unmarked";
-  };
 
   // Clicking the already-marked status is a harmless no-op. Switching between Present
   // and Absent once a status is already on record requires confirmation first, so a

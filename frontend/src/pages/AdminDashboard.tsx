@@ -1424,23 +1424,36 @@ export default function AdminDashboard() {
     if (selectedScheduleIds.length === 0) return;
     const selected = schedules.filter((s) => selectedScheduleIds.includes(s._id));
     if (selected.length === 0) return;
-    const subjectId = selected[0].subject?._id;
-    if (!subjectId) {
-      toast.error("Selected sessions are missing subject info.");
-      return;
-    }
-    // A broad candidate list, not scoped to any single selected schedule's own date/time —
-    // the selection can span different days entirely, so no one availability window
-    // applies to all of them. Each schedule's own availability + conflict check still runs
-    // server-side, independently, on every individual assignment below; this list is only
-    // a convenience filter excluding tutors already teaching one of the selected sessions.
     const alreadyAssignedIds = Array.from(new Set(
       selected.flatMap((s) => (s.tutors && s.tutors.length > 0 ? s.tutors : s.tutor ? [s.tutor] : []).map((t) => t._id))
     ));
     try {
-      const res = await scheduleService.getTutorsBySubject(subjectId, { excludeTutorIds: alreadyAssignedIds });
-      const tutors = Array.isArray(res.data?.tutors) ? res.data.tutors : [];
-      setBulkSubstituteTutorOptions(tutors);
+      // The selection can span different days/times, so no single availability window
+      // applies to all of them — a tutor who conflicts with some but not all of the
+      // selected sessions must still be offered, since the bulk action is designed to
+      // partially succeed (skip the ones that conflict, apply the ones that don't).
+      // Reuses the exact same per-schedule availability-window + no-conflict endpoint the
+      // single-schedule dialog already calls, once per selected schedule, then keeps a
+      // tutor if they were eligible for AT LEAST ONE of them (a plain union) — only a
+      // tutor who conflicts with EVERY selected schedule ends up excluded entirely.
+      const perScheduleResults = await Promise.all(selected.map((s) => {
+        const subjectId = s.subject?._id;
+        if (!subjectId) return Promise.resolve([]);
+        return scheduleService.getTutorsBySubject(subjectId, {
+          date: s.date,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          excludeScheduleId: s._id,
+          excludeTutorIds: alreadyAssignedIds,
+        }).then((res) => (Array.isArray(res.data?.tutors) ? res.data.tutors : [])).catch(() => []);
+      }));
+      const merged = new Map<string, { _id: string; name: string; email?: string }>();
+      for (const list of perScheduleResults) {
+        for (const t of list) {
+          if (!merged.has(t._id)) merged.set(t._id, t);
+        }
+      }
+      setBulkSubstituteTutorOptions(Array.from(merged.values()));
       setBulkSubstituteTutorId("");
       setBulkSubstituteReason("Tutor unavailable");
       setBulkSubstituteDialogOpen(true);
@@ -5918,8 +5931,15 @@ export default function AdminDashboard() {
                 <Label>Date when it happens</Label>
                 <Input
                   type="date"
+                  min={todayStrLocal}
                   value={adminAnnouncementForm.scheduledDate}
-                  onChange={(e) => setAdminAnnouncementForm((f) => ({ ...f, scheduledDate: e.target.value }))}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    // A forward-looking announcement can't happen in the past — `min` blocks the
+                    // native picker's own calendar; this also rejects a hand-typed past date.
+                    if (v && v < todayStrLocal) return;
+                    setAdminAnnouncementForm((f) => ({ ...f, scheduledDate: v }));
+                  }}
                 />
               </div>
             </div>
@@ -6029,38 +6049,23 @@ export default function AdminDashboard() {
                   </div>
                 )}
 
-                {/* Enrollment requirement documents — Birth Certificate, 2×2 Photo, Guardian ID */}
+                {/* Enrollment requirement document — 2×2 Photo only ("bug (13).pdf" Group AQ:
+                    Birth Certificate + Guardian Valid ID removed entirely; an OLD enrollment
+                    may still have them on file server-side, but this view no longer shows
+                    those two slots at all, per the owner's direction). */}
                 {(() => {
-                  const rd = e.requirementDocuments;
-                  const docs = [
-                    { key: 'birthCertificate', label: 'Student Birth Certificate', doc: rd?.birthCertificate },
-                    { key: 'studentPhoto', label: 'Recent 2×2 Photo of Student', doc: rd?.studentPhoto },
-                    { key: 'guardianId', label: 'Guardian Valid ID', doc: rd?.guardianId },
-                  ];
-                  const anyUploaded = docs.some((d) => d.doc?.path);
+                  const doc = e.requirementDocuments?.studentPhoto;
                   return (
-                    <div className="p-3 border border-border rounded-lg space-y-3">
-                      <p className="font-semibold text-foreground text-xs uppercase tracking-wide">Enrollment Requirements</p>
-                      {anyUploaded ? (
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          {docs.map(({ key, label, doc }) => (
-                            <div key={key} className="space-y-1">
-                              <p className="text-xs font-medium text-foreground">{label}</p>
-                              {doc?.path ? (
-                                <>
-                                  <FilePreview src={{ dataUrl: resolvePaymentProofUrl(doc.path), fileName: doc.fileName || label }} label={label} />
-                                  {doc.uploadedAt && <p className="text-[11px] text-muted-foreground">Uploaded {new Date(doc.uploadedAt).toLocaleDateString('en-PH')}</p>}
-                                </>
-                              ) : (
-                                <p className="text-xs text-destructive">Not uploaded</p>
-                              )}
-                            </div>
-                          ))}
-                        </div>
+                    <div className="p-3 border border-border rounded-lg space-y-2">
+                      <p className="font-semibold text-foreground text-xs uppercase tracking-wide">Enrollment Requirement</p>
+                      <p className="text-xs font-medium text-foreground">Recent 2×2 Photo of Student</p>
+                      {doc?.path ? (
+                        <>
+                          <FilePreview src={{ dataUrl: resolvePaymentProofUrl(doc.path), fileName: doc.fileName || 'Recent 2×2 Photo of Student' }} label="Recent 2×2 Photo of Student" />
+                          {doc.uploadedAt && <p className="text-[11px] text-muted-foreground">Uploaded {new Date(doc.uploadedAt).toLocaleDateString('en-PH')}</p>}
+                        </>
                       ) : (
-                        <p className="text-xs text-muted-foreground">
-                          No requirement documents on file for this enrollment. (Enrollments submitted before this feature will not have them.)
-                        </p>
+                        <p className="text-xs text-muted-foreground">Not uploaded. (Enrollments submitted before this feature will not have it.)</p>
                       )}
                     </div>
                   );

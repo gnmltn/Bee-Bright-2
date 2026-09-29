@@ -29,7 +29,18 @@ const ScheduleSubstitutionLog = require('../models/ScheduleSubstitutionLog');
 const Enrollment = require('../models/Enrollment');
 const emailService = require('../utils/emailService');
 const capturedEmails = [];
-emailService.sendEmail = async (opts) => { capturedEmails.push(opts); return { success: true }; };
+// `scheduleController.js` destructures `sendEmail` at ITS OWN require-time, so it captures
+// whatever this stub is at that moment as a plain function reference — reassigning
+// `emailService.sendEmail` again later, from within an individual test, would NOT change
+// what the controller actually calls. A mutable delay knob on the one stub already bound
+// lets a single test (the fire-and-forget timing regression test below) simulate a slow
+// real SMTP send without needing a second stub swap.
+let sendEmailArtificialDelayMs = 0;
+emailService.sendEmail = async (opts) => {
+  capturedEmails.push(opts);
+  if (sendEmailArtificialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, sendEmailArtificialDelayMs));
+  return { success: true };
+};
 const auditService = require('../utils/auditService');
 auditService.logAudit = async () => {};
 
@@ -259,6 +270,39 @@ test('assignSubstituteTutor: reverting a Playgroup session\'s PRIMARY tutor whil
     assert.equal(schedule.isSubstitution, true, 'the whole session still has an active substitute (maria-co) — the flag must not be cleared');
     assert.equal(schedule.substitutionStatus, 'assigned');
   } finally { restore(); }
+});
+
+// ── Response must not block on email sending ("bug (11).pdf" bulk-assign regression) ──────
+// A real-live-use report: the bulk multi-select "Assign Substitute Tutor" dialog only ever
+// applied the substitution to the first of several selected schedules — but an earlier
+// Playwright test (always run with EMAIL_SANDBOX_MODE, near-instant sends) never caught it.
+// Root cause: assignSubstituteTutor AWAITED notifyScheduleSubstitution's real SMTP sends
+// before responding, so each sequential bulk-loop iteration took as long as the slowest
+// email — long enough under real SMTP that an admin could plausibly navigate away or
+// refresh mid-loop, silently losing later schedules with no error shown at all.
+test('assignSubstituteTutor: the HTTP response does not wait for notification emails to finish sending', async () => {
+  capturedEmails.length = 0;
+  const schedule = makePlaygroupSchedule({ sessionType: 'one-on-one', tutors: ['jake'] });
+  const { restore } = stubCommon({ schedule });
+  sendEmailArtificialDelayMs = 300; // simulate a slow real SMTP send
+  try {
+    const res = mockRes();
+    const start = Date.now();
+    await assignSubstituteTutor({ params: { id: 'sched-pg-1' }, user: { id: 'admin-1' }, body: { replacementTutorId: 'maria' } }, res);
+    const elapsedMs = Date.now() - start;
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.ok(elapsedMs < 250, `expected the response well before the 300ms email delay resolves, took ${elapsedMs}ms`);
+    // The email call was dispatched (capturedEmails.push happens synchronously, before the
+    // artificial delay) even though it hasn't finished "sending" yet — proves this isn't
+    // passing merely because no email was ever attempted.
+    assert.ok(capturedEmails.length > 0, 'the notification email(s) should have been dispatched, just not awaited');
+  } finally {
+    restore();
+    sendEmailArtificialDelayMs = 0;
+    // Let the in-flight delayed sends actually finish before the next test runs, so a
+    // stray late resolution can't bleed into a later test's capturedEmails assertions.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
 });
 
 // ── Substitution-notification email "Student" field ("Student: Unknown" bug) ──────────────

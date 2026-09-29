@@ -262,9 +262,7 @@ export default function EnrollmentWizard() {
       step,
       _serverInstanceId: serverInstanceIdRef.current,
       proofDataUrl: null,
-      docBirthCertificate: null,
       docStudentPhoto: null,
-      docGuardianId: null,
     });
   }, [data, step, addChildMode]);
 
