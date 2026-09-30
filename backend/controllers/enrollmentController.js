@@ -24,6 +24,7 @@ const {
   sendEnrollmentRejectedEmail,
   sendPaymentVerifiedEmail,
 } = require('../services/enrollmentService');
+const { emitNewEnrollment, emitNewPayment, emitToParent, emitToTutors } = require('../utils/realtime');
 const { validateAndBuildAssessment } = require('../utils/validateAssessment');
 const { attachRemainingDueDates } = require('../utils/remainingDueDate');
 const Schedule = require('../models/Schedule');
@@ -509,6 +510,28 @@ const submitEnrollment = async (req, res) => {
       description: `Enrollment submitted: ${enrollmentId}${createdParent ? ' (parent account created with the completed enrollment)' : ''}`, status: 'SUCCESS',
       metadata: { enrollmentId, paymentMethod, totalFee, proofSubmitted: Boolean(proofUrl) } }).catch(() => {});
 
+    // Realtime pilot: Enrollments tab always refreshes; Payments tab also refreshes when
+    // the wizard bundled the down-payment proof with this same submission (the normal case).
+    emitNewEnrollment({ enrollmentId, permanentStudentId: enrollment.permanentStudentId, studentName: `${snapshot.firstName} ${snapshot.lastName}`.trim() });
+    if (proofUrl) {
+      emitNewPayment({ enrollmentId, permanentStudentId: enrollment.permanentStudentId, paymentType: 'down', amount: amountDue });
+    }
+    // Renew/Add Program for an EXISTING child (renewalSource.student already has a real
+    // User id) that included a completed assessment — the tutor(s) this student is ALREADY
+    // scheduled with (Tutor Dashboard's Assessments Preview only ever shows the tutor's OWN
+    // students) should see it appear without refreshing. A brand-new enrollment has no
+    // schedule yet at this point, so this naturally resolves to no one.
+    if (assessment?.completedAt && renewalSource?.student) {
+      Schedule.find({ $or: [{ student: renewalSource.student }, { students: renewalSource.student }] })
+        .select('tutor tutors')
+        .lean()
+        .then((sessions) => {
+          const tutorIds = sessions.flatMap((s) => [s.tutor, ...(s.tutors || [])]).filter(Boolean);
+          if (tutorIds.length) emitToTutors(tutorIds, 'assessment:completed', { studentId: String(renewalSource.student) });
+        })
+        .catch(() => {});
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Enrollment submitted successfully.',
@@ -921,6 +944,8 @@ const submitPaymentProof = async (req, res) => {
     enrollment.paymentStatus = 'submitted';
     await enrollment.save();
 
+    emitNewPayment({ enrollmentId, permanentStudentId: permanentIdOf(enrollment), paymentType: 'down', amount: payment.amountDue ?? payment.amount });
+
     const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
     if (parentUser?.email) {
       const { sendEmail, buildBrandedEmailHtml } = require('../utils/emailService');
@@ -999,6 +1024,8 @@ const submitRemainingPaymentProof = async (req, res) => {
     // payment-tracking field reflects "remaining balance submitted, awaiting review."
     enrollment.paymentStatus = 'pending_verification';
     await enrollment.save();
+
+    emitNewPayment({ enrollmentId, permanentStudentId: permanentIdOf(enrollment), paymentType: 'remaining', amount: remainingAmount });
 
     const parentUser = await User.findById(enrollment.parent).select('email firstName lastName').lean();
     if (parentUser?.email) {
@@ -1084,6 +1111,8 @@ const markRemainingBalancePaidOnsite = async (req, res) => {
       description: `Marked the remaining balance of ${remainingAmount} as paid onsite for ${enrollment.enrollmentId}`,
       status: 'SUCCESS', metadata: { enrollmentId: enrollment.enrollmentId, amount: remainingAmount, paymentId: remainingPayment._id }
     }).catch(() => {});
+
+    emitToParent(enrollment.parent, 'payment:statusChanged', { paymentId: String(remainingPayment._id), paymentType: 'remaining', outcome: 'paid_onsite' });
 
     return res.status(200).json({ success: true, message: 'Remaining balance marked as paid onsite.', amount: remainingAmount, payment: remainingPayment });
   } catch (err) {
@@ -1355,6 +1384,8 @@ const adminVerifyPayment = async (req, res) => {
     logAudit({ req, userId: req.user._id, action: verified ? 'Verify Payment' : 'Reject Payment',
       module: 'Payment', description: `${verified ? 'Verified' : 'Rejected'} payment for ${enrollment.enrollmentId}`,
       status: 'SUCCESS', metadata: { enrollmentId: enrollment.enrollmentId, paymentId: payment._id } }).catch(() => {});
+
+    emitToParent(enrollment.parent, 'payment:statusChanged', { paymentId: String(payment._id), paymentType: payment.paymentType, outcome: verified ? 'verified' : 'rejected' });
 
     return res.status(200).json({ success: true, message: verified ? 'Payment verified.' : 'Payment rejected.', enrollment, payment });
   } catch (err) {

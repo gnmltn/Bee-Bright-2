@@ -6,6 +6,7 @@ const Enrollment = require('../models/Enrollment');
 const { sendAnnouncementEmail } = require('../utils/emailService');
 const { logAudit } = require('../utils/auditService');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
+const { emitToParents, emitToTutors } = require('../utils/realtime');
 
 // A student User's own `.email` is always the internal placeholder
 // "child.<enrollmentId>@students.beebright.internal" (see scheduleController.js's
@@ -27,8 +28,11 @@ async function getTutorRosterStudentIds(tutorId) {
 }
 
 /** One real parent email per targeted student, deduped (a parent with 2 targeted children in
- * the same announcement only gets one email), never the students' own placeholder emails. */
-async function notifyParentsOfStudents(studentIds, { title, body, category }) {
+ * the same announcement only gets one email), never the students' own placeholder emails.
+ * Also pushes the same targeted parents a live 'announcement:new' event (realtime pilot
+ * expansion, "bug (17).pdf") — same recipient resolution as the email, so the two can never
+ * disagree about who this announcement is actually for. */
+async function notifyParentsOfStudents(studentIds, { announcementId, title, body, category }) {
   if (!studentIds || studentIds.length === 0) return;
   const enrollments = await Enrollment.find({
     student: { $in: studentIds },
@@ -45,6 +49,7 @@ async function notifyParentsOfStudents(studentIds, { title, body, category }) {
     const name = [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Parent';
     sendAnnouncementEmail(p.email, name, title, body, category).catch(() => {});
   }
+  emitToParents([...parentByEmail.values()].map((p) => p._id), 'announcement:new', { announcementId, title, category });
 }
 
 const TUTOR_CATEGORIES = ['sick_leave', 'exam', 'quiz', 'materials', 'reschedule', 'reminder', 'general'];
@@ -144,6 +149,8 @@ const createAnnouncement = async (req, res) => {
           sendAnnouncementEmail(recipient.email, name, doc.title, doc.body, doc.category).catch(() => {});
         }
       }
+      emitToParents(parents.map((p) => p._id), 'announcement:new', { announcementId: String(doc._id), title: doc.title, category: doc.category });
+      emitToTutors(tutors.map((t) => t._id), 'announcement:new', { announcementId: String(doc._id), title: doc.title, category: doc.category });
       logAudit({
         req,
         userId: req.user.id,
@@ -317,7 +324,7 @@ const approveAnnouncement = async (req, res) => {
     // Tutor-authored = scoped to specific students -> only THEIR parents, never the
     // students' own placeholder emails, and never every parent/tutor.
     const targetIds = [].concat(ann.targetStudentIds || []).filter(Boolean);
-    await notifyParentsOfStudents(targetIds, { title: ann.title, body: ann.body, category: ann.category });
+    await notifyParentsOfStudents(targetIds, { announcementId: String(ann._id), title: ann.title, body: ann.body, category: ann.category });
 
     const populated = await Announcement.findById(ann._id)
       .populate('author', 'firstName lastName email')

@@ -21,4 +21,25 @@ async function parentOwnsStudent(parentId, studentId) {
   return Boolean(owned);
 }
 
-module.exports = { parentOwnsStudent };
+/**
+ * Real parent User id(s) for a set of student User ids, resolved via Enrollment (never
+ * the student User's own placeholder email/account — see "bug (13).pdf" Group AS). One
+ * parent id per matching Enrollment, deduped. Used by realtime event emitters (schedule
+ * changes, remarks, assessments) that need "which parent(s) actually care about this
+ * child" — the same resolution announcementController.js's notifyParentsOfStudents
+ * already does for email, extracted here so it isn't reimplemented per caller.
+ *
+ * @param {string[]} studentIds
+ * @returns {Promise<string[]>} deduped parent User ids (as strings)
+ */
+async function resolveParentIdsForStudents(studentIds) {
+  const ids = [...new Set((studentIds || []).filter(Boolean).map(String))];
+  if (ids.length === 0) return [];
+  const enrollments = await Enrollment.find({
+    student: { $in: ids },
+    status: { $nin: ['cancelled', 'rejected', 'draft'] },
+  }).select('parent').lean();
+  return [...new Set(enrollments.map((e) => String(e.parent)).filter(Boolean))];
+}
+
+module.exports = { parentOwnsStudent, resolveParentIdsForStudents };

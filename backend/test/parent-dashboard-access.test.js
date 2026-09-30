@@ -2,24 +2,23 @@
  * Final Implementation Prompt Section 2 — reframing the Student Dashboard so a
  * parent can actually view their child's schedule/progress.
  *
- * Root cause fixed here: getMyProgress / getStudentClasses both hard-required
- * req.user.role === 'student' and queried by req.user._id — for a parent
- * (whose own account id never appears as a `student` on any Schedule/Grade),
- * this silently returned nothing (or, for getStudentClasses, an explicit 403
- * the frontend caught and showed empty). Each now accepts role 'parent' + a
- * verified `studentId` query param.
+ * Root cause fixed here: getStudentClasses hard-required req.user.role === 'student'
+ * and queried by req.user._id — for a parent (whose own account id never appears
+ * as a `student` on any Schedule), this returned an explicit 403 the frontend
+ * caught and showed empty. It now accepts role 'parent' + a verified `studentId`
+ * query param.
  *
  * (2026-09-22: the getAssignedMaterials coverage that used to live here was
- * removed along with the Learning Materials feature itself.)
+ * removed along with the Learning Materials feature itself. 2026-09-30: the
+ * getMyProgress/Grade coverage that used to live here was removed along with
+ * the Grade model/feature itself, superseded by Student Remarks.)
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const Grade = require('../models/Grade');
 const Schedule = require('../models/Schedule');
 const Enrollment = require('../models/Enrollment');
 
-const { getMyProgress } = require('../controllers/gradeController');
 const { getStudentClasses } = require('../controllers/scheduleController');
 const { parentOwnsStudent } = require('../utils/parentChildAccess');
 
@@ -55,54 +54,6 @@ test('parentOwnsStudent: true only for an active enrollment actually linking thi
     assert.equal(await parentOwnsStudent('parent-1', ''), false);
     assert.equal(await parentOwnsStudent('', myChild), false);
   } finally { Enrollment.exists = origExists; }
-});
-
-// ── getMyProgress ────────────────────────────────────────────────────────────
-test('getMyProgress: student role unaffected — still scoped to req.user._id, no studentId needed', async () => {
-  const restore = stubFind(Grade, [{ student: 'student-1', score: 9, maxScore: 10 }]);
-  try {
-    const res = mockRes();
-    await getMyProgress({ user: student, query: {} }, res);
-    assert.equal(res._status, 200);
-    assert.equal(res._body.success, true);
-    assert.equal(res._body.grades.length, 1);
-  } finally { restore(); }
-});
-
-test('getMyProgress: parent without a studentId is rejected, not silently empty', async () => {
-  const res = mockRes();
-  await getMyProgress({ user: parent, query: {} }, res);
-  assert.equal(res._status, 403);
-  assert.equal(res._body.success, false);
-});
-
-test('getMyProgress: parent asking for a child that is not theirs is rejected', async () => {
-  const origExists = Enrollment.exists;
-  Enrollment.exists = async () => false;
-  try {
-    const res = mockRes();
-    await getMyProgress({ user: parent, query: { studentId: someoneElsesChild } }, res);
-    assert.equal(res._status, 403);
-  } finally { Enrollment.exists = origExists; }
-});
-
-test('getMyProgress: parent asking for their OWN child gets that child\'s real grades', async () => {
-  const origExists = Enrollment.exists;
-  Enrollment.exists = async (q) => q.parent === 'parent-1' && q.student === myChild;
-  const restore = stubFind(Grade, [{ student: myChild, score: 8, maxScore: 10 }]);
-  try {
-    const res = mockRes();
-    await getMyProgress({ user: parent, query: { studentId: myChild } }, res);
-    assert.equal(res._status, 200);
-    assert.equal(res._body.grades.length, 1);
-    assert.equal(res._body.grades[0].percentage, 80);
-  } finally { Enrollment.exists = origExists; restore(); }
-});
-
-test('getMyProgress: non-student, non-parent roles are rejected', async () => {
-  const res = mockRes();
-  await getMyProgress({ user: { _id: 't1', role: 'tutor' }, query: {} }, res);
-  assert.equal(res._status, 403);
 });
 
 // ── getStudentClasses ────────────────────────────────────────────────────────

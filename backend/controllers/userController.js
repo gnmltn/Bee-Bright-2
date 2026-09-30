@@ -8,6 +8,7 @@ const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { getEmailError } = require('../utils/emailRules');
 const { hardDeleteUser } = require('../utils/hardDeleteUser');
 const { runTransactionSafe } = require('../utils/runTransactionSafe');
+const { emitToAdmins } = require('../utils/realtime');
 
 const loadAdminUser = async (userId) => (
   User.findById(userId)
@@ -180,6 +181,8 @@ const createTutor = async (req, res) => {
       metadata: { tutorId: user._id }
     }).catch(() => {});
 
+    emitToAdmins('user:changed', { action: 'created', userId: String(user._id), role: 'tutor' });
+
     res.status(201).json({
       success: true,
       message: 'Tutor created successfully',
@@ -277,6 +280,8 @@ const createAdmin = async (req, res) => {
       metadata: { adminId: user._id }
     }).catch(() => {});
 
+    emitToAdmins('user:changed', { action: 'created', userId: String(user._id), role: 'admin' });
+
     res.status(201).json({
       success: true,
       message: 'Admin created successfully',
@@ -366,6 +371,8 @@ const deleteUser = async (req, res) => {
       metadata: { archivedUserId: userId, archivedUserRole: userToDelete.role }
     }).catch(() => {});
 
+    emitToAdmins('user:changed', { action: 'archived', userId: String(userId), role: userToDelete.role });
+
     res.status(200).json({
       success: true,
       message: 'User archived successfully. Account access has been suspended.',
@@ -436,6 +443,8 @@ const unarchiveUser = async (req, res) => {
       status: 'SUCCESS',
       metadata: { restoredUserId: userId, restoredUserRole: userToRestore.role }
     }).catch(() => {});
+
+    emitToAdmins('user:changed', { action: 'unarchived', userId: String(userId), role: userToRestore.role });
 
     res.status(200).json({
       success: true,
@@ -514,6 +523,8 @@ const permanentlyDeleteUser = async (req, res) => {
       status: 'SUCCESS',
       metadata: { deletedUserId: userId, deletedUserRole: userToDelete.role }
     }).catch(() => {});
+
+    emitToAdmins('user:changed', { action: 'deleted', userId: String(userId), role: userToDelete.role });
 
     // The transaction only resolves once every deletion has committed, so by the time this
     // response goes out the account is actually gone — the frontend removes the row on this

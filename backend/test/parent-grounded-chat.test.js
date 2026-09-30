@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 
 const {
   detectGroundedTopic,
@@ -117,25 +116,23 @@ test('grounded grades context: asks which child when none is named', async () =>
   }
 });
 
-test('grounded grades context: full detail for the named child', async () => {
+// Grades were fully retired in favor of Student Remarks (2026-09-30) — once a named
+// child resolves, buildParentGradesContext now always gives the honest current answer
+// instead of querying a model that's gone.
+test('grounded grades context: honest "no longer tracked" answer for the named child', async () => {
   const origEnr = Enrollment.find;
-  const origGrade = Grade.find;
   stubModel(Enrollment, 'find', [
     enrollment({ _id: 'e1', student: 'stu-1', studentId: 'S-20260101-0007', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
   ]);
-  stubModel(Grade, 'find', [
-    { programCategory: 'Academic Tutorial', subjectItem: 'Phonics', score: 82, maxScore: 100, period: 'Q1 2026', remarks: 'Good progress', tutor: { firstName: 'Maria', lastName: 'Santos' } },
-    { programCategory: 'Academic Tutorial', subjectItem: 'Numbers', score: 60, maxScore: 100, period: 'Q1 2026', remarks: '', tutor: { firstName: 'Maria', lastName: 'Santos' } },
-  ]);
   try {
     const ctx = await getGroundedChatContext(PARENT, "how is Ana doing in her subjects?");
-    assert.match(ctx.contextText, /Phonics: 82\/100 \(82%\)/);
-    assert.match(ctx.contextText, /Numbers: 60\/100 \(60%\)/);
-    assert.match(ctx.contextText, /Maria Santos/);
-    assert.match(ctx.fallbackReply, /Below the 75% mark: Numbers/);
+    assert.match(ctx.contextText, /Ana Cruz/);
+    assert.match(ctx.contextText, /no longer tracked/i);
+    assert.match(ctx.fallbackReply, /no longer track numeric grades/i);
+    assert.match(ctx.fallbackReply, /Ana Cruz/);
+    assert.match(ctx.fallbackReply, /Progress tab/);
   } finally {
     restore(Enrollment, 'find', origEnr);
-    restore(Grade, 'find', origGrade);
   }
 });
 

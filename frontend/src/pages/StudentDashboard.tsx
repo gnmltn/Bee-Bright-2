@@ -32,7 +32,7 @@ import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { scheduleService, gradeService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type GradeItem, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { scheduleService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
@@ -42,6 +42,7 @@ import { useSelectedChild } from "@/hooks/useSelectedChild";
 import { resolveUploadUrl, displayStudentId } from "@/lib/children";
 import { remainingBalanceOf, isReminderDue, formatDueDate, peso, type BalanceEnrollment } from "@/lib/balance";
 import { notifyBadgesChanged } from "@/lib/navBadges";
+import { REALTIME_EVENTS } from "@/lib/realtimeBridge";
 import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
 
 function formatTime12h(hhmm: string) {
@@ -180,8 +181,6 @@ export default function StudentDashboard() {
     tutors?: Array<{ _id?: string; firstName?: string; lastName?: string; middleName?: string; email?: string; phone?: string }>;
   }[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(true);
-  const [progressGrades, setProgressGrades] = useState<GradeItem[]>([]);
-  const [progressGradesLoading, setProgressGradesLoading] = useState(false);
   const [progressRemarks, setProgressRemarks] = useState<RemarkItem[]>([]);
   const [progressRemarksLoading, setProgressRemarksLoading] = useState(false);
   const [remarkAttachmentUrls, setRemarkAttachmentUrls] = useState<Record<string, string>>({});
@@ -242,29 +241,7 @@ export default function StudentDashboard() {
   const activeChildUserId = isParent ? activeChild?.studentUserId ?? null : user?.id ?? null;
   const readyToFetchChildData = isParent ? Boolean(activeChild) : true;
 
-  useEffect(() => {
-    if (!readyToFetchChildData) return;
-    if (isParent && !activeChildUserId) {
-      // Selected child has no linked User yet — nothing to fetch, but not loading forever.
-      setProgressGrades([]);
-      setProgressGradesLoading(false);
-      return;
-    }
-    setProgressGradesLoading(true);
-    gradeService
-      .getMyProgress(isParent ? activeChildUserId ?? undefined : undefined)
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.grades)) {
-          setProgressGrades(res.data.grades);
-        } else {
-          setProgressGrades([]);
-        }
-      })
-      .catch(() => setProgressGrades([]))
-      .finally(() => setProgressGradesLoading(false));
-  }, [isParent, activeChildUserId, readyToFetchChildData]);
-
-  useEffect(() => {
+  const fetchProgressRemarks = () => {
     if (!readyToFetchChildData) return;
     if (isParent && !activeChildUserId) {
       setProgressRemarks([]);
@@ -283,6 +260,11 @@ export default function StudentDashboard() {
       })
       .catch(() => setProgressRemarks([]))
       .finally(() => setProgressRemarksLoading(false));
+  };
+
+  useEffect(() => {
+    fetchProgressRemarks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isParent, activeChildUserId, readyToFetchChildData]);
 
   useEffect(() => {
@@ -322,7 +304,7 @@ export default function StudentDashboard() {
     return [...seen.entries()];
   }, [progressRemarks]);
 
-  useEffect(() => {
+  const fetchSchedules = () => {
     if (!readyToFetchChildData) return;
     if (isParent && !activeChildUserId) {
       setSchedules([]);
@@ -341,6 +323,11 @@ export default function StudentDashboard() {
       })
       .catch(() => setSchedules([]))
       .finally(() => setSchedulesLoading(false));
+  };
+
+  useEffect(() => {
+    fetchSchedules();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isParent, activeChildUserId, readyToFetchChildData]);
 
   const fetchAnnouncements = () => {
@@ -390,6 +377,45 @@ export default function StudentDashboard() {
   useEffect(() => {
     if (location.hash === "#activity") fetchActivity();
   }, [location.hash]);
+
+  // Real-time push (Socket.io) — Overview/Schedule/Announcements/Progress refresh live,
+  // on top of the existing manual refresh (untouched). The connection itself lives in
+  // App.tsx's RealtimeConnector; this page just listens for the events its own screens
+  // care about, same bridge lib/navBadges.ts already uses for the sidebar badges.
+  // Scoping (which parent/child this reaches) is entirely server-side — every event this
+  // account receives is already meant for one of its own children.
+  //
+  // Deps are NOT `[]`: fetchSchedules/fetchAnnouncements/fetchProgressRemarks all close
+  // over isParent/activeChildUserId/readyToFetchChildData, which start out
+  // null/false/false and only resolve to real values in a LATER render once
+  // SelectedChildContext's own async enrollment fetch completes. A `[]`-dep effect
+  // captures whichever closure existed at that first, still-unresolved render and keeps
+  // calling THAT version forever — each event still fires, but the handler silently
+  // no-ops (its own early-return branch), so nothing ever visibly updates until a full
+  // page reload re-runs everything with fresh data. Re-registering whenever these actually
+  // change fixes it ("bug (18).pdf" Group AV/AW — this was the real root cause behind
+  // both "Reject/Approve don't update the parent's Progress tab" and "Schedule tab stays
+  // empty until a manual refresh").
+  useEffect(() => {
+    const onScheduleChanged = () => { fetchSchedules(); };
+    const onAnnouncementNew = () => { fetchAnnouncements(); toast.success("New announcement", { description: "Check the Announcements tab." }); };
+    const onRemarkPublished = () => { fetchProgressRemarks(); toast.success("New remark posted", { description: "Check the Progress tab." }); };
+    const onPaymentStatusChanged = () => { fetchEnrollments(); };
+    const onReconnectCatchUp = () => { fetchSchedules(); fetchAnnouncements(); fetchProgressRemarks(); fetchEnrollments(); };
+    window.addEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
+    window.addEventListener(REALTIME_EVENTS.ANNOUNCEMENT_NEW, onAnnouncementNew);
+    window.addEventListener(REALTIME_EVENTS.REMARK_PUBLISHED, onRemarkPublished);
+    window.addEventListener(REALTIME_EVENTS.PAYMENT_STATUS_CHANGED, onPaymentStatusChanged);
+    window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    return () => {
+      window.removeEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
+      window.removeEventListener(REALTIME_EVENTS.ANNOUNCEMENT_NEW, onAnnouncementNew);
+      window.removeEventListener(REALTIME_EVENTS.REMARK_PUBLISHED, onRemarkPublished);
+      window.removeEventListener(REALTIME_EVENTS.PAYMENT_STATUS_CHANGED, onPaymentStatusChanged);
+      window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
 
   const childEntries = useMemo(() => {
     const map = new Map<string, {
@@ -669,23 +695,6 @@ export default function StudentDashboard() {
       openAnnouncementDetails(announcement);
     }
   };
-
-  /** Group grades by program category for Progress tab */
-  const gradesByProgram = useMemo(() => {
-    const map = new Map<string, GradeItem[]>();
-    progressGrades.forEach((g) => {
-      const cat = g.programCategory || "Other";
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(g);
-    });
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [progressGrades]);
-
-  const overallProgressPercent = useMemo(() => {
-    if (progressGrades.length === 0) return null;
-    const total = progressGrades.reduce((sum, g) => sum + (g.percentage ?? Math.round((g.score / g.maxScore) * 100)), 0);
-    return Math.round(total / progressGrades.length);
-  }, [progressGrades]);
 
   const attendanceStats = useMemo(() => {
     const now = new Date();

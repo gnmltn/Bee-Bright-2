@@ -1,0 +1,9 @@
+﻿{
+    "createdAt":  "2026-09-30T07:58:49.5045629+08:00",
+    "archiveFile":  "beebright-backup-20260930-075849.gz",
+    "archivePath":  "C:\\beebright-2\\Bee-Bright-2\\backend\\backups\\beebright-backup-20260930-075849.gz",
+    "archiveSha256":  "1C2F72BA88907B043A662E3CA1F92F5B9AC506966E90631690105CD1116AF019",
+    "archiveSizeBytes":  98021,
+    "retentionDays":  14,
+    "tlsExpected":  false
+}

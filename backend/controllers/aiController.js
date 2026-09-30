@@ -5,7 +5,6 @@ const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
 const User = require('../models/User');
-const Grade = require('../models/Grade');
 const Pricing = require('../models/Pricing');
 const Escalation = require('../models/Escalation');
 const { getIntentReply, getChatModelMetrics } = require('../utils/chatIntentModel');
@@ -597,9 +596,9 @@ function getFollowUpTopicReply(topic, languageProfile = 'english') {
     case 'grades':
       return pickByLanguage(
         languageProfile,
-        'You can view your grades in the Student Dashboard. Open your dashboard, then go to the Progress or Grades section to see your records.',
-        'Makikita mo ang grades sa Student Dashboard. Buksan ang dashboard mo, pagkatapos pumunta sa Progress o Grades section para makita ang records mo.',
-        'Makikita mo ang grades sa Student Dashboard. Buksan ang dashboard mo, tapos pumunta sa Progress o Grades section para makita ang records mo.'
+        'We no longer track numeric grades. Open your Student Dashboard and go to the Progress tab for remarks and updates from your tutor.',
+        'Hindi na kami nagtatala ng numeric grades. Buksan ang Student Dashboard mo at pumunta sa Progress tab para sa mga remarks at update mula sa tutor.',
+        'Hindi na namin tinatrack ang numeric grades. Buksan ang Student Dashboard mo tapos pumunta sa Progress tab para sa remarks at updates mula sa tutor mo.'
       );
     case 'schedule':
       return pickByLanguage(
@@ -3640,6 +3639,11 @@ async function getIntentKeywordDatasetReply(user, message, languageProfile = 'en
  *   isStudentGradesQuestion's regex misses. Existing call sites omit this option, so
  *   their behavior is unchanged.
  */
+// Grades were fully retired in favor of Student Remarks (2026-09-30) — the Grade model
+// and its collection no longer exist. This handler is kept only so the trained
+// classifier's still-live 'grades'/'progress' intents (and the keyword gate below) have
+// somewhere to land; it now always gives the honest current answer instead of querying
+// a model that's gone.
 async function getStudentGradesReply(user, message, languageProfile = 'english', opts = {}) {
   const normalized = normalizeMessage(message);
   if (!opts.skipKeywordCheck && !isStudentGradesQuestion(normalized)) {
@@ -3649,36 +3653,17 @@ async function getStudentGradesReply(user, message, languageProfile = 'english',
   if (!user || user.role !== 'student') {
     return pickByLanguage(
       languageProfile,
-      'You can check grades in the Progress section of the Student Dashboard.',
-      'Maaari mong tingnan ang grades sa Progress section ng Student Dashboard.',
-      'Pwede mong i-check ang grades sa Progress section ng Student Dashboard.'
+      'We no longer track numeric grades — check the Progress tab on the Student Dashboard for remarks and updates from your tutor.',
+      'Hindi na kami nagtatala ng numeric grades — tingnan ang Progress tab sa Student Dashboard para sa mga remarks at update mula sa tutor.',
+      'Hindi na namin tinatrack ang numeric grades — check mo na lang ang Progress tab sa Student Dashboard para sa remarks at updates mula sa tutor mo.'
     );
   }
-
-  const grades = await Grade.find({ student: user._id }).lean();
-  if (!grades.length) {
-    return pickByLanguage(
-      languageProfile,
-      'There are no grades recorded yet. Please check again later or ask your tutor for an update.',
-      'Wala pang naitalang grades sa ngayon. Pakisubukang muli mamaya o magtanong sa iyong tutor para sa update.',
-      'Wala pang recorded grades ngayon. Paki-check ulit later o magtanong sa tutor mo for an update.'
-    );
-  }
-
-  const percents = grades.map((g) => {
-    if (typeof g.percentage === 'number') return g.percentage;
-    const score = Number(g.score || 0);
-    const maxScore = Number(g.maxScore || 0);
-    if (!maxScore) return 0;
-    return Math.round((score / maxScore) * 100);
-  });
-  const avg = Math.round(percents.reduce((sum, n) => sum + n, 0) / percents.length);
 
   return pickByLanguage(
     languageProfile,
-    `You currently have ${grades.length} recorded grade(s). Your current average is about ${avg}%. You can view full details in the Progress tab.`,
-    `Mayroon kang ${grades.length} na naitalang grade(s). Ang kasalukuyan mong average ay humigit-kumulang ${avg}%. Makikita mo ang kumpletong detalye sa Progress tab.`,
-    `May ${grades.length} recorded grade(s) ka ngayon. Ang current average mo ay around ${avg}%. Makikita mo ang full details sa Progress tab.`
+    'We no longer track numeric grades — check the Progress tab for remarks and updates from your tutor.',
+    'Hindi na kami nagtatala ng numeric grades — tingnan ang Progress tab para sa mga remarks at update mula sa tutor.',
+    'Hindi na namin tinatrack ang numeric grades — check mo na lang ang Progress tab para sa remarks at updates mula sa tutor mo.'
   );
 }
 
@@ -3867,8 +3852,8 @@ async function getTicketStatusReply(user, message, languageProfile = 'english', 
 //  'dataset'               -> getContextualDatasetResponse — static aiResponseDatasets.js
 //    lookup, already scoped by the caller-supplied role string, never touches the DB.
 //    Verified empirically (Task 34) against each mapped intent's canonical phrasing.
-//  'grades'                -> getStudentGradesReply — own grades only (Grade.find by
-//    req.user._id); role-gated internally, generic text for any non-student.
+//  'grades'                -> getStudentGradesReply — grades were retired 2026-09-30
+//    (see Student Remarks); always gives the honest "no longer tracked" answer now.
 //  'grounded_grades'/'grounded_schedule'/'grounded_enrollment'/'grounded_payments' ->
 //    resolveGroundedContextForTopic(user, message, topic) — the SAME data-fetching
 //    function the live grounded-chat pipeline already calls (after its own
@@ -3893,9 +3878,10 @@ async function getTicketStatusReply(user, message, languageProfile = 'english', 
 //    ONLY against getTutorStudents(tutorId) (that tutor's own Schedule-assigned students)
 //    — a student named in the message who isn't this tutor's own is simply not in that
 //    list, so resolveNamedPerson returns null and the function asks "which student?"
-//    rather than ever falling back to a broader/unscoped lookup. Grades queried via
-//    Grade.find({tutor: tutorId, student: target._id}) — doubly scoped. Non-tutor roles
-//    fall through this branch and return null (grounded pipeline unaffected).
+//    rather than ever falling back to a broader/unscoped lookup. Grades were retired
+//    2026-09-30 (see Student Remarks) — once a student resolves, this now always gives
+//    the honest "no longer tracked" answer. Non-tutor roles fall through this branch
+//    and return null (grounded pipeline unaffected).
 //  'tutor_attendance_static' -> getAttendanceReply — no account data at all, the exact
 //    same static "check the Attendance section" text already given to every role today;
 //    there is no real per-student attendance-history query handler to wire to, so this
@@ -4952,9 +4938,9 @@ function resolveNamedPerson(message, people) {
 }
 
 /**
- * Deterministic digest of a tutor's own Grade.remarks for one of their students.
- * Organises real tutor-authored text — never generates observations. Scoped to grades
- * this tutor recorded (Grade.tutor === tutorId), matching getGradesForStudent.
+ * Formerly a deterministic digest of a tutor's own Grade.remarks for one of their
+ * students. Grades were fully retired in favor of Student Remarks (2026-09-30) — see
+ * the function body for what this returns now.
  */
 async function buildTutorStudentNotesContext(tutorId, message) {
   const students = await getTutorStudents(tutorId);
@@ -4974,71 +4960,25 @@ async function buildTutorStudentNotesContext(tutorId, message) {
     };
   }
 
-  const grades = await Grade.find({ tutor: tutorId, student: target._id })
-    .sort({ createdAt: 1 })
-    .lean();
-
-  if (!grades.length) {
-    return {
-      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nNo grades recorded by this tutor for this student.`,
-      fallbackReply: `You haven't recorded any grades for ${personDisplayName(target)} yet, so there are no remarks to summarise.`,
-    };
-  }
-
-  const pctOf = (g) => (g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0);
-  const bySubject = new Map();
-  for (const g of grades) {
-    const key = `${g.programCategory} / ${g.subjectItem}`;
-    if (!bySubject.has(key)) bySubject.set(key, []);
-    bySubject.get(key).push(g);
-  }
-
-  const blocks = [];
-  for (const [subject, list] of bySubject) {
-    const pcts = list.map(pctOf);
-    const avg = Math.round(pcts.reduce((s, n) => s + n, 0) / pcts.length);
-    const trend = pcts.length > 1
-      ? (pcts[pcts.length - 1] > pcts[0] ? `trending up (${pcts[0]}% → ${pcts[pcts.length - 1]}%)`
-        : pcts[pcts.length - 1] < pcts[0] ? `trending down (${pcts[0]}% → ${pcts[pcts.length - 1]}%)`
-          : 'stable')
-      : 'one entry';
-    const remarkLines = list
-      .filter((g) => g.remarks && String(g.remarks).trim())
-      .map((g) => `  • ${g.period}: "${String(g.remarks).replace(/"/g, "'")}"`);
-    blocks.push(
-      `${subject} — average ${avg}%, ${trend}`
-      + (remarkLines.length ? `\n${remarkLines.join('\n')}` : '\n  • (no written remarks)')
-    );
-  }
-
-  const digest = `Notes on ${personDisplayName(target)}, from ${grades.length} grade entr${grades.length === 1 ? 'y' : 'ies'} you recorded:\n${blocks.join('\n')}`;
-
+  // Grades were fully retired in favor of Student Remarks (2026-09-30) — this digest
+  // used to summarise Grade.remarks; the Grade model no longer exists, so there is
+  // nothing left to summarise this way. The Remark model (student-remarks-feature) is
+  // the current source of tutor-authored notes but has a different shape and is not
+  // wired here — a future task, not part of this removal.
   return {
-    contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\n${digest}`,
-    fallbackReply: digest,
+    contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nGrades are no longer tracked; no legacy grade remarks to summarise.`,
+    fallbackReply: `Grades aren't tracked anymore, so there's nothing to summarise for ${personDisplayName(target)} this way — check the Remark History tab for your own written remarks on them.`,
   };
 }
 
-// Task 34 Batch 4 (2026-09-12, owner-confirmed scope: "tutor sees own students, admin
-// sees system-wide" — same dual-scoping pattern as student_notes/the count intents).
-// "At risk" = recorded average below AT_RISK_THRESHOLD% — reuses the exact 75% cutoff
-// already used elsewhere (buildParentGradesContext / buildTutorStudentNotesContext's
-// "below the 75% mark" framing), not a newly-invented number.
-const AT_RISK_THRESHOLD = 75;
-
-function averagePercentage(grades) {
-  if (!grades.length) return null;
-  const pcts = grades.map((g) => (g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0));
-  return Math.round(pcts.reduce((sum, n) => sum + n, 0) / pcts.length);
-}
-
 /**
- * Tutor-facing at_risk / at_risk_details. Own-students-only by construction:
- * getTutorStudents(tutorId) is the tutor's own Schedule-assigned roster, and grades are
- * further double-scoped to Grade.tutor === tutorId (same pattern as
- * buildTutorStudentNotesContext). A student named who isn't this tutor's own is simply
- * not in `students`, so resolveNamedPerson returns null and this asks "which student?"
- * against the tutor's real roster — never a broader/unscoped lookup.
+ * Tutor-facing at_risk / at_risk_details. "At risk" used to mean a recorded Grade
+ * average below 75% — grades were fully retired in favor of Student Remarks
+ * (2026-09-30), so there is no numeric data source left to flag anyone from. Kept only
+ * so the still-trained at_risk/at_risk_details intents have somewhere to land; always
+ * gives the honest "no data" answer instead of querying a model that's gone. A future
+ * task could rebuild this against Remark data if that's wanted — not part of this
+ * removal.
  */
 async function buildTutorAtRiskContext(tutorId, message) {
   const students = await getTutorStudents(tutorId);
@@ -5052,42 +4992,15 @@ async function buildTutorAtRiskContext(tutorId, message) {
   const target = resolveNamedPerson(message, students);
 
   if (target) {
-    const grades = await Grade.find({ tutor: tutorId, student: target._id }).lean();
-    const avg = averagePercentage(grades);
-    if (avg === null) {
-      return {
-        contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nNo grades recorded yet.`,
-        fallbackReply: `No grades have been recorded for ${personDisplayName(target)} yet, so there isn't enough data to tell if they're at risk.`,
-      };
-    }
-    const atRisk = avg < AT_RISK_THRESHOLD;
     return {
-      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nAverage: ${avg}%\nAt risk (below ${AT_RISK_THRESHOLD}%): ${atRisk}`,
-      fallbackReply: atRisk
-        ? `${personDisplayName(target)}'s recorded average is ${avg}%, below the ${AT_RISK_THRESHOLD}% mark based on the grades you've recorded — worth a closer look.`
-        : `${personDisplayName(target)}'s recorded average is ${avg}%, at or above the ${AT_RISK_THRESHOLD}% mark — not currently flagged based on recorded grades.`,
-    };
-  }
-
-  const atRiskEntries = [];
-  for (const s of students) {
-    const grades = await Grade.find({ tutor: tutorId, student: s._id }).lean();
-    const avg = averagePercentage(grades);
-    if (avg !== null && avg < AT_RISK_THRESHOLD) {
-      atRiskEntries.push(`${personDisplayName(s)} (${avg}%)`);
-    }
-  }
-
-  if (!atRiskEntries.length) {
-    return {
-      contextText: `Role: tutor\nAssigned students: ${students.length}\nNone below ${AT_RISK_THRESHOLD}% based on recorded grades.`,
-      fallbackReply: `None of your students are currently below the ${AT_RISK_THRESHOLD}% mark based on the grades you've recorded.`,
+      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nGrades are no longer tracked; no at-risk data available.`,
+      fallbackReply: `Grades aren't tracked anymore, so there isn't a data-based way to flag whether ${personDisplayName(target)} is at risk.`,
     };
   }
 
   return {
-    contextText: `Role: tutor\nStudents below ${AT_RISK_THRESHOLD}%: ${atRiskEntries.join(', ')}`,
-    fallbackReply: `Based on the grades you've recorded, these of your students are below the ${AT_RISK_THRESHOLD}% mark: ${atRiskEntries.join(', ')}.`,
+    contextText: `Role: tutor\nAssigned students: ${students.length}\nGrades are no longer tracked; no at-risk data available.`,
+    fallbackReply: `Grades aren't tracked anymore, so there isn't a data-based way to flag any of your students as at risk.`,
   };
 }
 
@@ -5127,38 +5040,13 @@ async function getAdminAtRiskStudentsReply(user, message, languageProfile = 'eng
     return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
   }
 
-  const grades = await Grade.find({}).select('student score maxScore').lean();
-  const byStudent = new Map();
-  for (const g of grades) {
-    const key = String(g.student);
-    if (!byStudent.has(key)) byStudent.set(key, []);
-    byStudent.get(key).push(g);
-  }
-
-  const atRiskIds = [];
-  for (const [studentId, list] of byStudent) {
-    const avg = averagePercentage(list);
-    if (avg !== null && avg < AT_RISK_THRESHOLD) atRiskIds.push(studentId);
-  }
-
-  if (!atRiskIds.length) {
-    return pickByLanguage(
-      languageProfile,
-      `No students are currently below the ${AT_RISK_THRESHOLD}% mark based on recorded grades.`,
-      `Walang estudyanteng kasalukuyang bababa sa ${AT_RISK_THRESHOLD}% batay sa mga naitalang grades.`,
-      `Walang studyanteng currently below the ${AT_RISK_THRESHOLD}% mark batay sa mga recorded grades.`
-    );
-  }
-
-  const students = await User.find({ _id: { $in: atRiskIds } }).select('firstName lastName').lean();
-  const names = students.map((s) => [s.firstName, s.lastName].filter(Boolean).join(' ')).filter(Boolean);
-  const count = atRiskIds.length;
-
+  // Grades were fully retired in favor of Student Remarks (2026-09-30) — there is no
+  // numeric data source left to flag anyone from. See buildTutorAtRiskContext's comment.
   return pickByLanguage(
     languageProfile,
-    `There ${count === 1 ? 'is' : 'are'} currently ${count} student${count === 1 ? '' : 's'} below the ${AT_RISK_THRESHOLD}% mark based on recorded grades: ${names.join(', ')}.`,
-    `May kasalukuyang ${count} estudyante na bababa sa ${AT_RISK_THRESHOLD}% batay sa mga naitalang grades: ${names.join(', ')}.`,
-    `May currently ${count} student na below the ${AT_RISK_THRESHOLD}% mark batay sa recorded grades: ${names.join(', ')}.`
+    'Grades are no longer tracked, so there is no data-based way to flag at-risk students right now.',
+    'Hindi na kami nagtatala ng grades, kaya walang data-based na paraan para markahan ang mga estudyanteng at-risk sa ngayon.',
+    'Hindi na namin tinatrack ang grades, kaya walang data-based na paraan para i-flag ang mga at-risk na estudyante ngayon.'
   );
 }
 
@@ -5466,12 +5354,18 @@ async function buildParentScheduleContext(parentId, message) {
   };
 }
 
+// Grades were fully retired in favor of Student Remarks (2026-09-30) — the Grade model
+// and its collection no longer exist. Kept only so the still-trained
+// parent_progress/'grounded_grades' intent has somewhere to land; a parent asking about
+// their child's enrollment/name is still resolved (that part is unrelated to grades),
+// but the reply now always gives the honest current answer instead of querying a model
+// that's gone.
 async function buildParentGradesContext(parentId, message) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
     return {
       contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
-      fallbackReply: 'I could not find any enrolled child linked to your account yet, so there are no grades to show.',
+      fallbackReply: 'I could not find any enrolled child linked to your account yet.',
     };
   }
 
@@ -5480,48 +5374,9 @@ async function buildParentGradesContext(parentId, message) {
     return parentDisambiguationContext(enrollments, 'grades');
   }
 
-  if (!matched.student) {
-    return {
-      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nEnrollment status: ${formatStatusLabel(matched.status)}\nNo grades have been recorded for this child yet.`,
-      fallbackReply: `${childDisplayName(matched)}'s enrollment is ${formatStatusLabel(matched.status)}. No grades have been recorded yet.`,
-    };
-  }
-
-  const grades = await Grade.find({ student: matched.student })
-    .populate('tutor', 'firstName middleName lastName')
-    .sort({ programCategory: 1, subjectItem: 1, createdAt: -1 })
-    .lean();
-
-  if (!grades.length) {
-    return {
-      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nNo grades have been recorded yet.`,
-      fallbackReply: `No grades have been recorded for ${childDisplayName(matched)} yet. Please check again later or ask the tutor for an update.`,
-    };
-  }
-
-  const pctOf = (g) => (g.maxScore > 0 ? Math.round((g.score / g.maxScore) * 100) : 0);
-  const lines = grades.map((g) => {
-    // Tutor-authored remarks are quoted to keep them clearly separated from instructions.
-    const remarks = g.remarks ? `, remarks: "${String(g.remarks).replace(/"/g, "'")}"` : '';
-    return `- ${g.programCategory} / ${g.subjectItem}: ${g.score}/${g.maxScore} (${pctOf(g)}%), period ${g.period}, tutor ${buildFullName(g.tutor)}${remarks}`;
-  });
-  const avg = Math.round(grades.reduce((s, g) => s + pctOf(g), 0) / grades.length);
-  const below = [...new Set(grades.filter((g) => pctOf(g) < 75).map((g) => g.subjectItem))];
-
   return {
-    contextText: [
-      'Role: parent',
-      `Child: ${childDisplayName(matched)}`,
-      `Student ID: ${matched.studentId || 'Not assigned'}`,
-      `Grades recorded: ${grades.length}`,
-      `Overall average: ${avg}%`,
-      ...lines,
-    ].join('\n'),
-    fallbackReply: [
-      `${childDisplayName(matched)} — ${grades.length} recorded grade(s), overall average about ${avg}%:`,
-      ...lines.slice(0, 20),
-      below.length ? `Below the 75% mark: ${below.join(', ')}.` : 'All recorded grades are at or above the 75% mark.',
-    ].join('\n'),
+    contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nGrades are no longer tracked; check the Progress tab for remarks instead.`,
+    fallbackReply: `We no longer track numeric grades for ${childDisplayName(matched)} — check the Progress tab for remarks and updates from their tutor.`,
   };
 }
 

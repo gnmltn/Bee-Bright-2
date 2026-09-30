@@ -233,9 +233,13 @@ test('item 11: checkMonthlySchedule suggests open starting dates instead of sile
 
 test('item 10: bulk delete removes every selected session and the records linked to them in one call', async () => {
   const origDeleteMany = Schedule.deleteMany;
+  const origFind = Schedule.find;
   const deletes = [];
   const linked = [EmergencyReschedule, ScheduleSubstitutionLog, TutorAbsenceAnnouncement];
   const origLinked = linked.map((m) => m.deleteMany);
+  // Realtime push ("bug (17).pdf") looks up the affected schedules' tutor/student ids
+  // before deleting, to notify the right rooms — irrelevant to this test, empty is fine.
+  Schedule.find = () => ({ select: () => ({ lean: async () => [] }) });
   Schedule.deleteMany = async (filter) => { deletes.push(['Schedule', filter]); return { deletedCount: 3 }; };
   linked.forEach((m) => { m.deleteMany = async (filter) => { deletes.push([m.modelName, filter]); return { deletedCount: 1 }; }; });
   try {
@@ -253,6 +257,7 @@ test('item 10: bulk delete removes every selected session and the records linked
     assert.equal(empty._status, 400);
   } finally {
     Schedule.deleteMany = origDeleteMany;
+    Schedule.find = origFind;
     linked.forEach((m, i) => { m.deleteMany = origLinked[i]; });
   }
 });

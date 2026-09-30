@@ -13,7 +13,6 @@ const assert = require('node:assert/strict');
 
 const AuditLog = require('../models/AuditLog');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const Enrollment = require('../models/Enrollment');
 const User = require('../models/User');
 const {
@@ -35,16 +34,6 @@ function stubFetch(intent, confidence) {
   const orig = global.fetch;
   global.fetch = async () => ({ ok: true, json: async () => ({ success: true, intent, confidence }) });
   return () => { global.fetch = orig; };
-}
-
-function stubFind(model, rows) {
-  const orig = model.find;
-  const chain = {
-    populate() { return chain; }, sort() { return chain; }, limit() { return chain; },
-    select() { return chain; }, lean() { return Promise.resolve(rows); },
-  };
-  model.find = () => chain;
-  return () => { model.find = orig; };
 }
 
 // getStudentCountReply/getTutorCountReply/getEnrollmentStatisticsReply use
@@ -127,19 +116,18 @@ test('CRITICAL: the same check holds in reverse (tutorB asking about tutorA\'s s
   } finally { restoreSched(); fetchRestore(); }
 });
 
-test('route "grounded_student_notes": a tutor asking about their OWN student gets that student\'s real grade digest', async () => {
+// Grades were fully retired in favor of Student Remarks (2026-09-30) — this digest used
+// to summarise Grade.remarks; once a named student resolves, it now always gives the
+// honest "nothing to summarise this way" answer instead of querying a model that's gone.
+test('route "grounded_student_notes": a tutor asking about their OWN student gets the honest "grades not tracked" answer', async () => {
   const restoreSched = stubScheduleByTutor();
-  const restoreGrade = stubFind(Grade, [
-    { programCategory: 'Academic Tutorial', subjectItem: 'Reading', score: 91, maxScore: 100, period: 'Q1 2026', remarks: 'Great improvement' },
-  ]);
   const fetchRestore = stubFetch('student_notes', 0.9);
   try {
     const message = 'give me notes on Alice Reyes';
     const out = await tryClassifierShortcut({ user: tutorA, body: {}, headers: {} }, message, []);
     assert.match(out, /Alice Reyes/);
-    assert.match(out, /Reading/);
-    assert.match(out, /91%/);
-  } finally { restoreSched(); restoreGrade(); fetchRestore(); }
+    assert.match(out, /Remark History/i);
+  } finally { restoreSched(); fetchRestore(); }
 });
 
 test('route "grounded_student_notes": non-tutor roles get null (grounded pipeline unaffected)', async () => {

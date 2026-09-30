@@ -15,7 +15,6 @@ const User = require('../models/User');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const UserArchiveRecord = require('../models/UserArchiveRecord');
 
 function buildIncompleteNameFilter() {
@@ -54,7 +53,6 @@ async function cleanupIncompleteUsers() {
       removedEnrollments: 0,
       removedPayments: 0,
       removedSchedules: 0,
-      removedGrades: 0,
       removedArchiveRecords: 0,
       userIds: [],
     };
@@ -62,10 +60,10 @@ async function cleanupIncompleteUsers() {
 
   const invalidUserIds = badUsers.map((u) => u._id);
 
-  // Only delete schedule/grade records directly linked to nameless users.
+  // Only delete schedule records directly linked to nameless users.
   // Do NOT delete enrollments or payments that have student: null —
   // those are wizard enrollments linked via parent, and are valid.
-  const [enrollmentsResult, paymentsResult, studentSchedulesResult, tutorSchedulesResult, studentGradesResult, tutorGradesResult, archiveResult] = await Promise.all([
+  const [enrollmentsResult, paymentsResult, studentSchedulesResult, tutorSchedulesResult, archiveResult] = await Promise.all([
     // Only delete enrollments where the STUDENT field points to an invalid user.
     // Enrollments with student: null are wizard enrollments — leave them alone.
     Enrollment.deleteMany({ student: { $in: invalidUserIds } }),
@@ -76,8 +74,6 @@ async function cleanupIncompleteUsers() {
 
     Schedule.deleteMany({ student: { $in: invalidUserIds } }),
     Schedule.deleteMany({ tutor: { $in: invalidUserIds } }),
-    Grade.deleteMany({ student: { $in: invalidUserIds } }),
-    Grade.deleteMany({ tutor: { $in: invalidUserIds } }),
     UserArchiveRecord.deleteMany({ user: { $in: invalidUserIds } }),
   ]);
 
@@ -88,7 +84,6 @@ async function cleanupIncompleteUsers() {
     removedEnrollments: enrollmentsResult.deletedCount || 0,
     removedPayments: paymentsResult.deletedCount || 0,
     removedSchedules: (studentSchedulesResult.deletedCount || 0) + (tutorSchedulesResult.deletedCount || 0),
-    removedGrades: (studentGradesResult.deletedCount || 0) + (tutorGradesResult.deletedCount || 0),
     removedArchiveRecords: archiveResult.deletedCount || 0,
     userIds: invalidUserIds,
   };

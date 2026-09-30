@@ -46,6 +46,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
+import { REALTIME_EVENTS } from "@/lib/realtimeBridge";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
 import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type ParentChild, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage, type PendingBalanceItem } from "@/services/api";
@@ -1183,6 +1184,18 @@ export default function AdminDashboard() {
     fetchSchedules();
   }, []);
 
+  // Generating a schedule (1-on-1 or Playgroup) can lazily link a not-yet-scheduled
+  // enrollment's `student` User account for the first time (see
+  // ensureStudentUserForEnrollment in scheduleController.js). The wizards' own
+  // "already scheduled" filter keys off `enrollment.student?._id`, so refetching only
+  // `schedules` left that student visible in "Select a student" until a manual
+  // refresh re-fetched `enrollments` too — refetch both so the just-scheduled student
+  // disappears immediately.
+  const handleScheduleGenerated = () => {
+    fetchSchedules();
+    fetchEnrollments();
+  };
+
   useEffect(() => {
     setScheduleEnrollmentSelectedStudentIds([]);
     setScheduleEnrollmentOverride(false);
@@ -1784,6 +1797,33 @@ export default function AdminDashboard() {
   };
   useEffect(() => {
     fetchAdminPayments();
+  }, []);
+
+  // Real-time push (Socket.io) — Enrollments/Payments/Schedule/Users tabs refresh live,
+  // on top of the existing manual refresh (untouched). The connection itself lives in
+  // App.tsx's RealtimeConnector (one per session, survives navigation to
+  // /admin-dashboard/escalations and back); this page just listens for the events its
+  // own tabs care about via the same window-CustomEvent bridge lib/navBadges.ts already
+  // uses for the sidebar badges.
+  useEffect(() => {
+    const onEnrollmentNew = () => { fetchEnrollments(); toast.success("New enrollment submitted"); };
+    const onPaymentNew = () => { fetchAdminPayments(); toast.success("New payment proof submitted"); };
+    const onScheduleChanged = () => { fetchSchedules(); };
+    const onUserChanged = () => { fetchUsers(); };
+    const onReconnectCatchUp = () => { fetchEnrollments(); fetchAdminPayments(); fetchSchedules(); fetchUsers(); };
+    window.addEventListener(REALTIME_EVENTS.ENROLLMENT_NEW, onEnrollmentNew);
+    window.addEventListener(REALTIME_EVENTS.PAYMENT_NEW, onPaymentNew);
+    window.addEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
+    window.addEventListener(REALTIME_EVENTS.USER_CHANGED, onUserChanged);
+    window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    return () => {
+      window.removeEventListener(REALTIME_EVENTS.ENROLLMENT_NEW, onEnrollmentNew);
+      window.removeEventListener(REALTIME_EVENTS.PAYMENT_NEW, onPaymentNew);
+      window.removeEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
+      window.removeEventListener(REALTIME_EVENTS.USER_CHANGED, onUserChanged);
+      window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -3534,7 +3574,7 @@ export default function AdminDashboard() {
                       tutors={weeklyPlannerTutors}
                       pricing={pricingCatalog}
                       schedules={schedules}
-                      onCreated={fetchSchedules}
+                      onCreated={handleScheduleGenerated}
                     />
                   )}
                   {schedulingProgramType === "playgroup" && (
@@ -3544,7 +3584,7 @@ export default function AdminDashboard() {
                       tutors={weeklyPlannerTutors}
                       pricing={pricingCatalog}
                       schedules={schedules}
-                      onCreated={fetchSchedules}
+                      onCreated={handleScheduleGenerated}
                     />
                   )}
                   {!schedulingProgramType && (

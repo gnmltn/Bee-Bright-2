@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const AuditLog = require('../models/AuditLog');
 const {
   detectStudentNotesIntent,
@@ -24,16 +23,14 @@ function stubFind(model, rows) {
   model.find = () => chain;
 }
 
-function withStubs({ scheduleRows = [], gradeRows = [] }, fn) {
+function withStubs({ scheduleRows = [] }, fn) {
   const oS = Schedule.find;
-  const oG = Grade.find;
   const oA = AuditLog.create;
   const audits = [];
   stubFind(Schedule, scheduleRows);
-  stubFind(Grade, gradeRows);
   AuditLog.create = async (e) => { audits.push(e); return e; };
   return Promise.resolve(fn({ audits })).finally(() => {
-    Schedule.find = oS; Grade.find = oG; AuditLog.create = oA;
+    Schedule.find = oS; AuditLog.create = oA;
   });
 }
 
@@ -77,31 +74,17 @@ test('buildTutorStudentNotesContext: unnamed student → disambiguation list', a
   });
 });
 
-test('buildTutorStudentNotesContext: named student → digest of real remarks, grouped + trend', async () => {
+// Grades were fully retired in favor of Student Remarks (2026-09-30) — this digest used
+// to summarise Grade.remarks (grouped by subject, with a trend line); once a named
+// student resolves, it now always gives the honest "nothing to summarise this way"
+// answer instead of querying a model that's gone.
+test('buildTutorStudentNotesContext: named student → honest "grades not tracked" answer', async () => {
   await withStubs({
     scheduleRows: [{ student: { _id: 'a', firstName: 'Ana', lastName: 'Cruz' }, students: [] }],
-    gradeRows: [
-      { programCategory: 'Academic Tutorial', subjectItem: 'Math', score: 85, maxScore: 100, period: 'Q1', remarks: 'Good grasp of addition' },
-      { programCategory: 'Academic Tutorial', subjectItem: 'Math', score: 60, maxScore: 100, period: 'Q2', remarks: 'Struggling with regrouping' },
-      { programCategory: 'Academic Tutorial', subjectItem: 'English', score: 90, maxScore: 100, period: 'Q1', remarks: '' },
-    ],
   }, async () => {
     const ctx = await buildTutorStudentNotesContext('t1', 'how is Ana Cruz doing');
-    assert.match(ctx.fallbackReply, /Notes on Ana Cruz/);
-    assert.match(ctx.fallbackReply, /Math — average 73%, trending down \(85% → 60%\)/);
-    assert.match(ctx.fallbackReply, /Q1: "Good grasp of addition"/);
-    assert.match(ctx.fallbackReply, /Q2: "Struggling with regrouping"/);
-    assert.match(ctx.fallbackReply, /English — average 90%.*\n {2}• \(no written remarks\)/);
-  });
-});
-
-test('buildTutorStudentNotesContext: named student, no grades recorded', async () => {
-  await withStubs({
-    scheduleRows: [{ student: { _id: 'a', firstName: 'Ana', lastName: 'Cruz' }, students: [] }],
-    gradeRows: [],
-  }, async () => {
-    const ctx = await buildTutorStudentNotesContext('t1', 'how is Ana doing');
-    assert.match(ctx.fallbackReply, /haven't recorded any grades for Ana Cruz/i);
+    assert.match(ctx.fallbackReply, /Ana Cruz/);
+    assert.match(ctx.fallbackReply, /Remark History/i);
   });
 });
 
@@ -124,24 +107,18 @@ test('handleLessonPrepRequest: non-tutor → null', async () => {
 });
 
 // ⚠️ Scoping rule (Round 5): a tutor may only see remarks for students assigned to them.
-test('buildTutorStudentNotesContext: a student NOT assigned to this tutor is never queried', async () => {
+test('buildTutorStudentNotesContext: a student NOT assigned to this tutor is never offered', async () => {
   const oS = Schedule.find;
-  const oG = Grade.find;
-  let gradeQuery = null;
   // This tutor is assigned only to Ana.
   const chain = { populate() { return chain; }, sort() { return chain; }, lean() { return Promise.resolve([{ student: { _id: 'ana', firstName: 'Ana', lastName: 'Cruz' }, students: [] }]); } };
   Schedule.find = () => chain;
-  Grade.find = (q) => { gradeQuery = q; return { populate() { return this; }, sort() { return this; }, lean() { return Promise.resolve([]); } }; };
   try {
     // Tutor asks about "Ben", who belongs to another tutor.
     const ctx = await buildTutorStudentNotesContext('t1', 'summarize my remarks on Ben');
-    // Ben was not matched → the digest never issues a Grade query for him.
-    assert.equal(gradeQuery, null);
     assert.match(ctx.fallbackReply, /Which student\?/);
     assert.match(ctx.fallbackReply, /Ana Cruz/);
     assert.doesNotMatch(ctx.fallbackReply, /Ben/);
   } finally {
     Schedule.find = oS;
-    Grade.find = oG;
   }
 });

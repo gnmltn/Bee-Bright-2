@@ -12,7 +12,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const AuditLog = require('../models/AuditLog');
-const Grade = require('../models/Grade');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
@@ -97,11 +96,8 @@ test('Batch 2: every intent from the task brief is in the dispatch map', () => {
 
 // ── The regex-miss cases the classifier is supposed to add value on ────────────────
 test('getStudentGradesReply: the keyword regex misses this real phrasing (documents the gap)', async () => {
-  const restore = stubFind(Grade, []);
-  try {
-    const reply = await getStudentGradesReply(student, 'Nasaan ang grades ko?', 'english');
-    assert.equal(reply, null);
-  } finally { restore(); }
+  const reply = await getStudentGradesReply(student, 'Nasaan ang grades ko?', 'english');
+  assert.equal(reply, null);
 });
 
 test('getTutorContactReply: the keyword regex misses this real phrasing (documents the gap)', async () => {
@@ -110,14 +106,13 @@ test('getTutorContactReply: the keyword regex misses this real phrasing (documen
 });
 
 test('route "grades": classifier shortcut reaches getStudentGradesReply for a phrasing the regex misses', async () => {
-  const restore = stubFind(Grade, []);
   const fetchRestore = stubFetch('grades', 0.9);
   try {
     const out = await tryClassifierShortcut({ user: student, body: {}, headers: {} }, 'Nasaan ang grades ko?', []);
-    // Filipino phrasing -> Filipino reply (language auto-detected); same underlying "no
-    // grades yet" branch as the English-language test above.
-    assert.match(out, /wala pang naitalang grades/i);
-  } finally { restore(); fetchRestore(); }
+    // Filipino phrasing -> Filipino reply (language auto-detected); grades were fully
+    // retired 2026-09-30, so this is now always the honest "no longer tracked" branch.
+    assert.match(out, /numeric grades/i);
+  } finally { fetchRestore(); }
 });
 
 test('route "tutor_contact": classifier shortcut reaches the handler for a phrasing the regex misses', async () => {
@@ -130,46 +125,39 @@ test('route "tutor_contact": classifier shortcut reaches the handler for a phras
   } finally { restoreSched(); restoreUser(); fetchRestore(); }
 });
 
-// ── route "grades" (grades, progress) ───────────────────────────────────────────────
+// ── route "grades" (grades, progress) — grades were fully retired 2026-09-30 in favor
+// of Student Remarks, so getStudentGradesReply always gives the honest "no longer
+// tracked" answer now instead of querying a model that's gone ─────────────────────
 test('route "grades": classifier-routed reply equals getStudentGradesReply for a student', async () => {
-  const restore = stubFind(Grade, [
-    { programCategory: 'Academic Tutorial', subjectItem: 'Phonics', score: 90, maxScore: 100 },
-  ]);
   const fetchRestore = stubFetch('grades', 0.9);
   try {
     const out = await tryClassifierShortcut({ user: student, body: {}, headers: {} }, 'what are my grades', []);
-    assert.match(out, /1 recorded grade/);
-    assert.match(out, /90%/);
-  } finally { restore(); fetchRestore(); }
+    assert.match(out, /numeric grades/i);
+    assert.match(out, /Progress tab/i);
+  } finally { fetchRestore(); }
 });
 
 test('route "grades": "progress" intent reaches the same handler', async () => {
-  const restore = stubFind(Grade, []);
   const fetchRestore = stubFetch('progress', 0.9);
   try {
     const out = await tryClassifierShortcut({ user: student, body: {}, headers: {} }, 'how am i progressing', []);
-    assert.match(out, /no grades recorded yet/i);
-  } finally { restore(); fetchRestore(); }
+    assert.match(out, /numeric grades/i);
+  } finally { fetchRestore(); }
 });
 
-test('route "grades": non-student role never sees real grade data — same generic text getStudentGradesReply gives directly', async () => {
-  const restore = stubFind(Grade, [{ programCategory: 'X', subjectItem: 'Y', score: 100, maxScore: 100 }]);
+test('route "grades": non-student role gets the same generic text getStudentGradesReply gives directly', async () => {
   const fetchRestore = stubFetch('grades', 0.9);
   try {
     const out = await tryClassifierShortcut({ user: parent, body: {}, headers: {} }, 'what are my grades', []);
     const direct = await getStudentGradesReply(parent, 'what are my grades', 'english', { skipKeywordCheck: true });
     assert.equal(out, direct);
-    assert.doesNotMatch(out, /100%/); // never leaks the stubbed grade
-  } finally { restore(); fetchRestore(); }
+  } finally { fetchRestore(); }
 });
 
 // ── route "grounded_grades" (parent_progress) ───────────────────────────────────────
 test('route "grounded_grades": parent_progress reaches the parent\'s own child grades, matches resolveGroundedContextForTopic directly', async () => {
   const restoreEnr = stubFind(Enrollment, [
     enrollment({ _id: 'e1', student: 'stu-1', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
-  ]);
-  const restoreGrade = stubFind(Grade, [
-    { programCategory: 'Academic Tutorial', subjectItem: 'Phonics', score: 82, maxScore: 100, period: 'Q1', tutor: {} },
   ]);
   const fetchRestore = stubFetch('parent_progress', 0.9);
   try {
@@ -178,7 +166,7 @@ test('route "grounded_grades": parent_progress reaches the parent\'s own child g
     const direct = await resolveGroundedContextForTopic(parent, message, 'grades');
     assert.equal(out, direct.fallbackReply);
     assert.match(out, /Ana Cruz/);
-  } finally { restoreEnr(); restoreGrade(); fetchRestore(); }
+  } finally { restoreEnr(); fetchRestore(); }
 });
 
 test('route "grounded_grades": no children linked -> safe "not found" reply, never a crash', async () => {
@@ -323,12 +311,11 @@ test('excluded: intents with no existing handler are still unmapped', async () =
 
 // ── Fallback still holds ────────────────────────────────────────────────────────────
 test('low confidence on a Batch 2 intent still falls through to null', async () => {
-  const restore = stubFind(Grade, [{ programCategory: 'X', subjectItem: 'Y', score: 100, maxScore: 100 }]);
   const fetchRestore = stubFetch('grades', 0.1);
   try {
     const out = await tryClassifierShortcut({ user: student, body: {}, headers: {} }, 'what are my grades', []);
     assert.equal(out, null);
-  } finally { restore(); fetchRestore(); }
+  } finally { fetchRestore(); }
 });
 
 test('unauthenticated request never reaches a Batch 2 handler', async () => {

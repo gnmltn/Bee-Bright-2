@@ -45,16 +45,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
+import { REALTIME_EVENTS } from "@/lib/realtimeBridge";
 import { UserAvatar } from "@/components/UserAvatar";
 import {
   scheduleService,
-  gradeService,
   remarkService,
   announcementService,
   auditLogService,
   enrollmentService,
   uploadsBaseUrl,
-  type GradeItem,
   type RemarkItem,
   type RemarkTemplateType,
   type RemarkProgramCode,
@@ -306,6 +305,14 @@ export default function TutorDashboard() {
 
   const [studentCards, setStudentCards] = useState<TutorStudentCard[]>([]);
   const [studentCardsLoading, setStudentCardsLoading] = useState(false);
+  const fetchStudentCards = () => {
+    setStudentCardsLoading(true);
+    scheduleService
+      .getMyStudentCards()
+      .then((res) => setStudentCards(res.data?.success && Array.isArray(res.data.students) ? res.data.students : []))
+      .catch(() => setStudentCards([]))
+      .finally(() => setStudentCardsLoading(false));
+  };
   useEffect(() => {
     // Fetch on both hashes that render the "Assigned Students" panel (renderTeachingPage) —
     // the "#students" tab AND the default "overview" tab ("" or "#assessments") — since the
@@ -313,12 +320,8 @@ export default function TutorDashboard() {
     // "My Students" cards grid.
     const showsTeachingPage = location.hash === "#students" || location.hash === "#assessments" || location.hash === "";
     if (!showsTeachingPage) return;
-    setStudentCardsLoading(true);
-    scheduleService
-      .getMyStudentCards()
-      .then((res) => setStudentCards(res.data?.success && Array.isArray(res.data.students) ? res.data.students : []))
-      .catch(() => setStudentCards([]))
-      .finally(() => setStudentCardsLoading(false));
+    fetchStudentCards();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash]);
 
   const fetchAnnouncements = () => {
@@ -539,30 +542,6 @@ export default function TutorDashboard() {
     return map;
   }, [studentCards]);
 
-  // ─── Grades state ─────────────────────────────────────────────────────────────
-  const [grades, setGrades] = useState<GradeItem[]>([]);
-  const [gradesLoading, setGradesLoading] = useState(false);
-  const [gradeFormStudentId, setGradeFormStudentId] = useState("");
-  const [gradeFormProgramCategoryId, setGradeFormProgramCategoryId] = useState("");
-  const [gradeFormSubjectItem, setGradeFormSubjectItem] = useState("");
-  const [gradeFormScore, setGradeFormScore] = useState("");
-  const [gradeFormMaxScore, setGradeFormMaxScore] = useState("100");
-  const [gradeFormPeriod, setGradeFormPeriod] = useState("");
-  const [gradeFormRemarks, setGradeFormRemarks] = useState("");
-  // sentinel instead of "" — Radix SelectItem crashes on value=""
-  const [gradeFilterStudentId, setGradeFilterStudentId] = useState(ALL_STUDENTS_VALUE);
-  const [gradeSubmitting, setGradeSubmitting] = useState(false);
-
-  // ─── Inline edit state for grade history rows ─────────────────────────────────
-  // editingGradeId: which row is currently being edited (null = none)
-  // editFields: the live field values for the row being edited
-  const [editingGradeId, setEditingGradeId] = useState<string | null>(null);
-  const [editScore, setEditScore] = useState("");
-  const [editMaxScore, setEditMaxScore] = useState("");
-  const [editPeriod, setEditPeriod] = useState("");
-  const [editRemarks, setEditRemarks] = useState("");
-  const [editSaving, setEditSaving] = useState(false);
-
   // ─── Student Remarks state (replaces the grading workflow) ────────────────────
   const [remarks, setRemarks] = useState<RemarkItem[]>([]);
   const [remarksLoading, setRemarksLoading] = useState(false);
@@ -593,28 +572,6 @@ export default function TutorDashboard() {
     });
     return list.sort((a, b) => a.name.localeCompare(b.name));
   }, [sessions]);
-
-  // ─── Program categories filtered to the selected student ─────────────────────
-  // Strict matching: show only categories inferred from this tutor-student
-  // schedule subject names. No fallback to all categories.
-  const programCategoriesForSelectedStudent = useMemo(() => {
-    if (!gradeFormStudentId) return [];
-
-    const categoryIds = new Set<string>();
-    sessions.forEach((s) => {
-      if (!s.subject) return;
-      // Check singular student field (one-on-one) and students[] array (playgroup/group)
-      const studentIds = [
-        s.student?._id ? String(s.student._id) : null,
-        ...(Array.isArray(s.students) ? s.students.map((st) => String(st._id)) : []),
-      ].filter(Boolean) as string[];
-      if (!studentIds.includes(gradeFormStudentId)) return;
-      const inferred = inferProgramCategoryIdFromSubjectName(s.subject.name || "");
-      if (inferred) categoryIds.add(inferred);
-    });
-
-    return PROGRAM_CATEGORIES.filter((prog) => categoryIds.has(prog.id));
-  }, [gradeFormStudentId, sessions]);
 
   // ─── Student Remarks Spec v3: "Choose Remark Type" step ───────────────────────
   // Single source of truth for BOTH the type buttons and the student dropdown: the
@@ -673,131 +630,6 @@ export default function TutorDashboard() {
     setRemarkFormStudentId("");
   }, [remarkTypeProgramCode]);
 
-  useEffect(() => {
-    if (!gradeFormProgramCategoryId) return;
-    const stillAllowed = programCategoriesForSelectedStudent.some(
-      (p) => p.id === gradeFormProgramCategoryId
-    );
-    if (!stillAllowed) {
-      setGradeFormProgramCategoryId("");
-      setGradeFormSubjectItem("");
-    }
-  }, [gradeFormProgramCategoryId, programCategoriesForSelectedStudent]);
-
-
-  const gradeSubjectItems: string[] = useMemo(() => {
-    if (!gradeFormProgramCategoryId) return [];
-
-    const allItems =
-      PROGRAM_CATEGORIES.find((p) => p.id === gradeFormProgramCategoryId)
-        ?.subjectItems ?? [];
-
-    if (!gradeFormStudentId) return allItems;
-
-    const prog = PROGRAM_CATEGORIES.find((p) => p.id === gradeFormProgramCategoryId);
-    if (!prog) return allItems;
-
-    // Collect subjectItems already graded for this student + program (any period)
-    const gradedItems = new Set<string>();
-    grades.forEach((g) => {
-      if (!g.student) return;
-      if (String(g.student._id) !== gradeFormStudentId) return;
-      if (g.programCategory !== prog.label) return;
-      gradedItems.add(g.subjectItem);
-    });
-
-    return allItems.filter((item) => !gradedItems.has(item));
-  }, [gradeFormProgramCategoryId, gradeFormStudentId, grades]);
-
-  // ─── Inline edit handlers ─────────────────────────────────────────────────────
-  const startEditGrade = (g: GradeItem) => {
-    setEditingGradeId(g._id);
-    setEditScore(String(g.score));
-    setEditMaxScore(String(g.maxScore));
-    setEditPeriod(g.period);
-    setEditRemarks(g.remarks ?? "");
-  };
-
-  const cancelEditGrade = () => {
-    setEditingGradeId(null);
-    setEditScore("");
-    setEditMaxScore("");
-    setEditPeriod("");
-    setEditRemarks("");
-  };
-
-  const saveEditGrade = (id: string) => {
-    const scoreNum = Number(editScore);
-    const maxNum = Number(editMaxScore);
-    if (Number.isNaN(scoreNum) || scoreNum < 0) {
-      toast.error("Enter a valid score (0 or higher).");
-      return;
-    }
-    if (Number.isNaN(maxNum) || maxNum < 1) {
-      toast.error("Max score must be at least 1.");
-      return;
-    }
-    if (scoreNum > maxNum) {
-      toast.error("Score cannot exceed max score.");
-      return;
-    }
-    if (!editPeriod.trim()) {
-      toast.error("Period is required.");
-      return;
-    }
-    setEditSaving(true);
-    gradeService
-      .updateGrade(id, {
-        score: scoreNum,
-        maxScore: maxNum,
-        period: editPeriod.trim(),
-        remarks: editRemarks.trim() || undefined,
-      })
-      .then((res) => {
-        if (res.data?.success) {
-          toast.success("Grade updated.");
-          cancelEditGrade();
-          fetchGrades();
-        } else {
-          toast.error("Failed to update grade.");
-        }
-      })
-      .catch((err) =>
-        toast.error(err.response?.data?.message || "Failed to update grade.")
-      )
-      .finally(() => setEditSaving(false));
-  };
-
-  // ─── Data fetchers ────────────────────────────────────────────────────────────
-  const fetchGrades = () => {
-    setGradesLoading(true);
-    const studentIdParam =
-      gradeFilterStudentId === ALL_STUDENTS_VALUE ? undefined : gradeFilterStudentId;
-    gradeService
-      .getGradesAsTutor(studentIdParam)
-      .then((res) => {
-        if (res.data?.success && Array.isArray(res.data.grades)) {
-          setGrades(res.data.grades);
-        } else {
-          setGrades([]);
-        }
-      })
-      .catch(() => setGrades([]))
-      .finally(() => setGradesLoading(false));
-  };
-
-  useEffect(() => {
-    if (user?.role === "tutor") fetchGrades();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.role, gradeFilterStudentId]);
-
-  useEffect(() => {
-    if (user?.role === "tutor" && location.hash === "#grades") {
-      fetchGrades();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.hash, user?.role]);
-
   // ─── Student Remarks fetchers ─────────────────────────────────────────────────
   const fetchRemarks = () => {
     setRemarksLoading(true);
@@ -822,78 +654,42 @@ export default function TutorDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash, user?.role, remarkFilterStudentId]);
 
-  // ─── Grade handlers ───────────────────────────────────────────────────────────
-  const handleAddGrade = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (
-      !gradeFormStudentId ||
-      !gradeFormProgramCategoryId ||
-      !gradeFormSubjectItem ||
-      !gradeFormPeriod.trim() ||
-      !gradeFormScore.trim()
-    ) {
-      toast.error("Please fill Student, Program, Subject, Period, and Score.");
-      return;
-    }
-    const prog = PROGRAM_CATEGORIES.find((p) => p.id === gradeFormProgramCategoryId);
-    if (!prog) { toast.error("Invalid program selected."); return; }
-    const isAllowedCategory = programCategoriesForSelectedStudent.some(
-      (p) => p.id === gradeFormProgramCategoryId
-    );
-    if (!isAllowedCategory) {
-      toast.error("Selected program does not match this student's assigned program.");
-      return;
-    }
-    if (!gradeSubjectItems.includes(gradeFormSubjectItem)) {
-      toast.error("Selected subject does not match the chosen program.");
-      return;
-    }
-    const scoreNum = Number(gradeFormScore);
-    const maxNum = gradeFormMaxScore ? Number(gradeFormMaxScore) : 100;
-    if (Number.isNaN(scoreNum) || scoreNum < 0) {
-      toast.error("Enter a valid score (0 or higher).");
-      return;
-    }
-    if (Number.isNaN(maxNum) || maxNum < 1 || scoreNum > maxNum) {
-      toast.error("Enter a valid max score and ensure score ≤ max score.");
-      return;
-    }
-    setGradeSubmitting(true);
-    gradeService
-      .addGrade({
-        studentId: gradeFormStudentId,
-        programCategory: prog.label,
-        subjectItem: gradeFormSubjectItem,
-        score: scoreNum,
-        maxScore: maxNum,
-        period: gradeFormPeriod.trim(),
-        remarks: gradeFormRemarks.trim() || undefined,
-      })
-      .then((res) => {
-        if (res.data?.success) {
-          toast.success("Grade recorded.");
-          setGradeFormScore("");
-          setGradeFormMaxScore("100");
-          setGradeFormPeriod("");
-          setGradeFormRemarks("");
-          fetchGrades();
-        } else {
-          toast.error((res.data as any)?.message || "Failed to add grade.");
-        }
-      })
-      .catch((err) =>
-        toast.error(err.response?.data?.message || "Failed to add grade.")
-      )
-      .finally(() => setGradeSubmitting(false));
-  };
-
-  const handleDeleteGrade = (id: string) => {
-    if (!confirm("Delete this grade entry?")) return;
-    gradeService
-      .deleteGrade(id)
-      .then(() => { toast.success("Grade deleted."); fetchGrades(); })
-      .catch((err) => toast.error(err.response?.data?.message || "Delete failed."));
-  };
+  // Real-time push (Socket.io) — Overview/Schedule/My Students/Assessments/Announcements/
+  // Remarks refresh live, on top of the existing manual refresh (untouched). Attendance is
+  // deliberately NOT wired here — a tutor is the one marking it, there's nothing another
+  // user could change underneath them to push. The connection itself lives in App.tsx's
+  // RealtimeConnector; this page just listens for the events its own screens care about.
+  // `fetchRemarks` closes over `remarkFilterStudentId` (the Remark History dropdown
+  // filter) — listed in this effect's deps so a stale closure doesn't keep refetching with
+  // whatever filter was selected when the listener was first registered ("bug (18).pdf"
+  // Group AV: this exact stale-closure class was the real root cause behind "Approve/Reject
+  // don't update the tutor's own Remark History live" — that event wasn't even wired at all
+  // before this fix, on top of the closure risk here). Placed AFTER remarkFilterStudentId's
+  // own useState (not `[]` deps referencing it — that's a TDZ error, evaluated eagerly at
+  // render time, unlike a closure body).
+  useEffect(() => {
+    const onScheduleChanged = () => { fetchSessions(); fetchStudentCards(); };
+    const onAnnouncementNew = () => { fetchAnnouncements(); toast.success("New announcement"); };
+    const onAssessmentCompleted = () => { fetchTutorAssessments(); toast.success("New completed assessment"); };
+    const onRemarkReviewed = () => {
+      fetchRemarks();
+      toast.success("Remark reviewed", { description: "Check your Remark History." });
+    };
+    const onReconnectCatchUp = () => { fetchSessions(); fetchStudentCards(); fetchAnnouncements(); fetchTutorAssessments(); fetchRemarks(); };
+    window.addEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
+    window.addEventListener(REALTIME_EVENTS.ANNOUNCEMENT_NEW, onAnnouncementNew);
+    window.addEventListener(REALTIME_EVENTS.ASSESSMENT_COMPLETED, onAssessmentCompleted);
+    window.addEventListener(REALTIME_EVENTS.REMARK_REVIEWED, onRemarkReviewed);
+    window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    return () => {
+      window.removeEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
+      window.removeEventListener(REALTIME_EVENTS.ANNOUNCEMENT_NEW, onAnnouncementNew);
+      window.removeEventListener(REALTIME_EVENTS.ASSESSMENT_COMPLETED, onAssessmentCompleted);
+      window.removeEventListener(REALTIME_EVENTS.REMARK_REVIEWED, onRemarkReviewed);
+      window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remarkFilterStudentId]);
 
   // ─── Derived display data ─────────────────────────────────────────────────────
   const todaySchedule = useMemo(() => {
@@ -1934,383 +1730,6 @@ export default function TutorDashboard() {
                         )}
                       </div>
                     )}
-                  </div>
-                </TabsContent>
-
-                {/* ══ GRADES TAB ══ */}
-                <TabsContent value="grades" className="space-y-6">
-                  <div className="bg-card rounded-xl border border-border p-6">
-                    <h2 className="text-2xl font-bold text-foreground mb-1">Grade Management</h2>
-                    <p className="text-muted-foreground">
-                      Record and track student grades for your programs and subjects.
-                    </p>
-                  </div>
-
-                  {/* Grade Input Form */}
-                  <div className="bg-card rounded-xl border border-border">
-                    <div className="p-4 border-b border-border">
-                      <h3 className="font-bold text-lg text-foreground">Grade Input Form</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Select a student first — only programs for their enrolled subjects will appear.
-                      </p>
-                    </div>
-                    <div className="p-4">
-                      {tutorAssignedStudentsList.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          You have no assigned students yet. Grades can be added once you
-                          have schedules with students.
-                        </p>
-                      ) : (
-                        <form onSubmit={handleAddGrade} className="space-y-4">
-                          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
-
-                            {/* Student — resets program + subject on change */}
-                            <div className="grid gap-1.5 min-w-0 xl:col-span-3">
-                              <Label>Student *</Label>
-                              <Select
-                                value={gradeFormStudentId}
-                                onValueChange={(v) => {
-                                  setGradeFormStudentId(v);
-                                  setGradeFormProgramCategoryId("");
-                                  setGradeFormSubjectItem("");
-                                }}
-                              >
-                                <SelectTrigger className="w-full min-w-0">
-                                  <SelectValue placeholder="Select student" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {tutorAssignedStudentsList.map((stu) => (
-                                    <SelectItem key={stu._id} value={stu._id}>
-                                      {stu.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-
-                            {/* Program Category — filtered to selected student's subjects */}
-                            <div className="grid gap-1.5 min-w-0 xl:col-span-3">
-                              <Label>Program Category *</Label>
-                              <Select
-                                value={gradeFormProgramCategoryId}
-                                onValueChange={(v) => {
-                                  setGradeFormProgramCategoryId(v);
-                                  setGradeFormSubjectItem("");
-                                }}
-                                disabled={
-                                  !gradeFormStudentId ||
-                                  programCategoriesForSelectedStudent.length === 0
-                                }
-                              >
-                                <SelectTrigger className="w-full min-w-0">
-                                  <SelectValue
-                                    placeholder={
-                                      !gradeFormStudentId
-                                        ? "Select student first"
-                                        : programCategoriesForSelectedStudent.length === 0
-                                        ? "No assigned program found"
-                                        : "Select program"
-                                    }
-                                  />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {programCategoriesForSelectedStudent.map((p) => (
-                                    <SelectItem key={p.id} value={p.id}>
-                                      {p.label}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-
-                            {/* Subject / Skill — disabled until program chosen, filtered to exclude already-graded */}
-                            <div className="grid gap-1.5 min-w-0 xl:col-span-3">
-                              <Label>Subject / Skill *</Label>
-                              <Select
-                                value={gradeFormSubjectItem}
-                                onValueChange={setGradeFormSubjectItem}
-                                disabled={
-                                  !gradeFormProgramCategoryId ||
-                                  gradeSubjectItems.length === 0
-                                }
-                              >
-                                <SelectTrigger className="w-full min-w-0">
-                                  <SelectValue
-                                    placeholder={
-                                      !gradeFormProgramCategoryId
-                                        ? "Select program first"
-                                        : gradeSubjectItems.length === 0 &&
-                                          gradeFormStudentId
-                                        ? "All subjects already graded"
-                                        : "Select subject"
-                                    }
-                                  />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {gradeSubjectItems.map((item) => (
-                                    <SelectItem key={item} value={item}>{item}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-
-                            {/* Period */}
-                            <div className="grid gap-1.5 min-w-0 xl:col-span-3">
-                              <Label>Period (e.g. Q1 2024) *</Label>
-                              <Input
-                                value={gradeFormPeriod}
-                                onChange={(e) => setGradeFormPeriod(e.target.value)}
-                                placeholder="Q1 2024"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
-                            <div className="grid gap-1.5 min-w-0 xl:col-span-3">
-                              <Label>Score *</Label>
-                              <Input
-                                type="number" min={0}
-                                value={gradeFormScore}
-                                onChange={(e) => setGradeFormScore(e.target.value)}
-                                placeholder="85"
-                              />
-                            </div>
-                            <div className="grid gap-1.5 min-w-0 xl:col-span-3">
-                              <Label>Max Score</Label>
-                              <Input
-                                type="number" min={1}
-                                value={gradeFormMaxScore}
-                                onChange={(e) => setGradeFormMaxScore(e.target.value)}
-                                placeholder="100"
-                              />
-                            </div>
-                            <div className="grid gap-1.5 min-w-0 md:col-span-2 xl:col-span-6">
-                              <Label>Remarks (optional)</Label>
-                              <Input
-                                value={gradeFormRemarks}
-                                onChange={(e) => setGradeFormRemarks(e.target.value)}
-                                placeholder="e.g. Good progress"
-                              />
-                            </div>
-                          </div>
-
-                          <Button type="submit" disabled={gradeSubmitting} className="w-full sm:w-auto">
-                            {gradeSubmitting ? (
-                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                            ) : null}
-                            Record Grade
-                          </Button>
-                        </form>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Grade History */}
-                  <div className="bg-card rounded-xl border border-border">
-                    <div className="p-4 border-b border-border flex items-center justify-between gap-4 flex-wrap">
-                      <h3 className="font-bold text-lg text-foreground">Grade History</h3>
-                      {/* sentinel value "__all__" — Radix crashes on value="" */}
-                      <Select value={gradeFilterStudentId} onValueChange={setGradeFilterStudentId}>
-                        <SelectTrigger className="w-full sm:w-[200px]">
-                          <SelectValue placeholder="All students" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={ALL_STUDENTS_VALUE}>All students</SelectItem>
-                          {tutorAssignedStudentsList.map((stu) => (
-                            <SelectItem key={stu._id} value={stu._id}>{stu.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="p-4">
-                      {gradesLoading ? (
-                        <div className="flex justify-center py-12">
-                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : grades.length === 0 ? (
-                        <p className="text-center text-muted-foreground py-6">
-                          {tutorAssignedStudentsList.length === 0
-                            ? "No assigned students yet."
-                            : "No grades recorded yet."}
-                        </p>
-                      ) : (
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead className="bg-muted">
-                              <tr>
-                                <th className="text-left p-3 font-semibold">Student</th>
-                                <th className="text-left p-3 font-semibold">Program</th>
-                                <th className="text-left p-3 font-semibold">Subject</th>
-                                <th className="text-left p-3 font-semibold">Score</th>
-                                <th className="text-left p-3 font-semibold">Max</th>
-                                <th className="text-left p-3 font-semibold">Period</th>
-                                <th className="text-left p-3 font-semibold">Remarks</th>
-                                <th className="p-3 text-right font-semibold">Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border">
-                              {grades.map((g) => {
-                                const isEditing = editingGradeId === g._id;
-                                return (
-                                  <tr
-                                    key={g._id}
-                                    className={`transition-colors ${isEditing ? "bg-primary/5" : "hover:bg-muted/50"}`}
-                                  >
-                                    {/* Student — never editable */}
-                                    <td className="p-3 whitespace-nowrap">
-                                      {g.student
-                                        ? `${g.student.firstName} ${g.student.lastName}`
-                                        : "—"}
-                                    </td>
-
-                                    {/* Program — never editable */}
-                                    <td className="p-3 max-w-[140px]">
-                                      <span className="truncate block" title={g.programCategory}>
-                                        {g.programCategory}
-                                      </span>
-                                    </td>
-
-                                    {/* Subject — never editable */}
-                                    <td className="p-3 max-w-[160px]">
-                                      <span className="truncate block" title={g.subjectItem}>
-                                        {g.subjectItem}
-                                      </span>
-                                    </td>
-
-                                    {/* Score — editable */}
-                                    <td className="p-2 font-medium">
-                                      {isEditing ? (
-                                        <Input
-                                          type="number"
-                                          min={0}
-                                          value={editScore}
-                                          onChange={(e) => setEditScore(e.target.value)}
-                                          className="w-20 h-8 text-sm"
-                                        />
-                                      ) : (
-                                        <span>
-                                          {g.score}
-                                          {g.percentage != null && (
-                                            <span className="text-muted-foreground ml-1 text-xs">
-                                              ({g.percentage}%)
-                                            </span>
-                                          )}
-                                        </span>
-                                      )}
-                                    </td>
-
-                                    {/* Max Score — editable */}
-                                    <td className="p-2">
-                                      {isEditing ? (
-                                        <Input
-                                          type="number"
-                                          min={1}
-                                          value={editMaxScore}
-                                          onChange={(e) => setEditMaxScore(e.target.value)}
-                                          className="w-20 h-8 text-sm"
-                                        />
-                                      ) : (
-                                        g.maxScore
-                                      )}
-                                    </td>
-
-                                    {/* Period — editable */}
-                                    <td className="p-2">
-                                      {isEditing ? (
-                                        <Input
-                                          value={editPeriod}
-                                          onChange={(e) => setEditPeriod(e.target.value)}
-                                          className="w-28 h-8 text-sm"
-                                          placeholder="Q1 2024"
-                                        />
-                                      ) : (
-                                        g.period
-                                      )}
-                                    </td>
-
-                                    {/* Remarks — editable */}
-                                    <td className="p-2">
-                                      {isEditing ? (
-                                        <Input
-                                          value={editRemarks}
-                                          onChange={(e) => setEditRemarks(e.target.value)}
-                                          className="w-36 h-8 text-sm"
-                                          placeholder="Remarks"
-                                        />
-                                      ) : (
-                                        <span className="text-muted-foreground">
-                                          {g.remarks || "—"}
-                                        </span>
-                                      )}
-                                    </td>
-
-                                    {/* Action buttons */}
-                                    <td className="p-2">
-                                      <div className="flex items-center justify-end gap-1">
-                                        {isEditing ? (
-                                          <>
-                                            {/* Save */}
-                                            <Button
-                                              type="button"
-                                              size="icon"
-                                              variant="ghost"
-                                              className="h-7 w-7 text-success hover:text-success hover:bg-success/10"
-                                              disabled={editSaving}
-                                              onClick={() => saveEditGrade(g._id)}
-                                              title="Save changes"
-                                            >
-                                              {editSaving
-                                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                : <Check className="h-3.5 w-3.5" />}
-                                            </Button>
-                                            {/* Cancel */}
-                                            <Button
-                                              type="button"
-                                              size="icon"
-                                              variant="ghost"
-                                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                              onClick={cancelEditGrade}
-                                              title="Cancel"
-                                            >
-                                              <X className="h-3.5 w-3.5" />
-                                            </Button>
-                                          </>
-                                        ) : (
-                                          <>
-                                            {/* Edit */}
-                                            <Button
-                                              type="button"
-                                              size="icon"
-                                              variant="ghost"
-                                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                              onClick={() => startEditGrade(g)}
-                                              title="Edit grade"
-                                            >
-                                              <Pencil className="h-3.5 w-3.5" />
-                                            </Button>
-                                            {/* Delete */}
-                                            <Button
-                                              type="button"
-                                              size="icon"
-                                              variant="ghost"
-                                              className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                                              onClick={() => handleDeleteGrade(g._id)}
-                                              title="Delete grade"
-                                            >
-                                              <Trash2 className="h-3.5 w-3.5" />
-                                            </Button>
-                                          </>
-                                        )}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
                   </div>
                 </TabsContent>
 

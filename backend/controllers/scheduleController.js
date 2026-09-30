@@ -33,11 +33,43 @@ const {
   ONE_ON_ONE_SLOT_CAP,
 } = require('../utils/schedulingPolicy');
 const { matchesParentPreference, resolvePreferredDays } = require('../utils/schedulePreferences');
-const { parentOwnsStudent } = require('../utils/parentChildAccess');
+const { parentOwnsStudent, resolveParentIdsForStudents } = require('../utils/parentChildAccess');
 const { permanentIdOf } = require('../utils/studentIdentity');
 const { isRoomDoubleBooked, isOneOnOneHourFull, filterLiveSessions } = require('../utils/weeklySchedulingUtils');
+const { emitToAdmins, emitToParents, emitToTutors } = require('../utils/realtime');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
+
+// Realtime pilot expansion ("bug (17).pdf") — Admin Schedule tab, Parent Schedule tab,
+// Tutor Schedule/My Students tabs all refresh off ONE generic 'schedule:changed' event.
+// Covers: new sessions (single + monthly + Playgroup group), substitute assignment
+// (single/bulk/revert/auto-triggers — all funnel through processSubstitutionForSchedule),
+// and cancellations (single + bulk delete). Never awaited by its caller (fire-and-forget,
+// same convention as this file's own notification emails) — a slow Enrollment lookup here
+// must never delay the actual mutation's HTTP response.
+async function emitScheduleChanged({ tutorIds = [], studentIds = [] } = {}) {
+  try {
+    emitToAdmins('schedule:changed', {});
+    const uniqueTutorIds = [...new Set(tutorIds.filter(Boolean).map(String))];
+    if (uniqueTutorIds.length) emitToTutors(uniqueTutorIds, 'schedule:changed', {});
+    const uniqueStudentIds = [...new Set(studentIds.filter(Boolean).map(String))];
+    if (uniqueStudentIds.length) {
+      const parentIds = await resolveParentIdsForStudents(uniqueStudentIds);
+      if (parentIds.length) emitToParents(parentIds, 'schedule:changed', {});
+    }
+  } catch {
+    /* realtime push is never allowed to affect the actual scheduling operation */
+  }
+}
+
+/** Same as emitScheduleChanged, but resolves tutor/student ids straight off a single
+ *  schedule doc (populated or raw — handles both). */
+function emitScheduleChangedForSchedule(schedule) {
+  if (!schedule) return;
+  const tutorIds = [schedule.tutor, ...(schedule.tutors || [])].map((t) => t?._id || t).filter(Boolean);
+  const studentIds = [schedule.student, ...(schedule.students || [])].map((s) => s?._id || s).filter(Boolean);
+  emitScheduleChanged({ tutorIds, studentIds }).catch(() => {});
+}
 
 function toUtcDayStart(dateStr) {
   return new Date(`${dateStr}T00:00:00.000Z`);
@@ -909,6 +941,15 @@ async function processSubstitutionForSchedule({
     session
   });
 
+  // Notify both the tutor who just came OFF this session and everyone currently on it
+  // (the new substitute, plus any other unaffected co-tutor whose Schedule tab still
+  // needs the refreshed roster) — not just emitScheduleChangedForSchedule's usual
+  // "current tutors only" set, since the outgoing tutor needs to see it disappear too.
+  emitScheduleChanged({
+    tutorIds: [actualPreviousTutor, schedule.tutor, ...(schedule.tutors || [])].map((t) => t?._id || t).filter(Boolean),
+    studentIds: [schedule.student, ...(schedule.students || [])].map((s) => s?._id || s).filter(Boolean),
+  }).catch(() => {});
+
   return {
     status: 'assigned',
     schedule,
@@ -1577,6 +1618,8 @@ const createSchedule = async (req, res) => {
       .populate('tutors', 'firstName lastName middleName')
       .populate('subject', 'name code')
       .lean();
+
+    emitScheduleChangedForSchedule(populated);
 
     res.status(201).json({
       success: true,
@@ -2279,6 +2322,8 @@ const createMonthlySchedules = async (req, res) => {
       .sort({ date: 1, startTime: 1 })
       .lean();
 
+    emitScheduleChanged({ tutorIds: daySlots.map(tutorForSlot), studentIds: [studentId] }).catch(() => {});
+
     const durationLabel = policy?.durationMinutes
       ? (policy.durationMinutes % 60 === 0 ? `${policy.durationMinutes / 60}hr` : `${policy.durationMinutes}min`)
       : '';
@@ -2718,6 +2763,8 @@ const createOrJoinPlaygroupGroup = async (req, res) => {
       metadata: { groupId: String(group._id), studentId, studentIds, createdCount, updatedCount }
     }).catch(() => {});
 
+    emitScheduleChanged({ tutorIds: group.tutors, studentIds }).catch(() => {});
+
     const totalSessions = createdCount + updatedCount;
     res.status(201).json({
       success: true,
@@ -2763,8 +2810,13 @@ const bulkDeleteSchedules = async (req, res) => {
     if (ids.length > 5000) {
       return res.status(400).json({ success: false, message: 'Too many sessions selected at once (limit 5000).' });
     }
+    const affected = await Schedule.find({ _id: { $in: ids } }).select('tutor tutors student students').lean();
     const result = await Schedule.deleteMany({ _id: { $in: ids } });
     await removeScheduleLinks(ids);
+    emitScheduleChanged({
+      tutorIds: affected.flatMap((s) => [s.tutor, ...(s.tutors || [])]),
+      studentIds: affected.flatMap((s) => [s.student, ...(s.students || [])]),
+    }).catch(() => {});
     logAudit({
       req,
       userId: req.user.id,
@@ -2794,6 +2846,7 @@ const deleteSchedule = async (req, res) => {
     }
     await Schedule.findByIdAndDelete(req.params.id);
     await removeScheduleLinks([schedule._id]);
+    emitScheduleChangedForSchedule(schedule);
     res.status(200).json({
       success: true,
       message: 'Schedule deleted'

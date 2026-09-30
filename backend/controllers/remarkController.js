@@ -6,8 +6,9 @@ const Schedule = require('../models/Schedule');
 const AuditLog = require('../models/AuditLog');
 const User = require('../models/User');
 const { logAudit } = require('../utils/auditService');
-const { parentOwnsStudent } = require('../utils/parentChildAccess');
+const { parentOwnsStudent, resolveParentIdsForStudents } = require('../utils/parentChildAccess');
 const { resolveProgramCode } = require('../utils/schedulingPolicy');
+const { emitToParents, emitToTutor, emitToAdmins } = require('../utils/realtime');
 
 // Stored OUTSIDE the publicly-served uploads/ directory (never mounted via
 // express.static) — remark attachments are only ever readable through the protected
@@ -249,6 +250,11 @@ const createOrSaveRemark = async (req, res) => {
       metadata: { remarkId: remark._id, studentId, status },
     }).catch(() => {});
 
+    // Admin's own Remarks review queue was never wired to anything at all before this
+    // ("bug (19).pdf" Group AX) — same gap class as Group AV's missing tutor-facing
+    // event, just on the admin side this time.
+    emitToAdmins('remark:new', { remarkId: String(remark._id) });
+
     res.status(201).json({
       success: true,
       message: 'Remark submitted for admin review.',
@@ -347,6 +353,8 @@ const updateDraftRemark = async (req, res) => {
       description: 'Tutor submitted a draft remark for admin review',
       metadata: { remarkId: remark._id, studentId: remark.student, status: remark.status },
     }).catch(() => {});
+
+    emitToAdmins('remark:new', { remarkId: String(remark._id) });
 
     res.status(200).json({
       success: true,
@@ -511,6 +519,14 @@ const reviewRemark = async (req, res) => {
         remark.isCurrentVersion = true;
       }
       await remark.save();
+      resolveParentIdsForStudents([remark.student])
+        .then((parentIds) => emitToParents(parentIds, 'remark:published', { remarkId: String(remark._id), studentId: String(remark.student) }))
+        .catch(() => {});
+      // The submitting tutor's own Remark History also needs to move off "Pending Admin
+      // Review" live — was missing entirely before ("bug (18).pdf" Group AV): only the
+      // parent-facing event existed, so BOTH approve and reject looked like a no-op on the
+      // tutor's own side until they manually refreshed.
+      emitToTutor(remark.tutor, 'remark:reviewed', { remarkId: String(remark._id), status: 'published' });
     } else {
       const trimmedReason = String(reason || '').trim();
       if (!trimmedReason) {
@@ -522,6 +538,7 @@ const reviewRemark = async (req, res) => {
       remark.reviewedAt = new Date();
       remark.rejectionReason = trimmedReason;
       await remark.save();
+      emitToTutor(remark.tutor, 'remark:reviewed', { remarkId: String(remark._id), status: 'draft' });
     }
 
     logAudit({

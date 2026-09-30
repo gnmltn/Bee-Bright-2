@@ -15,7 +15,6 @@ const mongoose = require('mongoose');
 const Enrollment = require('../models/Enrollment');
 const User = require('../models/User');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const Remark = require('../models/Remark');
 const Payment = require('../models/Payment');
 const EmergencyReschedule = require('../models/EmergencyReschedule');
@@ -73,7 +72,6 @@ async function main() {
         enrollments: await repoint(Enrollment, 'student', dupe, keep, false),
         scheduleStudent: await repoint(Schedule, 'student', dupe, keep, false),
         scheduleStudents: await repoint(Schedule, 'students', dupe, keep, true),
-        grades: await repoint(Grade, 'student', dupe, keep, false),
         remarks: await repoint(Remark, 'student', dupe, keep, false),
         payments: await repoint(Payment, 'student', dupe, keep, false),
         emergencyReschedules: await repoint(EmergencyReschedule, 'student', dupe, keep, false),

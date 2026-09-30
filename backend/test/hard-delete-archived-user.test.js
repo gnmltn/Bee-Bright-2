@@ -11,7 +11,7 @@
  *     checks are unchanged.
  *  4. hardDeleteUser itself removes every record that only exists because of the account:
  *     a parent's enrollments/payments/children (+ everything scheduled for those children),
- *     a student's own schedules/remarks/grades, a tutor's own sessions.
+ *     a student's own schedules/remarks, a tutor's own sessions.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -21,7 +21,6 @@ const User = require('../models/User');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const Remark = require('../models/Remark');
 const Announcement = require('../models/Announcement');
 const EmergencyReschedule = require('../models/EmergencyReschedule');
@@ -73,7 +72,7 @@ test('hardDeleteUser: a parent takes their enrollments, payments and children wi
   const orig = {
     enrollmentFind: Enrollment.find, userFind: User.find, removeStudentData: null,
     scheduleDeleteMany: Schedule.deleteMany, scheduleUpdateMany: Schedule.updateMany,
-    remarkDeleteMany: Remark.deleteMany, gradeDeleteMany: Grade.deleteMany,
+    remarkDeleteMany: Remark.deleteMany,
     emergencyDeleteMany: EmergencyReschedule.deleteMany, announcementUpdateMany: Announcement.updateMany,
     trustedDeviceDeleteMany: TrustedDevice.deleteMany, paymentDeleteMany: Payment.deleteMany,
     enrollmentDeleteMany: Enrollment.deleteMany, userDeleteMany: User.deleteMany,
@@ -91,7 +90,6 @@ test('hardDeleteUser: a parent takes their enrollments, payments and children wi
   Schedule.deleteMany = async (q, o) => { calls.push(['Schedule.deleteMany', q, o]); return {}; };
   Schedule.updateMany = async (q, u, o) => { calls.push(['Schedule.updateMany', q, u, o]); return {}; };
   Remark.deleteMany = async (q, o) => { calls.push(['Remark.deleteMany', q, o]); return {}; };
-  Grade.deleteMany = async (q, o) => { calls.push(['Grade.deleteMany', q, o]); return {}; };
   EmergencyReschedule.deleteMany = async (q, o) => { calls.push(['EmergencyReschedule.deleteMany', q, o]); return {}; };
   Announcement.updateMany = async (q, u, o) => { calls.push(['Announcement.updateMany', q, u, o]); return {}; };
   TrustedDevice.deleteMany = async (q, o) => { calls.push(['TrustedDevice.deleteMany', q, o]); return {}; };
@@ -131,7 +129,7 @@ test('hardDeleteUser: a parent takes their enrollments, payments and children wi
   } finally {
     Enrollment.find = orig.enrollmentFind; User.find = orig.userFind;
     Schedule.deleteMany = orig.scheduleDeleteMany; Schedule.updateMany = orig.scheduleUpdateMany;
-    Remark.deleteMany = orig.remarkDeleteMany; Grade.deleteMany = orig.gradeDeleteMany;
+    Remark.deleteMany = orig.remarkDeleteMany;
     EmergencyReschedule.deleteMany = orig.emergencyDeleteMany; Announcement.updateMany = orig.announcementUpdateMany;
     TrustedDevice.deleteMany = orig.trustedDeviceDeleteMany; Payment.deleteMany = orig.paymentDeleteMany;
     Enrollment.deleteMany = orig.enrollmentDeleteMany; User.deleteMany = orig.userDeleteMany;
@@ -295,7 +293,7 @@ function stubHardDeleteModels(failAt = null) {
   const calls = [];
   const orig = {
     enrollmentFind: Enrollment.find, userFind: User.find, scheduleDeleteMany: Schedule.deleteMany,
-    scheduleUpdateMany: Schedule.updateMany, remarkDeleteMany: Remark.deleteMany, gradeDeleteMany: Grade.deleteMany,
+    scheduleUpdateMany: Schedule.updateMany, remarkDeleteMany: Remark.deleteMany,
     emergencyDeleteMany: EmergencyReschedule.deleteMany, announcementUpdateMany: Announcement.updateMany,
     trustedDeviceDeleteMany: TrustedDevice.deleteMany, paymentDeleteMany: Payment.deleteMany,
     enrollmentDeleteMany: Enrollment.deleteMany, userDeleteMany: User.deleteMany,
@@ -308,7 +306,6 @@ function stubHardDeleteModels(failAt = null) {
   Schedule.deleteMany = async (q, o) => { calls.push(['Schedule.deleteMany', q, o]); maybeThrow('Schedule.deleteMany'); return {}; };
   Schedule.updateMany = async (q, u, o) => { calls.push(['Schedule.updateMany', q, u, o]); maybeThrow('Schedule.updateMany'); return {}; };
   Remark.deleteMany = async (q, o) => { calls.push(['Remark.deleteMany', q, o]); maybeThrow('Remark.deleteMany'); return {}; };
-  Grade.deleteMany = async (q, o) => { calls.push(['Grade.deleteMany', q, o]); maybeThrow('Grade.deleteMany'); return {}; };
   EmergencyReschedule.deleteMany = async (q, o) => { calls.push(['EmergencyReschedule.deleteMany', q, o]); maybeThrow('EmergencyReschedule.deleteMany'); return {}; };
   Announcement.updateMany = async (q, u, o) => { calls.push(['Announcement.updateMany', q, u, o]); maybeThrow('Announcement.updateMany'); return {}; };
   TrustedDevice.deleteMany = async (q, o) => { calls.push(['TrustedDevice.deleteMany', q, o]); maybeThrow('TrustedDevice.deleteMany'); return {}; };
@@ -322,7 +319,7 @@ function stubHardDeleteModels(failAt = null) {
     restore() {
       Enrollment.find = orig.enrollmentFind; User.find = orig.userFind;
       Schedule.deleteMany = orig.scheduleDeleteMany; Schedule.updateMany = orig.scheduleUpdateMany;
-      Remark.deleteMany = orig.remarkDeleteMany; Grade.deleteMany = orig.gradeDeleteMany;
+      Remark.deleteMany = orig.remarkDeleteMany;
       EmergencyReschedule.deleteMany = orig.emergencyDeleteMany; Announcement.updateMany = orig.announcementUpdateMany;
       TrustedDevice.deleteMany = orig.trustedDeviceDeleteMany; Payment.deleteMany = orig.paymentDeleteMany;
       Enrollment.deleteMany = orig.enrollmentDeleteMany; User.deleteMany = orig.userDeleteMany;

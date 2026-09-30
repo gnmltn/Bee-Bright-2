@@ -12,6 +12,7 @@ const { validateName, validatePhoneNoLetters } = require('../utils/validation');
 const { listOutstandingBalances } = require('../utils/remainingBalance');
 const { getEmailError } = require('../utils/emailRules');
 const { sendPaymentVerifiedEmail } = require('../services/enrollmentService');
+const { emitToParent } = require('../utils/realtime');
 
 const generateEnrollmentReference = () =>
   `BRGHT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -793,6 +794,8 @@ const verifyPayment = async (req, res) => {
         metadata: { paymentId, amount: payment.amount, paymentMethod: payment.paymentMethod }
       }).catch(() => {});
 
+      emitToParent(enrollment.parent, 'payment:statusChanged', { paymentId, paymentType: 'remaining', outcome: 'proof_verified' });
+
       return res.status(200).json({ success: true, message: 'Payment proof verified.', payment });
     }
 
@@ -810,6 +813,8 @@ const verifyPayment = async (req, res) => {
       description: 'Admin rejected remaining-balance payment', status: 'SUCCESS',
       metadata: { paymentId, amount: payment.amount }
     }).catch(() => {});
+
+    emitToParent(enrollment.parent, 'payment:statusChanged', { paymentId, paymentType: 'remaining', outcome: 'rejected' });
 
     return res.status(200).json({ success: true, message: 'Payment rejected', payment });
   } catch (error) {
@@ -871,6 +876,8 @@ const approveRemainingPayment = async (req, res) => {
       description: 'Admin approved remaining-balance payment — balance marked paid', status: 'SUCCESS',
       metadata: { paymentId, amount: payment.amount }
     }).catch(() => {});
+
+    emitToParent(enrollment.parent, 'payment:statusChanged', { paymentId, paymentType: 'remaining', outcome: 'approved' });
 
     return res.status(200).json({ success: true, message: 'Payment approved. Balance marked as paid.', payment, enrollment });
   } catch (error) {

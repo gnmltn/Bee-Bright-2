@@ -20,6 +20,8 @@ import { useSelectedChild } from "@/hooks/useSelectedChild";
 import { notifyBadgesChanged } from "@/lib/navBadges";
 import { downloadPaymentReceipt } from "@/lib/receiptPdf";
 import { displayStudentId } from "@/lib/children";
+import { REALTIME_EVENTS } from "@/lib/realtimeBridge";
+import { toast } from "sonner";
 
 interface PaymentRecord {
   _id: string;
@@ -200,6 +202,21 @@ export default function StudentPayments() {
 
   useEffect(() => {
     loadEnrollments();
+  }, []);
+
+  // Real-time push — a verify/approve/reject outcome on this parent's own payment
+  // refreshes this page live (connection lives in App.tsx's RealtimeConnector, since
+  // this route is separate from /student-dashboard and would otherwise lose it on
+  // navigation here).
+  useEffect(() => {
+    const onPaymentStatusChanged = () => { loadEnrollments(); toast.success("Payment status updated"); };
+    const onReconnectCatchUp = () => { loadEnrollments(); };
+    window.addEventListener(REALTIME_EVENTS.PAYMENT_STATUS_CHANGED, onPaymentStatusChanged);
+    window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    return () => {
+      window.removeEventListener(REALTIME_EVENTS.PAYMENT_STATUS_CHANGED, onPaymentStatusChanged);
+      window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    };
   }, []);
 
   // Multi-child accounts: the dashboard's "Viewing child" selector is per-

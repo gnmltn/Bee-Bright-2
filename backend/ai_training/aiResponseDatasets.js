@@ -247,7 +247,8 @@ const AIResponseDatasets = {
         tgl: 'Tingnan ang Payments section ng dashboard para makita ang latest payment status, transaction ID, amount, at verification date.'
       }
     },
-    // Grades & Progress
+    // Grades & Progress — the Grades feature was fully retired in favor of Student
+    // Remarks (2026-09-30); replies now point to the Progress tab's remarks instead.
     {
       id: 'S016',
       role: 'student',
@@ -258,9 +259,9 @@ const AIResponseDatasets = {
         tgl: 'Saan ko makikita ang grades ko?'
       },
       expectedReply: {
-        en: 'Open your dashboard and go to the Progress or Grades section. You can view your subjects, scores, and academic standing.',
-        fil: 'Buksan ang dashboard at pumunta sa Progress o Grades section. Makikita mo ang subjects, scores, at academic standing.',
-        tgl: 'Buksan ang dashboard at pumunta sa Progress o Grades section. Makikita mo ang subjects, scores, at academic standing.'
+        en: 'We no longer track numeric grades. Open your dashboard and go to the Progress tab for remarks and updates from your tutor.',
+        fil: 'Hindi na kami nagtatala ng numeric grades. Buksan ang dashboard mo at pumunta sa Progress tab para sa mga remarks at update mula sa tutor.',
+        tgl: 'Hindi na namin tinatrack ang numeric grades. Buksan ang dashboard mo tapos pumunta sa Progress tab para sa remarks at updates mula sa tutor mo.'
       }
     },
     {
@@ -288,9 +289,9 @@ const AIResponseDatasets = {
         tgl: 'Makikita ko ba ang academic progress ko?'
       },
       expectedReply: {
-        en: 'Yes, your dashboard shows your progress over time with grade trends, subject performance, and recommendations based on your performance.',
-        fil: 'Oo, ang dashboard ay nagpapakita ng progress mo over time na may grade trends, subject performance, at recommendations base sa performance.',
-        tgl: 'Oo, ang dashboard ay nagpapakita ng progress mo over time na may grade trends, subject performance, at recommendations base sa performance.'
+        en: 'Yes — your dashboard\'s Progress tab shows session-based remarks and updates from your tutor over time.',
+        fil: 'Oo — ipinapakita ng Progress tab ng dashboard mo ang mga session-based remarks at update mula sa tutor mo.',
+        tgl: 'Oo — makikita sa Progress tab ng dashboard mo ang session-based remarks at updates mula sa tutor mo.'
       }
     },
     {
@@ -303,9 +304,9 @@ const AIResponseDatasets = {
         tgl: 'Ano ang ibig sabihin ng grade ko?'
       },
       expectedReply: {
-        en: 'Grades represent your performance in each subject. Higher grades mean better mastery. Your tutor can explain your grades in detail.',
-        fil: 'Ang grades ay kumakatawan sa performance mo sa bawat subject. Higher grades ang mas mabuting mastery. Makakapag-explain ang tutor ng detailed na explanation.',
-        tgl: 'Ang grades ay kumakatawan sa performance mo sa bawat subject. Higher grades ang mas mabuting mastery. Makakapag-explain ang tutor ng detailed explanation.'
+        en: 'We no longer track numeric grades. Your tutor now writes session-based remarks about your progress instead — check the Progress tab.',
+        fil: 'Hindi na kami nagtatala ng numeric grades. Sa halip, sumusulat na ang tutor mo ng session-based remarks tungkol sa progress mo — tingnan ang Progress tab.',
+        tgl: 'Hindi na namin tinatrack ang numeric grades. Sa halip, gumagawa na ang tutor mo ng session-based remarks about your progress — check mo ang Progress tab.'
       }
     },
     {
@@ -318,9 +319,9 @@ const AIResponseDatasets = {
         tgl: 'Kailan na-update ang grades?'
       },
       expectedReply: {
-        en: 'Grades are typically updated after each assessment or lesson completion. Check your dashboard regularly for the latest updates.',
-        fil: 'Karaniwang na-update ang grades after each assessment o lesson completion. Regular na tingnan ang dashboard para sa latest updates.',
-        tgl: 'Karaniwang na-update ang grades after each assessment o lesson completion. Regular na tingnan ang dashboard para sa latest updates.'
+        en: 'We no longer track numeric grades. Remarks are typically posted after each session — check your dashboard\'s Progress tab regularly.',
+        fil: 'Hindi na kami nagtatala ng numeric grades. Karaniwang naipo-post ang remarks after each session — regular na tingnan ang Progress tab ng dashboard mo.',
+        tgl: 'Hindi na namin tinatrack ang numeric grades. Karaniwang naka-post ang remarks after each session — check mo regularly ang Progress tab ng dashboard mo.'
       }
     },
     // Schedule
@@ -624,9 +625,9 @@ const AIResponseDatasets = {
         tgl: 'Paano ko gamitin ang dashboard?'
       },
       expectedReply: {
-        en: 'The dashboard has sections for Grades, Schedule, Payments, Materials, and Announcements. Each section shows different information relevant to your learning.',
-        fil: 'Ang dashboard ay may sections para sa Grades, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.',
-        tgl: 'Ang dashboard ay may sections para sa Grades, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.'
+        en: 'The dashboard has sections for Progress, Schedule, Payments, Materials, and Announcements. Each section shows different information relevant to your learning.',
+        fil: 'Ang dashboard ay may sections para sa Progress, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.',
+        tgl: 'Ang dashboard ay may sections para sa Progress, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.'
       }
     },
     // Login email verification code (OTP) — sent after the CAPTCHA.
@@ -760,6 +761,8 @@ const AIResponseDatasets = {
         tgl: 'Buksan ang Schedule section ng dashboard para makita ang lahat ng tutoring sessions na may student names, dates, times, at subjects.'
       }
     },
+    // Grading was replaced by Student Remarks (2026-09-30) — a tutor now publishes
+    // session-based observations instead of a numeric score.
     {
       id: 'T004',
       role: 'tutor',
@@ -770,9 +773,9 @@ const AIResponseDatasets = {
         tgl: 'Paano ako mag-input ng student grades?'
       },
       expectedReply: {
-        en: 'Go to Grades section in your dashboard, select the student, add the grade/score, subject, and date, then save.',
-        fil: 'Pumunta sa Grades section ng dashboard, piliin ang student, magdagdag ng grade/score, subject, at date, tapos i-save.',
-        tgl: 'Pumunta sa Grades section ng dashboard, piliin ang student, magdagdag ng grade/score, subject, at date, tapos i-save.'
+        en: 'We no longer use numeric grades. Go to the Student Remarks tab in your dashboard, select the student, and publish a session-based remark instead.',
+        fil: 'Hindi na kami gumagamit ng numeric grades. Pumunta sa Student Remarks tab ng dashboard mo, piliin ang student, at mag-publish ng session-based remark sa halip.',
+        tgl: 'Hindi na namin ginagamit ang numeric grades. Pumunta sa Student Remarks tab ng dashboard mo, piliin ang student, tapos mag-publish ng session-based remark sa halip.'
       }
     },
     {
@@ -1157,9 +1160,9 @@ const AIResponseDatasets = {
           tgl: 'Paano ko i-open ang dashboard?'
         },
         expectedReply: {
-          en: 'After logging in, you will be automatically directed to your dashboard. The dashboard shows your enrollment status, schedule, announcements, and grades. You can also access it by clicking "Dashboard" in the main menu.',
-          fil: 'Pagkatapos mag-login, awtomatikong dadalhin ka sa dashboard mo. Ipinakikita ng dashboard ang enrollment status, schedule, announcements, at grades mo. Maaari mo rin itong i-access sa pamamagitan ng pag-click sa "Dashboard" sa main menu.',
-          tgl: 'Pagkatapos mag-login, awtomatikong dadalhin ka sa dashboard mo. Ipinakikita ng dashboard ang enrollment status, schedule, announcements, at grades mo. Maaari mo rin itong i-access sa pamamagitan ng pag-click sa "Dashboard" sa main menu.'
+          en: 'After logging in, you will be automatically directed to your dashboard. The dashboard shows your enrollment status, schedule, announcements, and progress. You can also access it by clicking "Dashboard" in the main menu.',
+          fil: 'Pagkatapos mag-login, awtomatikong dadalhin ka sa dashboard mo. Ipinakikita ng dashboard ang enrollment status, schedule, announcements, at progress mo. Maaari mo rin itong i-access sa pamamagitan ng pag-click sa "Dashboard" sa main menu.',
+          tgl: 'Pagkatapos mag-login, awtomatikong dadalhin ka sa dashboard mo. Ipinakikita ng dashboard ang enrollment status, schedule, announcements, at progress mo. Maaari mo rin itong i-access sa pamamagitan ng pag-click sa "Dashboard" sa main menu.'
         }
       },
       {
@@ -1330,8 +1333,8 @@ const AIResponseDatasets = {
           'is it possible open dashboard', 'is it possible access dashboard'
         ],
         replies: {
-          en: 'After logging in, you will be automatically directed to your dashboard. The dashboard shows your enrollment status, schedule, announcements, and grades. You can access it anytime by clicking "Dashboard" in the main menu.',
-          fil: 'Pagkatapos mag-login, awtomatikong dadalhin ka sa dashboard mo. Ipinakikita ng dashboard ang enrollment status, schedule, announcements, at grades mo. Maaari mo itong i-access anumang oras sa pamamagitan ng pag-click sa "Dashboard" sa main menu.'
+          en: 'After logging in, you will be automatically directed to your dashboard. The dashboard shows your enrollment status, schedule, announcements, and progress. You can access it anytime by clicking "Dashboard" in the main menu.',
+          fil: 'Pagkatapos mag-login, awtomatikong dadalhin ka sa dashboard mo. Ipinakikita ng dashboard ang enrollment status, schedule, announcements, at progress mo. Maaari mo itong i-access anumang oras sa pamamagitan ng pag-click sa "Dashboard" sa main menu.'
         }
       },
       {
@@ -1656,8 +1659,8 @@ const AIResponseDatasets = {
         'ano ang maitutulong mo', 'paano mo ako matutulungan'
       ],
       replies: {
-        en: 'I can help you with enrollment, schedules, tutors, grades, and materials.',
-        fil: 'Matutulungan kitang malaman ang enrollment, schedule, tutor, grades, at materials.'
+        en: 'I can help you with enrollment, schedules, tutors, progress, and materials.',
+        fil: 'Matutulungan kitang malaman ang enrollment, schedule, tutor, progress, at materials.'
       }
     },
     {

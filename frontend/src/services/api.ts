@@ -957,35 +957,6 @@ export type TutorStudentCard = {
 
 export const uploadsBaseUrl =apiBase.replace(/\/api\/?$/, '');
 
-// Grades (tutor: add/list; student: my progress)
-export interface GradeItem {
-  _id: string;
-  student?: { _id: string; firstName: string; lastName: string; middleName?: string; gradeLevel?: string };
-  tutor?: { _id: string; firstName: string; lastName: string };
-  programCategory: string;
-  subjectItem: string;
-  score: number;
-  maxScore: number;
-  percentage?: number;
-  period: string;
-  remarks?: string;
-  createdAt?: string;
-}
-
-export const gradeService = {
-  addGrade: (data: { studentId: string; programCategory: string; subjectItem: string; score: number; maxScore?: number; period: string; remarks?: string }) =>
-    api.post<{ success: boolean; grade: GradeItem }>('/grades', data),
-  getGradesAsTutor: (studentId?: string) =>
-    api.get<{ success: boolean; grades: GradeItem[] }>('/grades', studentId ? { params: { studentId } } : undefined),
-  getGradesForStudent: (studentId: string) =>
-    api.get<{ success: boolean; grades: GradeItem[] }>(`/grades/student/${studentId}`),
-  /** studentId is required only for a parent viewing a specific child's progress. */
-  getMyProgress: (studentId?: string) => api.get<{ success: boolean; grades: GradeItem[] }>('/grades/my-progress', { params: studentId ? { studentId } : {} }),
-  updateGrade: (id: string, data: { score?: number; maxScore?: number; period?: string; remarks?: string }) =>
-    api.put<{ success: boolean; grade: GradeItem }>(`/grades/${id}`, data),
-  deleteGrade: (id: string) => api.delete(`/grades/${id}`),
-};
-
 // Student Remarks — replaces the grading workflow (tutor writes; parent/student view-only;
 // admin approves remarks that include an attachment before they're parent-visible).
 export interface RemarkRatings {

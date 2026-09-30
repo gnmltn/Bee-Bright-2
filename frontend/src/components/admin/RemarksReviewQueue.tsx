@@ -8,6 +8,7 @@ import FilePreview from "@/components/enrollment/FilePreview";
 import { toast } from "sonner";
 import { remarkService, type RemarkItem } from "@/services/api";
 import { notifyBadgesChanged } from "@/lib/navBadges";
+import { REALTIME_EVENTS } from "@/lib/realtimeBridge";
 
 const TEMPLATE_LABELS: Record<string, string> = {
   toddler_observation: "Toddler Observation Note Card",
@@ -48,6 +49,22 @@ export function RemarksReviewQueue() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  // Real-time push (Socket.io) — this queue previously had NO live update path at all
+  // ("bug (19).pdf" Group AX): a tutor submitting a remark only ever showed up here after
+  // switching tabs or a manual refresh. `load` is stateless (no closed-over component
+  // state), so a `[]`-dep listener is safe here — no stale-closure risk like the parent
+  // dashboard's own fetchers had (Group AW).
+  useEffect(() => {
+    const onRemarkNew = () => { load(); toast.success("New remark submitted for review"); };
+    const onReconnectCatchUp = () => { load(); };
+    window.addEventListener(REALTIME_EVENTS.REMARK_NEW, onRemarkNew);
+    window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    return () => {
+      window.removeEventListener(REALTIME_EVENTS.REMARK_NEW, onRemarkNew);
+      window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    };
   }, []);
 
   useEffect(() => {

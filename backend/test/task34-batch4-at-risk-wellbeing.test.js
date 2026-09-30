@@ -12,8 +12,6 @@ const assert = require('node:assert/strict');
 
 const AuditLog = require('../models/AuditLog');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
-const User = require('../models/User');
 const {
   tryClassifierShortcut,
   CLASSIFIER_INTENT_HANDLERS,
@@ -32,16 +30,6 @@ function stubFetch(intent, confidence) {
   return () => { global.fetch = orig; };
 }
 
-function stubFind(model, rows) {
-  const orig = model.find;
-  const chain = {
-    populate() { return chain; }, sort() { return chain; }, limit() { return chain; },
-    select() { return chain; }, lean() { return Promise.resolve(rows); },
-  };
-  model.find = () => chain;
-  return () => { model.find = orig; };
-}
-
 // Schedule.find({$or:[{tutor:tutorId},{tutors:tutorId}]}) — different tutors, different rosters.
 function stubScheduleByTutor(rosterByTutor) {
   const orig = Schedule.find;
@@ -52,24 +40,6 @@ function stubScheduleByTutor(rosterByTutor) {
     return chain;
   };
   return () => { Schedule.find = orig; };
-}
-
-// Grade.find({tutor, student}) — different (tutor,student) pairs, different grade sets.
-function stubGradesByTutorStudent(gradesByKey) {
-  const orig = Grade.find;
-  Grade.find = (query) => {
-    if (query && Object.keys(query).length === 0) {
-      // getAdminAtRiskStudentsReply's Grade.find({}) — all grades, flattened.
-      const all = Object.values(gradesByKey).flat();
-      const chain = { select() { return chain; }, lean() { return Promise.resolve(all); } };
-      return chain;
-    }
-    const key = `${query.tutor}:${query.student}`;
-    const rows = gradesByKey[key] || [];
-    const chain = { lean() { return Promise.resolve(rows); } };
-    return chain;
-  };
-  return () => { Grade.find = orig; };
 }
 
 const tutorA = { _id: 'tutorA', role: 'tutor' };
@@ -91,52 +61,41 @@ test('Batch 4: every wired intent is in the dispatch map, distress family stays 
   }
 });
 
-// ── Tutor at_risk: own-students-only, real cross-tutor leakage proof ───────────────
+// ── Tutor at_risk: grades were fully retired in favor of Student Remarks
+// (2026-09-30) — there is no numeric data source left to flag anyone from, so
+// buildTutorAtRiskContext now always gives the honest "no data" answer. These tests
+// confirm that degradation is graceful (no crash, no leaked cross-tutor names) rather
+// than testing threshold logic that no longer exists.
 test('CRITICAL: buildTutorAtRiskContext never surfaces another tutor\'s student, even named explicitly', async () => {
   const restoreSched = stubScheduleByTutor({
     tutorA: [{ student: alice, students: [] }],
     tutorB: [{ student: bianca, students: [] }],
   });
-  const restoreGrade = stubGradesByTutorStudent({
-    'tutorA:studentA1': [{ score: 60, maxScore: 100 }],
-    'tutorB:studentB1': [{ score: 40, maxScore: 100 }],
-  });
   try {
-    // Bianca isn't tutorA's student, so resolveNamedPerson can't resolve her — same as
-    // "no name given" (this is the same collapsing behavior buildTutorStudentNotesContext
-    // has). The core invariant: Bianca's 40% never appears, and only tutorA's own roster
-    // (Alice) is ever surfaced — never a wrong-tutor's data.
+    // Bianca isn't tutorA's student, so resolveNamedPerson can't resolve her — falls
+    // through to the generic "no data" reply. The core invariant: Bianca's name never
+    // appears in tutorA's reply.
     const ctx = await buildTutorAtRiskContext('tutorA', 'is Bianca Santos at risk?');
-    assert.doesNotMatch(ctx.fallbackReply, /40%|Bianca/);
+    assert.doesNotMatch(ctx.fallbackReply, /Bianca/);
+    assert.match(ctx.fallbackReply, /no longer tracked|data-based way/i);
+  } finally { restoreSched(); }
+});
+
+test('buildTutorAtRiskContext: own named student gets the honest "grades not tracked" answer', async () => {
+  const restoreSched = stubScheduleByTutor({ tutorA: [{ student: alice, students: [] }] });
+  try {
+    const ctx = await buildTutorAtRiskContext('tutorA', 'is Alice Reyes at risk?');
     assert.match(ctx.fallbackReply, /Alice Reyes/);
-  } finally { restoreSched(); restoreGrade(); }
+    assert.match(ctx.fallbackReply, /no longer tracked|data-based way/i);
+  } finally { restoreSched(); }
 });
 
-test('buildTutorAtRiskContext: own named student below threshold is correctly flagged', async () => {
+test('buildTutorAtRiskContext: no name given -> honest "no data" answer, no crash', async () => {
   const restoreSched = stubScheduleByTutor({ tutorA: [{ student: alice, students: [] }] });
-  const restoreGrade = stubGradesByTutorStudent({ 'tutorA:studentA1': [{ score: 60, maxScore: 100 }] });
-  try {
-    const ctx = await buildTutorAtRiskContext('tutorA', 'is Alice Reyes at risk?');
-    assert.match(ctx.fallbackReply, /Alice Reyes.*60%.*below the 75% mark/);
-  } finally { restoreSched(); restoreGrade(); }
-});
-
-test('buildTutorAtRiskContext: own named student above threshold is correctly NOT flagged', async () => {
-  const restoreSched = stubScheduleByTutor({ tutorA: [{ student: alice, students: [] }] });
-  const restoreGrade = stubGradesByTutorStudent({ 'tutorA:studentA1': [{ score: 90, maxScore: 100 }] });
-  try {
-    const ctx = await buildTutorAtRiskContext('tutorA', 'is Alice Reyes at risk?');
-    assert.match(ctx.fallbackReply, /90%.*at or above/);
-  } finally { restoreSched(); restoreGrade(); }
-});
-
-test('buildTutorAtRiskContext: no name given -> summarises only this tutor\'s own at-risk students', async () => {
-  const restoreSched = stubScheduleByTutor({ tutorA: [{ student: alice, students: [] }] });
-  const restoreGrade = stubGradesByTutorStudent({ 'tutorA:studentA1': [{ score: 50, maxScore: 100 }] });
   try {
     const ctx = await buildTutorAtRiskContext('tutorA', 'which of my students are at risk?');
-    assert.match(ctx.fallbackReply, /Alice Reyes \(50%\)/);
-  } finally { restoreSched(); restoreGrade(); }
+    assert.match(ctx.fallbackReply, /no longer tracked|data-based way/i);
+  } finally { restoreSched(); }
 });
 
 // ── Explicit denial: student_privacy / at_risk_other ────────────────────────────────
@@ -156,34 +115,25 @@ test('classifier shortcut: student_privacy and at_risk_other both reach the deni
   }
 });
 
-// ── Admin at_risk: system-wide by design ────────────────────────────────────────────
-test('getAdminAtRiskStudentsReply: admin gets a real system-wide list; non-admin denied', async () => {
-  const restoreGrade = stubGradesByTutorStudent({
-    'tutorA:studentA1': [{ student: 'studentA1', score: 60, maxScore: 100 }],
-    'tutorB:studentB1': [{ student: 'studentB1', score: 90, maxScore: 100 }],
-  });
-  const restoreUsers = stubFind(User, [{ _id: 'studentA1', firstName: 'Alice', lastName: 'Reyes' }]);
-  try {
-    const adminReply = await getAdminAtRiskStudentsReply(admin, 'which students are at risk', 'english', { skipKeywordCheck: true });
-    assert.match(adminReply, /Alice Reyes/);
-    assert.doesNotMatch(adminReply, /Bianca/);
+// ── Admin at_risk: grades retired 2026-09-30 — always the honest "no data" answer,
+// role-gate (admin-only) still enforced ─────────────────────────────────────────────
+test('getAdminAtRiskStudentsReply: admin gets the honest "no data" answer; non-admin/tutor denied', async () => {
+  const adminReply = await getAdminAtRiskStudentsReply(admin, 'which students are at risk', 'english', { skipKeywordCheck: true });
+  assert.match(adminReply, /no longer tracked|data-based way/i);
 
-    const tutorReply = await getAdminAtRiskStudentsReply(tutorA, 'which students are at risk', 'english', { skipKeywordCheck: true });
-    assert.doesNotMatch(tutorReply, /Alice Reyes/);
-  } finally { restoreGrade(); restoreUsers(); }
+  const tutorReply = await getAdminAtRiskStudentsReply(tutorA, 'which students are at risk', 'english', { skipKeywordCheck: true });
+  assert.match(tutorReply, /not yet available in the system/i);
 });
 
 test('classifier shortcut: at_risk_students / at_risk_system_wide reach the admin handler, super_admin works too', async () => {
-  const restoreGrade = stubGradesByTutorStudent({});
   const superAdmin = { _id: 'sa-1', role: 'super_admin' };
   for (const intent of ['at_risk_students', 'at_risk_system_wide']) {
     const fetchRestore = stubFetch(intent, 0.9);
     try {
       const out = await tryClassifierShortcut({ user: superAdmin, body: {}, headers: {} }, 'show me at-risk students', []);
-      assert.match(out, /No students are currently below/i);
+      assert.match(out, /no longer tracked|data-based way/i);
     } finally { fetchRestore(); }
   }
-  restoreGrade();
 });
 
 // ── Wellbeing check: never assesses, always redirects to a human ───────────────────

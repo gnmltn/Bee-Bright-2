@@ -40,7 +40,6 @@ const scheduleRoutes = require('./routes/scheduleRoutes');
 const weeklyScheduleRoutes = require('./routes/weeklyScheduleRoutes');
 const sessionEnrollmentRoutes = require('./routes/sessionEnrollmentRoutes');
 const aiRoutes = require('./routes/aiRoutes');
-const gradeRoutes = require('./routes/gradeRoutes');
 const remarkRoutes = require('./routes/remarkRoutes');
 const announcementRoutes = require('./routes/announcementRoutes');
 const auditRoutes = require('./routes/auditRoutes');
@@ -56,6 +55,8 @@ const { ensureAssessmentTemplates } = require('./utils/ensureAssessmentTemplates
 const { backfillPermanentStudentIds } = require('./utils/studentIdentity');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
 const { warmUpOllama } = require('./utils/ollamaWarmup');
+const { isOriginAllowed } = require('./config/corsOrigins');
+const { initRealtime } = require('./utils/realtime');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -69,24 +70,7 @@ app.use(helmet({
 // CRITICAL FIX: Proper CORS configuration
 app.use(cors({
   origin: function(origin, callback) {
-    // Allow requests with no origin (mobile apps, Postman, etc.)
-    if (!origin) return callback(null, true);
-    
-    // List of allowed origins
-    const allowedOrigins = new Set([
-      'http://localhost:3000',
-      'http://localhost:8080',
-      'http://localhost:5173', // Vite default
-      'http://localhost:5174',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:8080',
-      'http://127.0.0.1:5173',
-      'http://127.0.0.1:5174',
-      process.env.CLIENT_URL,
-      process.env.FRONTEND_URL
-    ].filter(Boolean)); // Remove undefined values
-
-    if (allowedOrigins.has(origin)) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
       console.warn('⚠️ CORS blocked origin:', origin);
@@ -170,7 +154,6 @@ app.use('/api/schedules', scheduleRoutes);
 app.use('/api/admin/weekly-schedules', weeklyScheduleRoutes);
 app.use('/api/sessions', sessionEnrollmentRoutes);
 app.use('/api/ai', aiRoutes);
-app.use('/api/grades', gradeRoutes);
 app.use('/api/remarks', remarkRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/audit-logs', auditRoutes);
@@ -227,6 +210,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   // Fire-and-forget; never blocks startup or throws.
   warmUpOllama();
 });
+
+// Real-time push (Socket.io) — Admin, Parent, and Tutor dashboards — attached to this
+// SAME http.Server, not a separate port.
+initRealtime(server);
+console.log('🔌 Realtime (Socket.io) attached — Admin/Parent/Tutor');
 
 server.on('error', (error) => {
   if (error && error.code === 'EADDRINUSE') {

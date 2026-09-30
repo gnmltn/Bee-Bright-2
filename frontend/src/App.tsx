@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from
 import { AuthProvider } from "@/contexts/AuthContext";
 import { SelectedChildProvider } from "@/contexts/SelectedChildContext";
 import { useAuth } from "@/hooks/useAuth";
+import { useRealtimeConnection } from "@/hooks/useRealtimeConnection";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -92,6 +93,14 @@ function MaintenanceRouteGuard() {
   return null;
 }
 
+/** Mounted once, above the router, so the ONE Socket.io connection survives navigation
+ *  between routes (see useRealtimeConnection.ts's own comment for why that matters). */
+function RealtimeConnector() {
+  const { user } = useAuth();
+  useRealtimeConnection(user);
+  return null;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider>
@@ -100,6 +109,7 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
+          <RealtimeConnector />
           <BrowserRouter>
             <MaintenanceRouteGuard />
             <SessionInactivityGuard />

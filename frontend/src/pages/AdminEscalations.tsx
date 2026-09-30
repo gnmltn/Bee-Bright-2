@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { escalationService, type AdminEscalation, type EscalationStatus } from '@/services/api';
 import { categoryLabel, STATUS_LABEL, STATUS_TONE, formatWhen, notifyRequestsChanged } from '@/lib/escalations';
+import { REALTIME_EVENTS } from '@/lib/realtimeBridge';
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'unresolved', label: 'Open' },          // open + being handled — default
@@ -69,6 +70,19 @@ export default function AdminEscalations() {
   }, [status, reason, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Real-time push — a new support request should appear without a manual refresh.
+  // Reconnect after a drop also just re-runs `load()` (no separate toast).
+  useEffect(() => {
+    const onRequestNew = () => { load(); toast({ title: 'New support request', description: 'The list has been refreshed.' }); };
+    const onReconnectCatchUp = () => { load(); };
+    window.addEventListener(REALTIME_EVENTS.REQUEST_NEW, onRequestNew);
+    window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    return () => {
+      window.removeEventListener(REALTIME_EVENTS.REQUEST_NEW, onRequestNew);
+      window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
+    };
+  }, [load, toast]);
 
   // Safety flags are already sorted to the top by the API; keep that order.
   const ordered = useMemo(() => rows, [rows]);

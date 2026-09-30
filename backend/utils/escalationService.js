@@ -1,5 +1,6 @@
 const Escalation = require('../models/Escalation');
 const { logAudit, getClientIp, getUserAgent } = require('./auditService');
+const { emitToAdmins } = require('./realtime');
 
 const MAX_SNIPPET_LEN = 1000;
 const MAX_TRIGGER_LEN = 300;
@@ -48,6 +49,8 @@ async function createEscalation({ req, user = null, source, category, trigger = 
       description: `Escalation opened (${source} / ${category}, ${severity})`,
       metadata: { escalationId: String(doc._id), source, category, severity },
     });
+
+    emitToAdmins('request:new', { escalationId: String(doc._id), source, category, severity });
 
     return doc;
   } catch (err) {

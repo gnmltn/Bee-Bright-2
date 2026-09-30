@@ -5,7 +5,7 @@
  *
  *   parent  → their enrollments, payments, and each child's student account + everything
  *             scheduled / written about that child
- *   student → their schedules, remarks, grades, emergency reschedules, enrollment link
+ *   student → their schedules, remarks, emergency reschedules, enrollment link
  *   tutor   → their sessions, availability records; removed from shared playgroup rosters
  *
  * Audit logs and the UserArchiveRecord history are kept on purpose (they carry their own
@@ -18,7 +18,6 @@ const User = require('../models/User');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
-const Grade = require('../models/Grade');
 const Remark = require('../models/Remark');
 const Announcement = require('../models/Announcement');
 const EmergencyReschedule = require('../models/EmergencyReschedule');
@@ -27,13 +26,12 @@ const TutorUnavailability = require('../models/TutorUnavailability');
 const TrustedDevice = require('../models/TrustedDevice');
 const AdminEmailVerification = require('../models/AdminEmailVerification');
 
-/** Everything tied to child student accounts (their sessions, remarks, grades ...). */
+/** Everything tied to child student accounts (their sessions, remarks ...). */
 async function removeStudentData(studentIds, opts) {
   if (studentIds.length === 0) return;
   await Schedule.deleteMany({ student: { $in: studentIds } }, opts);
   await Schedule.updateMany({ students: { $in: studentIds } }, { $pull: { students: { $in: studentIds } } }, opts);
   await Remark.deleteMany({ student: { $in: studentIds } }, opts);
-  await Grade.deleteMany({ student: { $in: studentIds } }, opts);
   await EmergencyReschedule.deleteMany({ student: { $in: studentIds } }, opts);
   await Announcement.updateMany({ targetStudentIds: { $in: studentIds } }, { $pull: { targetStudentIds: { $in: studentIds } } }, opts);
   await TrustedDevice.deleteMany({ userId: { $in: studentIds } }, opts);
