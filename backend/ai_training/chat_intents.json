@@ -17,7 +17,7 @@
   },
   {
     "intent": "location",
-    "reply": "Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.",
+    "reply": "Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.",
     "keywords": ["location", "address", "located", "barangay", "dagupan", "city", "visit", "map", "find", "get to"],
     "examples": [
       "where is bee bright located",

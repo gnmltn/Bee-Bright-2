@@ -65,7 +65,7 @@ test('getDatasetCount reflects the additions (108)', () => {
 test('V004 keeps the real contact channels and now points to the Track Enrollment page', () => {
   const v4 = byId.V004.expectedReply.en;
   assert.match(v4, /beebrightph@gmail\.com/);
-  assert.match(v4, /Barangay Pantal/);
+  assert.match(v4, /Teo-Tinay Building/);
   assert.match(v4, /Track Enrollment page/i);
 });
 

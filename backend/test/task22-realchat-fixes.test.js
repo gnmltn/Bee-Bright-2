@@ -63,7 +63,7 @@ test('22a e2e: "enrollement" resolves the same as "enrollment"', async () => {
 
 test('22a e2e: "saan malolocate ang beebright" resolves to location', async () => {
   const reply = await ask('pwede mo ba akong tulongan if saan malolocate ang beebright');
-  assert.match(reply, /Barangay Pantal|Dagupan/i);
+  assert.match(reply, /Teo-Tinay Building|Dagupan/i);
 });
 
 // ── 22b + 22e — comparison ───────────────────────────────────────────────
@@ -127,9 +127,9 @@ test('22c e2e: confirmation follow-ups re-serve the previous answer, consistentl
   }
   const locReply = await ask('totoo ba na dyan yan?', [
     { role: 'user', content: 'where is bee bright located' },
-    { role: 'assistant', content: 'Barangay Pantal, Dagupan City.' },
+    { role: 'assistant', content: 'Teo-Tinay Building, Tapuac, Dagupan City.' },
   ]);
-  assert.match(locReply, /Barangay Pantal|Dagupan/i);
+  assert.match(locReply, /Teo-Tinay Building|Dagupan/i);
 });
 
 // ── 22d — fallback mentions programs ─────────────────────────────────────

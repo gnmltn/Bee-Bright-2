@@ -61,7 +61,7 @@ test('24b: a programs question retrieves the real 3-program reference entry', ()
 
 test('24b: a location question retrieves the location entry, not the whole dataset', () => {
   const ref = buildPhiReferenceContext('saan matatagpuan ang bee bright center', null);
-  assert.match(ref, /Barangay Pantal|Dagupan/i);
+  assert.match(ref, /Teo-Tinay Building|Dagupan/i);
   assert.ok(ref.split('\n\n').length <= 4, 'capped at 4 entries');
 });
 

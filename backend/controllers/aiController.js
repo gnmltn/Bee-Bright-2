@@ -3,6 +3,7 @@ const fs = require('fs');
 const { detect } = require('franc');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
+const { computeRemainingBalance } = require('../utils/remainingBalance');
 const Schedule = require('../models/Schedule');
 const User = require('../models/User');
 const Pricing = require('../models/Pricing');
@@ -278,9 +279,9 @@ function getIntentLocalizedReply(intent, profile) {
     ),
     contact: pickByLanguage(
       profile,
-      'You can contact Bee Bright through the admin office using the website contact details. For tutor-related concerns, open your dashboard Schedule section first, then ask admin if you need direct contact assistance.',
-      'Maaari mong kontakin ang Bee Bright sa admin office gamit ang contact details sa website. Para sa concerns tungkol sa tutor, buksan muna ang Schedule section ng dashboard mo, pagkatapos ay makipag-ugnayan sa admin kung kailangan mo ng direktang contact assistance.',
-      'Pwede mong i-contact ang Bee Bright sa admin office gamit ang website contact details. Para sa tutor concerns, buksan muna ang Schedule section ng dashboard mo, then ask admin kung kailangan mo ng direct contact assistance.'
+      'You can email Bee Bright at beebrightph@gmail.com, message the official Bee Bright social media page, or visit the center at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400. The same email is shown on the Track Enrollment page. For tutor-related concerns, open your dashboard Schedule section first, then ask admin if you need direct contact assistance.',
+      'Maaari kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400. Nakikita rin ang parehong email sa Track Enrollment page. Para sa concerns tungkol sa tutor, buksan muna ang Schedule section ng dashboard mo, pagkatapos ay makipag-ugnayan sa admin kung kailangan mo ng direktang contact assistance.',
+      'Puwede kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400. Nasa Track Enrollment page rin ang parehong email. Para sa tutor concerns, buksan muna ang Schedule section ng dashboard mo, then ask admin kung kailangan mo ng direct assistance.'
     )
   };
 
@@ -306,11 +307,11 @@ function localizeKnownReply(reply, profile) {
       'Makikita ang mga anunsyo sa Announcements section ng iyong dashboard.',
       'Makikita mo ang announcements sa Announcements section ng dashboard mo.'
     ),
-    'Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.': pickByLanguage(
+    'Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.': pickByLanguage(
       profile,
       text,
-      'Ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.',
-      'Ang Bee Bright ay located sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.'
+      'Ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
+      'Ang Bee Bright ay located sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.'
     ),
     'Sorry, this information is not yet available in the system.': pickByLanguage(
       profile,
@@ -531,9 +532,9 @@ function isOnlineClassQuestion(normalized) {
 function getClassFormatReply(languageProfile = 'english') {
   return pickByLanguage(
     languageProfile,
-    'Bee Bright classes are onsite / face-to-face only — there are no online classes. Sessions are held at the tutorial center in Barangay Pantal, Dagupan City, Pangasinan.',
-    'Onsite / face-to-face lang po ang klase sa Bee Bright — wala kaming online classes. Ginagawa ang mga session sa tutorial center sa Barangay Pantal, Dagupan City, Pangasinan.',
-    'Onsite / face-to-face lang po kami sa Bee Bright — wala kaming online classes. Nasa tutorial center sa Barangay Pantal, Dagupan City, Pangasinan ang mga session.'
+    'Bee Bright classes are onsite / face-to-face only — there are no online classes. Sessions are held at the tutorial center in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400.',
+    'Onsite / face-to-face lang po ang klase sa Bee Bright — wala kaming online classes. Ginagawa ang mga session sa tutorial center sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400.',
+    'Onsite / face-to-face lang po kami sa Bee Bright — wala kaming online classes. Nasa tutorial center sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400 ang mga session.'
   );
 }
 
@@ -2111,7 +2112,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
   }
 
   if (isLocationQuestion(normalized)) {
-    return localizeKnownReply('Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.', effectiveLanguageProfile);
+    return localizeKnownReply('Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.', effectiveLanguageProfile);
   }
 
   if (isEnrollmentStepsQuestion(normalized)) {
@@ -2135,7 +2136,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
   }
 
   if (classifierResult?.intent === 'location') {
-    return localizeKnownReply('Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.', effectiveLanguageProfile);
+    return localizeKnownReply('Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.', effectiveLanguageProfile);
   }
 
   if (classifierResult?.intent === 'enrollment') {
@@ -2181,7 +2182,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
     return localizeKnownReply('Announcements are in the Announcements section of your dashboard.', effectiveLanguageProfile);
   }
   if (inferredTopic === 'location') {
-    return localizeKnownReply('Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.', effectiveLanguageProfile);
+    return localizeKnownReply('Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.', effectiveLanguageProfile);
   }
   if (inferredTopic === 'grades') {
     return pickByLanguage(
@@ -2856,19 +2857,46 @@ function formatUserWithContact(u) {
   return `${base} - Contact: ${phone}`;
 }
 
-function isRoleBasedContactDetailsQuery(normalized = '') {
+function isRoleBasedContactDetailsQuery(normalized = '', message = '') {
   if (!normalized) {
     return false;
   }
 
   const asksContactDetails = /(contact\s*details?|contact\s*info(?:rmation)?|phone\s*(number)?|mobile\s*(number)?|telephone|tel\.?|email\s*address|email)/.test(normalized);
-  const asksUserTarget = /(user|users|student|students|tutor|tutors|teacher|teachers|admin|super\s*admin|all users|every user|specific|named|for|of|about|si|kay|my tutor|that tutor|this tutor|her|him|them|siya|sya|niya|nya)/.test(normalized);
+  if (!asksContactDetails) {
+    return false;
+  }
 
-  return asksContactDetails && asksUserTarget;
+  // "contact details of Bee Bright" / "what is bee bright's email" is a question about the
+  // CENTER itself (answered by the V004 dataset entry), never a lookup of a specific user's
+  // contact info — this admin/role feature must not intercept it. Live-testing found this
+  // swallowing those questions into a generic "unavailable" / "please specify a name" reply
+  // for every role, because the old asksUserTarget check below matched on bare connector
+  // words ("for", "of", "about") that appear in almost any sentence, "bee bright" included.
+  if (/\bbee\s*bright\b/.test(normalized)) {
+    return false;
+  }
+
+  const asksRoleWord = /\b(user|users|student|students|tutor|tutors|teacher|teachers|admin|super\s*admin|all users|every user|si|kay|my tutor|that tutor|this tutor|her|him|them|siya|sya|niya|nya)\b/.test(normalized);
+  if (asksRoleWord) {
+    return true;
+  }
+
+  // No role word and no "bee bright" mention — only still count this as a specific-person
+  // lookup ("contact details of Juan dela Cruz") when a real name can actually be pulled out
+  // of the sentence. A bare "for"/"of"/"about" with nothing nameable after it is not enough
+  // on its own (that bare-connector-word match was the root of the Bee-Bright-itself bug).
+  return Boolean(extractSpecificContactTargetName(message, normalized));
 }
 
 function isGenericContactDetailsRequest(normalized = '') {
   if (!normalized) {
+    return false;
+  }
+  // Same Bee-Bright-itself exclusion as isRoleBasedContactDetailsQuery — a brand-new
+  // question about the center's own contact info must never be treated as a follow-up
+  // asking for a previously-mentioned person's contact info.
+  if (/\bbee\s*bright\b/.test(normalized)) {
     return false;
   }
   return /(contact\s*details?|contact\s*info(?:rmation)?|phone\s*(number)?|mobile\s*(number)?|telephone|tel\.?|email\s*address|email)/.test(normalized);
@@ -2967,7 +2995,7 @@ async function getRoleBasedContactDetailsReply(user, message, languageProfile = 
   const hasHistoryTarget = Boolean(historyRequestedName);
   const isGenericFollowUp = isGenericContactDetailsRequest(normalized) && hasHistoryTarget;
 
-  if (!isRoleBasedContactDetailsQuery(normalized) && !isGenericFollowUp) {
+  if (!isRoleBasedContactDetailsQuery(normalized, message) && !isGenericFollowUp) {
     return null;
   }
 
@@ -3089,14 +3117,14 @@ async function getRoleBasedContactDetailsReply(user, message, languageProfile = 
 }
 
 async function getStudentTutorContactReply(user, languageProfile = 'english') {
-  const centerLocation = 'Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.';
+  const centerLocation = 'Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.';
 
   if (!user || user.role !== 'student') {
     return pickByLanguage(
       languageProfile,
       `Please check your assigned tutor details in your dashboard. If you need direct assistance, ${centerLocation}`,
-      `Pakitingnan ang assigned tutor details mo sa dashboard. Kung kailangan mo ng direktang tulong, ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.`,
-      `Paki-check ang assigned tutor details mo sa dashboard. Kung kailangan mo ng direct assistance, ang Bee Bright ay located sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.`
+      `Pakitingnan ang assigned tutor details mo sa dashboard. Kung kailangan mo ng direktang tulong, ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.`,
+      `Paki-check ang assigned tutor details mo sa dashboard. Kung kailangan mo ng direct assistance, ang Bee Bright ay located sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.`
     );
   }
 
@@ -3120,8 +3148,8 @@ async function getStudentTutorContactReply(user, languageProfile = 'english') {
     return pickByLanguage(
       languageProfile,
       `I could not find an assigned tutor contact yet. ${centerLocation}`,
-      'Wala pa akong makitang assigned tutor contact. Ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.',
-      'Wala pa akong makitang assigned tutor contact. Ang Bee Bright ay located sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.'
+      'Wala pa akong makitang assigned tutor contact. Ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
+      'Wala pa akong makitang assigned tutor contact. Ang Bee Bright ay located sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.'
     );
   }
 
@@ -3138,16 +3166,16 @@ async function getStudentTutorContactReply(user, languageProfile = 'english') {
     return pickByLanguage(
       languageProfile,
       `Your tutor is ${tutorName}, but direct contact details are not available in the system yet. ${centerLocation}`,
-      `Si ${tutorName} ang tutor mo, pero wala pang direct contact details sa system. Ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.`,
-      `${tutorName} ang tutor mo, pero wala pang direct contact details sa system. Ang Bee Bright ay located sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.`
+      `Si ${tutorName} ang tutor mo, pero wala pang direct contact details sa system. Ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.`,
+      `${tutorName} ang tutor mo, pero wala pang direct contact details sa system. Ang Bee Bright ay located sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.`
     );
   }
 
   return pickByLanguage(
     languageProfile,
     `Your tutor contact is ${tutorName} - ${contactParts.join(' | ')}. If needed, ${centerLocation}`,
-    `Ang contact ng tutor mo ay si ${tutorName} - ${contactParts.join(' | ')}. Kung kailangan mo ng direktang tulong, ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.`,
-    `Ang contact ng tutor mo ay si ${tutorName} - ${contactParts.join(' | ')}. Kung kailangan mo ng direct assistance, ang Bee Bright ay located sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.`
+    `Ang contact ng tutor mo ay si ${tutorName} - ${contactParts.join(' | ')}. Kung kailangan mo ng direktang tulong, ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.`,
+    `Ang contact ng tutor mo ay si ${tutorName} - ${contactParts.join(' | ')}. Kung kailangan mo ng direct assistance, ang Bee Bright ay located sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.`
   );
 }
 
@@ -3744,9 +3772,9 @@ async function getTutorContactReply(user, message, languageProfile = 'english', 
 
   return pickByLanguage(
     languageProfile,
-    'Please check your assigned tutor details in your dashboard. You may also visit Bee Bright at Barangay Pantal, Dagupan City, Pangasinan, Philippines for direct assistance.',
-    'Pakitingnan ang assigned tutor details mo sa dashboard. Maaari ka ring bumisita sa Bee Bright sa Barangay Pantal, Dagupan City, Pangasinan, Philippines para sa direktang tulong.',
-    'Paki-check ang assigned tutor details mo sa dashboard. Pwede ka ring bumisita sa Bee Bright sa Barangay Pantal, Dagupan City, Pangasinan, Philippines para sa direct assistance.'
+    'Please check your assigned tutor details in your dashboard. You may also visit Bee Bright at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines for direct assistance.',
+    'Pakitingnan ang assigned tutor details mo sa dashboard. Maaari ka ring bumisita sa Bee Bright sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines para sa direktang tulong.',
+    'Paki-check ang assigned tutor details mo sa dashboard. Pwede ka ring bumisita sa Bee Bright sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines para sa direct assistance.'
   );
 }
 
@@ -4751,7 +4779,11 @@ function detectGroundedTopic(user, message) {
     // scoped to the parent's own child regardless of how the topic was detected. Gives a
     // named-child "contact the tutor" question a real answer even before any classifier
     // retraining happens (see the Task 36 memory note on the confidence-drop finding).
-    if (/\btutor\b/.test(normalized) && /(contact|reach|email|phone|number|message|talk to|get in touch|kontak)/.test(normalized)) {
+    // Batch 2 fix: also catches "who is the tutor" / "sino ang tutor" phrasing, which
+    // used to miss this check entirely (no contact-verb) and fall through to a generic
+    // "not available" + escalation reply even though the same data buildParentTutorContactContext
+    // returns for "how can I contact the tutor" was available the whole time.
+    if (/\btutor\b/.test(normalized) && /(contact|reach|email|phone|number|message|talk to|get in touch|kontak|who('?s| is| are)|sino)/.test(normalized)) {
       return 'tutor_contact';
     }
 
@@ -5342,18 +5374,35 @@ async function buildParentPaymentContext(parentId, message) {
       .select('referenceNumber status paymentMethod paymentType amountDue amountPaid amount rejectionReason submittedAt verifiedAt')
       .lean();
     const latest = payments[0];
+    // Batch 2 fix: "remaining balance" was being answered with the latest payment's
+    // amountDue/status — which for a verified 50% down payment just echoes the down
+    // payment amount, not what's actually still owed. Use the same computeRemainingBalance
+    // utility the admin dashboard and the parent's Payments badge use, so this can never
+    // disagree with what the parent sees in their dashboard.
+    const { remaining, owed, underReview } = computeRemainingBalance(e, payments);
+    const balanceText = owed
+      ? `Remaining balance: ${formatCurrency(remaining)}, due after half of the booked sessions are completed`
+      : underReview
+        ? 'Remaining balance: already submitted, awaiting admin verification'
+        : 'Remaining balance: none — fully paid';
     blocks.push([
       `Child: ${childDisplayName(e)}`,
       `Enrollment reference: ${e.permanentStudentId || e.enrollmentId || 'Not available'}`,
       `Enrollment payment status: ${formatStatusLabel(e.paymentStatus)}`,
       `Total fee: ${formatCurrency(e.totalFee)}`,
+      balanceText,
       latest
         ? `Latest payment: ${latest.referenceNumber || 'no reference'} — ${formatStatusLabel(latest.status)}, ${formatStatusLabel(latest.paymentType)} payment, method ${formatStatusLabel(latest.paymentMethod)}, amount due ${formatCurrency(latest.amountDue != null ? latest.amountDue : latest.amount)}${latest.amountPaid != null ? `, amount paid ${formatCurrency(latest.amountPaid)}` : ''}`
         : 'Latest payment: no payment record yet',
       latest && latest.status === 'rejected' && latest.rejectionReason ? `Rejection reason: ${latest.rejectionReason}` : null,
     ].filter(Boolean).join('\n'));
+    const balanceSummary = owed
+      ? `remaining balance ${formatCurrency(remaining)}`
+      : underReview
+        ? 'remaining balance submitted, awaiting verification'
+        : 'no remaining balance';
     summaries.push(latest
-      ? `${childDisplayName(e)}: payment ${formatStatusLabel(latest.status)} (${formatCurrency(latest.amountDue != null ? latest.amountDue : latest.amount)})`
+      ? `${childDisplayName(e)}: payment ${formatStatusLabel(latest.status)} (${formatCurrency(latest.amountDue != null ? latest.amountDue : latest.amount)}), ${balanceSummary}`
       : `${childDisplayName(e)}: no payment submitted yet`);
   }
 
@@ -5472,7 +5521,7 @@ async function buildParentTutorContactContext(parentId, message) {
   }
 
   const childName = childDisplayName(matched);
-  const centerLocation = 'Bee Bright is located in Barangay Pantal, Dagupan City, Pangasinan, Philippines.';
+  const centerLocation = 'Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.';
 
   if (!matched.student) {
     return {

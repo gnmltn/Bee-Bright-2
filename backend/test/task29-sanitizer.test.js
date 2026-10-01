@@ -76,7 +76,7 @@ test('29a NEGATIVE: real "Academic Tutorial" phi answers pass through unchanged'
 test('29a NEGATIVE: normal answers that mention "the system" / "Bee Bright" in passing pass', () => {
   const ok = [
     'You can log in to the system using your email and password on the Login page. If you forgot it, use the Forgot Password link.',
-    'Bee Bright is located in Barangay Pantal, Dagupan City. The system will show your schedule once your enrollment is verified.',
+    'Bee Bright is located in Teo-Tinay Building, Tapuac, Dagupan City. The system will show your schedule once your enrollment is verified.',
     "I'm the Bee Bright assistant. You can check your grades in Dashboard → Academic Progress.",
     'To enroll, open the Enrollment page, fill out the form, and submit your payment proof. The admin then verifies it in the system.',
     'Our Academic Tutorial program is designed for pre-school through high school. It covers homework assistance and lesson advancement.',

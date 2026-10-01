@@ -90,7 +90,8 @@ const DOMAIN_KEYWORDS = {
     location_info: [
       'location', 'address', 'branch', 'contact number', 'contact info', 'operating hours',
       'oras', 'bukas', 'open', 'hours', 'about', 'what is beebright', 'what is bee bright',
-      'company', 'tutorial center',
+      'company', 'tutorial center', 'email', 'facebook', 'fb', 'messenger', 'social media',
+      'makontak', 'makontakin',
     ],
     class_format: [
       'onsite', 'on site', 'face to face', 'f2f', 'in person', 'personal', 'physical class',
@@ -140,6 +141,13 @@ const DOMAIN_KEYWORDS = {
     contact_tutor: [
       'contact tutor', 'message tutor', 'kausapin tutor', 'tutor ko', 'sino tutor',
       'tutor name',
+    ],
+    // The center's own contact info/location — distinct from contact_tutor above, which
+    // is about a specific assigned tutor. Anonymous/public messages are also scored
+    // against this bucket (normalizeAudience maps the default 'student' role to 'parent').
+    center_contact: [
+      'email', 'e-mail', 'facebook', 'fb', 'messenger', 'location', 'address', 'branch',
+      'contact number', 'contact info', 'operating hours', 'makontak', 'makontakin',
     ],
     ticket_status: [
       'status ng request', 'na-resolve', 'naresolve', 'ticket ko', 'sagot sa tinanong',

@@ -954,9 +954,9 @@ const AIResponseDatasets = {
         tgl: 'Nasaan ang Bee Bright?'
       },
       expectedReply: {
-        en: 'Bee Bright is located at Barangay Pantal, Dagupan City, Pangasinan, Philippines.',
-        fil: 'Ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.',
-        tgl: 'Ang Bee Bright ay matatagpuan sa Barangay Pantal, Dagupan City, Pangasinan, Philippines.'
+        en: 'Bee Bright is located at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
+        fil: 'Ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
+        tgl: 'Ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.'
       }
     },
     {
@@ -981,10 +981,19 @@ const AIResponseDatasets = {
         fil: 'Paano ko makontakin ang Bee Bright?',
         tgl: 'Paano ko makontakin ang Bee Bright?'
       },
+      // Keywords widen the dataset-match overlap score for short/one-word phrasings
+      // ("may fb ba kayo", "ano email niyo") that don't overlap much with the canonical
+      // query sentence above — live-testing found these falling through to the generic
+      // fallback instead of this entry.
+      keywords: [
+        'email', 'e-mail', 'facebook', 'fb', 'fb page', 'social media', 'messenger',
+        'contact number', 'contact details', 'contact info', 'phone number', 'makontak',
+        'makontakin', 'paano kontakin', 'paano makontak', 'paano mag-email',
+      ],
       expectedReply: {
-        en: 'You can email Bee Bright at beebrightph@gmail.com, message the official Bee Bright social media page, or visit the center at Barangay Pantal, Dagupan City, Pangasinan. The same email is shown on the Track Enrollment page.',
-        fil: 'Maaari kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Barangay Pantal, Dagupan City, Pangasinan. Nakikita rin ang parehong email sa Track Enrollment page.',
-        tgl: 'Puwede kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Barangay Pantal, Dagupan City, Pangasinan. Nasa Track Enrollment page rin ang parehong email.'
+        en: 'You can email Bee Bright at beebrightph@gmail.com, message the official Bee Bright social media page, or visit the center at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400. The same email is shown on the Track Enrollment page.',
+        fil: 'Maaari kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400. Nakikita rin ang parehong email sa Track Enrollment page.',
+        tgl: 'Puwede kang mag-email sa Bee Bright sa beebrightph@gmail.com, mag-message sa official Bee Bright social media page, o bumisita sa center sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400. Nasa Track Enrollment page rin ang parehong email.'
       }
     },
     {

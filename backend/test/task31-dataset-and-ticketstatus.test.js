@@ -77,7 +77,7 @@ test('V006 states the real policy: non-refundable but transferable', () => {
 test('V004 now gives the real contact channels', () => {
   const v4 = D.visitorQueries.find((v) => v.id === 'V004').expectedReply.en;
   assert.match(v4, /beebrightph@gmail\.com/);
-  assert.match(v4, /Barangay Pantal/);
+  assert.match(v4, /Teo-Tinay Building/);
 });
 
 test('e2e: a public refund-policy question now hits V006 (was the clarification fallback)', async () => {
