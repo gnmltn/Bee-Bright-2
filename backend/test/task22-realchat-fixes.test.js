@@ -119,7 +119,7 @@ test('22c NEGATIVE: a real question is not treated as a confirmation follow-up',
 test('22c e2e: confirmation follow-ups re-serve the previous answer, consistently', async () => {
   const payHist = [
     { role: 'user', content: 'what payment methods do you accept' },
-    { role: 'assistant', content: 'We accept GCash, SeaBank, and BDO.' },
+    { role: 'assistant', content: 'We accept GCash, Maribank, and BDO.' },
   ];
   for (const m of ['ganun ba?', 'yan kaya', 'ay ganun ba']) {
     const reply = await ask(m, payHist);

@@ -121,9 +121,9 @@ const AIResponseDatasets = {
         tgl: 'Ano ang kailangan ko para mag-enroll?'
       },
       expectedReply: {
-        en: 'You need: valid email, student name, contact info, program selection, and payment proof (screenshot of your GCash, SeaBank, or BDO transaction).',
-        fil: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng iyong GCash, SeaBank, o BDO transaction).',
-        tgl: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng GCash, SeaBank, o BDO transaction mo).'
+        en: 'You need: valid email, student name, contact info, program selection, and payment proof (screenshot of your GCash, Maribank, or BDO transaction).',
+        fil: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng iyong GCash, Maribank, o BDO transaction).',
+        tgl: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng GCash, Maribank, o BDO transaction mo).'
       }
     },
     {
@@ -197,9 +197,9 @@ const AIResponseDatasets = {
         tgl: 'Anong payment methods ang tina-tanggap?'
       },
       expectedReply: {
-        en: 'We accept GCash, SeaBank, and BDO. Choose Full Payment or 50% Down Payment during enrollment and upload your proof of payment.',
-        fil: 'Tinatanggap namin ang GCash, SeaBank, at BDO. Pumili ng Full Payment o 50% Down Payment sa enrollment at i-upload ang iyong proof of payment.',
-        tgl: 'Tinatanggap namin ang GCash, SeaBank, at BDO. Pumili ng Full Payment o 50% Down Payment sa enrollment at i-upload ang proof of payment mo.'
+        en: 'We accept GCash, Maribank, and BDO online, or you can pay onsite at the center. Choose Full Payment or 50% Down Payment during enrollment and upload your proof of payment (onsite payments are verified at the center).',
+        fil: 'Tinatanggap namin ang GCash, Maribank, at BDO online, o pwede ka ring magbayad onsite sa center. Pumili ng Full Payment o 50% Down Payment sa enrollment at i-upload ang iyong proof of payment (ang onsite payments ay bine-verify sa center).',
+        tgl: 'Tinatanggap namin ang GCash, Maribank, at BDO online, o pwede ka ring magbayad onsite sa center. Pumili ng Full Payment o 50% Down Payment sa enrollment at i-upload ang proof of payment mo (ang onsite payments ay vine-verify sa center).'
       }
     },
     {
@@ -227,9 +227,9 @@ const AIResponseDatasets = {
         tgl: 'Paano ako mag-submit ng payment proof?'
       },
       expectedReply: {
-        en: 'During enrollment, upload a screenshot of your transaction receipt or confirmation from GCash, SeaBank, or BDO in the payment section.',
-        fil: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash, SeaBank, o BDO sa payment section.',
-        tgl: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash, SeaBank, o BDO sa payment section.'
+        en: 'During enrollment, upload a screenshot of your transaction receipt or confirmation from GCash, Maribank, or BDO in the payment section.',
+        fil: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash, Maribank, o BDO sa payment section.',
+        tgl: 'During enrollment, i-upload ang screenshot ng transaction receipt o confirmation mula sa GCash, Maribank, o BDO sa payment section.'
       }
     },
     {
@@ -259,9 +259,9 @@ const AIResponseDatasets = {
         tgl: 'Saan ko makikita ang grades ko?'
       },
       expectedReply: {
-        en: 'We no longer track numeric grades. Open your dashboard and go to the Progress tab for remarks and updates from your tutor.',
-        fil: 'Hindi na kami nagtatala ng numeric grades. Buksan ang dashboard mo at pumunta sa Progress tab para sa mga remarks at update mula sa tutor.',
-        tgl: 'Hindi na namin tinatrack ang numeric grades. Buksan ang dashboard mo tapos pumunta sa Progress tab para sa remarks at updates mula sa tutor mo.'
+        en: 'Bee Bright does not use numeric grades. Open your dashboard and go to the Progress tab for remarks and updates from your tutor.',
+        fil: 'Hindi gumagamit ng numeric grades ang Bee Bright. Buksan ang dashboard mo at pumunta sa Progress tab para sa mga remarks at update mula sa tutor.',
+        tgl: 'Hindi gumagamit ng numeric grades ang Bee Bright. Buksan ang dashboard mo tapos pumunta sa Progress tab para sa remarks at updates mula sa tutor mo.'
       }
     },
     {
@@ -304,9 +304,9 @@ const AIResponseDatasets = {
         tgl: 'Ano ang ibig sabihin ng grade ko?'
       },
       expectedReply: {
-        en: 'We no longer track numeric grades. Your tutor now writes session-based remarks about your progress instead — check the Progress tab.',
-        fil: 'Hindi na kami nagtatala ng numeric grades. Sa halip, sumusulat na ang tutor mo ng session-based remarks tungkol sa progress mo — tingnan ang Progress tab.',
-        tgl: 'Hindi na namin tinatrack ang numeric grades. Sa halip, gumagawa na ang tutor mo ng session-based remarks about your progress — check mo ang Progress tab.'
+        en: 'Bee Bright does not use numeric grades. Your tutor now writes session-based remarks about your progress instead — check the Progress tab.',
+        fil: 'Hindi gumagamit ng numeric grades ang Bee Bright. Sa halip, sumusulat na ang tutor mo ng session-based remarks tungkol sa progress mo — tingnan ang Progress tab.',
+        tgl: 'Hindi gumagamit ng numeric grades ang Bee Bright. Sa halip, gumagawa na ang tutor mo ng session-based remarks about your progress — check mo ang Progress tab.'
       }
     },
     {
@@ -319,9 +319,9 @@ const AIResponseDatasets = {
         tgl: 'Kailan na-update ang grades?'
       },
       expectedReply: {
-        en: 'We no longer track numeric grades. Remarks are typically posted after each session — check your dashboard\'s Progress tab regularly.',
-        fil: 'Hindi na kami nagtatala ng numeric grades. Karaniwang naipo-post ang remarks after each session — regular na tingnan ang Progress tab ng dashboard mo.',
-        tgl: 'Hindi na namin tinatrack ang numeric grades. Karaniwang naka-post ang remarks after each session — check mo regularly ang Progress tab ng dashboard mo.'
+        en: 'Bee Bright does not use numeric grades. Remarks are typically posted after each session — check your dashboard\'s Progress tab regularly.',
+        fil: 'Hindi gumagamit ng numeric grades ang Bee Bright. Karaniwang naipo-post ang remarks after each session — regular na tingnan ang Progress tab ng dashboard mo.',
+        tgl: 'Hindi gumagamit ng numeric grades ang Bee Bright. Karaniwang naka-post ang remarks after each session — check mo regularly ang Progress tab ng dashboard mo.'
       }
     },
     // Schedule
@@ -872,9 +872,9 @@ const AIResponseDatasets = {
         tgl: 'Paano ako nag-review ng payments?'
       },
       expectedReply: {
-        en: 'Check the Payments section to see all submissions with GCash, SeaBank, or BDO proof. Verify reference numbers, amounts, and confirm or reject each payment.',
-        fil: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash, SeaBank, o BDO proof. I-verify ang reference numbers, amounts, at kumpirmahin o i-reject ang payment.',
-        tgl: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash, SeaBank, o BDO proof. I-verify ang reference numbers, amounts, at kumpirmahin o i-reject ang payment.'
+        en: 'Check the Payments section to see all submissions with GCash, Maribank, or BDO proof. Verify reference numbers, amounts, and confirm or reject each payment.',
+        fil: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash, Maribank, o BDO proof. I-verify ang reference numbers, amounts, at kumpirmahin o i-reject ang payment.',
+        tgl: 'Tingnan ang Payments section para makita ang lahat ng submissions na may GCash, Maribank, o BDO proof. I-verify ang reference numbers, amounts, at kumpirmahin o i-reject ang payment.'
       }
     },
     // Create a tutor / admin account.

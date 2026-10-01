@@ -40,7 +40,7 @@ test('getProgramPricingReply: specific program → its packages + prices from th
     assert.match(reply, /Academic Tutorial — ages 2 and up/);
     assert.match(reply, /Premier \(Elementary\).*PHP 2,400 full payment, or PHP 1,200 as the 50% down payment/);
     assert.match(reply, /Royalty \(Elementary\).*PHP 11,000 full payment/);
-    assert.match(reply, /GCash, SeaBank, or BDO/);
+    assert.match(reply, /GCash, Maribank, or BDO/);
     assert.doesNotMatch(reply, /Toddlers|Exam Prep/); // only the asked program
   } finally { restore(); }
 });

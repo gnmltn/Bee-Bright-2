@@ -119,7 +119,7 @@ test('grounded grades context: asks which child when none is named', async () =>
 // Grades were fully retired in favor of Student Remarks (2026-09-30) — once a named
 // child resolves, buildParentGradesContext now always gives the honest current answer
 // instead of querying a model that's gone.
-test('grounded grades context: honest "no longer tracked" answer for the named child', async () => {
+test('grounded grades context: honest "does not use numeric grades" answer for the named child', async () => {
   const origEnr = Enrollment.find;
   stubModel(Enrollment, 'find', [
     enrollment({ _id: 'e1', student: 'stu-1', studentId: 'S-20260101-0007', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
@@ -127,8 +127,8 @@ test('grounded grades context: honest "no longer tracked" answer for the named c
   try {
     const ctx = await getGroundedChatContext(PARENT, "how is Ana doing in her subjects?");
     assert.match(ctx.contextText, /Ana Cruz/);
-    assert.match(ctx.contextText, /no longer tracked/i);
-    assert.match(ctx.fallbackReply, /no longer track numeric grades/i);
+    assert.match(ctx.contextText, /does not use numeric grades/i);
+    assert.match(ctx.fallbackReply, /does not use numeric grades/i);
     assert.match(ctx.fallbackReply, /Ana Cruz/);
     assert.match(ctx.fallbackReply, /Progress tab/);
   } finally {

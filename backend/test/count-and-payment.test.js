@@ -74,10 +74,10 @@ test('getEnrollmentStatusReply: "currently enrolled" counts approved + active, n
 
 // ── Task 13 — payment methods ─────────────────────────────────────────────
 
-test('getPaymentMethodsReply: lists GCash / SeaBank / BDO, no blockchain', () => {
+test('getPaymentMethodsReply: lists GCash / Maribank / BDO, no blockchain', () => {
   const reply = getPaymentMethodsReply('english', 'what payment methods are available');
   assert.match(reply, /GCash/);
-  assert.match(reply, /SeaBank/);
+  assert.match(reply, /Maribank/);
   assert.match(reply, /BDO/);
   assert.doesNotMatch(reply, /blockchain|metamask|ganache|crypto/i);
 });
@@ -92,7 +92,7 @@ test('getPaymentMethodsReply: Filipino + Taglish also drop blockchain', () => {
   for (const lang of ['filipino', 'taglish']) {
     const reply = getPaymentMethodsReply(lang, 'anong payment methods');
     assert.match(reply, /GCash/);
-    assert.match(reply, /SeaBank/);
+    assert.match(reply, /Maribank/);
     assert.match(reply, /BDO/);
     assert.doesNotMatch(reply, /blockchain|metamask/i);
   }

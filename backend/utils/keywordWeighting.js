@@ -82,8 +82,9 @@ const DOMAIN_KEYWORDS = {
       'apply', 'papaano mag',
     ],
     payment_methods: [
-      'payment', 'pay', 'bayad', 'magbayad', 'gcash', 'seabank', 'sea bank', 'bdo',
-      'bank', 'bank transfer', 'cash', 'mode of payment', 'paraan ng bayad', 'deposit',
+      'payment', 'pay', 'bayad', 'magbayad', 'gcash', 'maribank', 'mari bank', 'seabank', 'sea bank', 'bdo',
+      'bank', 'bank transfer', 'cash', 'onsite', 'walk-in', 'walk in', 'maya', 'paymaya',
+      'mode of payment', 'paraan ng bayad', 'deposit',
       'downpayment', 'down payment', 'installment', 'hulugan',
     ],
     location_info: [

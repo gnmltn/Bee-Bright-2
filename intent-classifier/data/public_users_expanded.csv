@@ -197,24 +197,24 @@ Gusto kong malaman: can i pay using gcash?,gcash,public,no
 "Hello, can i use my gcash account to pay??",gcash,public,no
 "Pwede po bang malaman, can i pay using gcash?",gcash,public,no
 "Pa-help naman, is gcash accepted?",gcash,public,no
-Can I pay using SeaBank?,seabank,public,no
-Is SeaBank accepted?,seabank,public,no
-Pwede ba SeaBank ang gamitin?,seabank,public,no
-Tumatanggap ba kayo ng SeaBank?,seabank,public,no
-Can I pay through SeaBank?,seabank,public,no
-Allowed ba ang SeaBank payment?,seabank,public,no
-Can you help me with this: can i pay using seabank?,seabank,public,no
-Quick question: is seabank accepted?,seabank,public,no
-"Just checking, pwede ba seabank ang gamitin?",seabank,public,no
-Please tell me tumatanggap ba kayo ng seabank??,seabank,public,no
-Can you tell me can i pay through seabank??,seabank,public,no
-"Paki-explain, allowed ba ang seabank payment??",seabank,public,no
-Gusto kong malaman: can i pay using seabank?,seabank,public,no
-"Pwede bang sabihin, is seabank accepted??",seabank,public,no
-"Hi, pwede ba seabank ang gamitin??",seabank,public,no
-"Hello, can i pay through seabank??",seabank,public,no
-"Pwede po bang malaman, can i pay using seabank?",seabank,public,no
-"Pa-help naman, is seabank accepted?",seabank,public,no
+Can I pay using SeaBank?,maribank,public,no
+Is Maribank accepted?,maribank,public,no
+Pwede ba Maribank ang gamitin?,maribank,public,no
+Tumatanggap ba kayo ng SeaBank?,maribank,public,no
+Can I pay through Maribank?,maribank,public,no
+Allowed ba ang Maribank payment?,maribank,public,no
+Can you help me with this: can i pay using maribank?,maribank,public,no
+Quick question: is maribank accepted?,maribank,public,no
+"Just checking, pwede ba maribank ang gamitin?",maribank,public,no
+Please tell me tumatanggap ba kayo ng maribank??,maribank,public,no
+Can you tell me can i pay through maribank??,maribank,public,no
+"Paki-explain, allowed ba ang maribank payment??",maribank,public,no
+Gusto kong malaman: can i pay using maribank?,maribank,public,no
+"Pwede bang sabihin, is maribank accepted??",maribank,public,no
+"Hi, pwede ba seabank ang gamitin??",maribank,public,no
+"Hello, can i pay through maribank??",maribank,public,no
+"Pwede po bang malaman, can i pay using maribank?",maribank,public,no
+"Pa-help naman, is maribank accepted?",maribank,public,no
 Can I pay using BDO?,bdo,public,no
 Is BDO accepted for payment?,bdo,public,no
 Pwede ba BDO ang payment?,bdo,public,no
@@ -557,3 +557,15 @@ Gusto kong malaman: can i contact a staff member?,human_agent,public,yes
 "Hello, may staff ba akong puwedeng makausap??",human_agent,public,yes
 "Pwede po bang malaman, can i contact a staff member?",human_agent,public,yes
 "Pa-help naman, can i reach a human agent?",human_agent,public,yes
+Can I pay using Maribank?,maribank,public,no
+Is Maribank accepted?,maribank,public,no
+Pwede ba Maribank ang gamitin?,maribank,public,no
+Tumatanggap ba kayo ng Maribank?,maribank,public,no
+Do you accept Maya?,payment_methods,public,no
+Nag a-accept ba kayo ng Maya?,payment_methods,public,no
+Tumatanggap ba kayo ng PayMaya?,payment_methods,public,no
+Pwede ba PayMaya ang gamitin?,payment_methods,public,no
+Can I pay onsite?,payment_methods,public,no
+Pwede ba magbayad onsite?,payment_methods,public,no
+May onsite payment ba kayo?,payment_methods,public,no
+Can I pay in person at the center?,payment_methods,public,no

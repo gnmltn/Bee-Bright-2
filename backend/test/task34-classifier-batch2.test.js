@@ -110,7 +110,7 @@ test('route "grades": classifier shortcut reaches getStudentGradesReply for a ph
   try {
     const out = await tryClassifierShortcut({ user: student, body: {}, headers: {} }, 'Nasaan ang grades ko?', []);
     // Filipino phrasing -> Filipino reply (language auto-detected); grades were fully
-    // retired 2026-09-30, so this is now always the honest "no longer tracked" branch.
+    // retired 2026-09-30, so this is now always the honest "does not use numeric grades" branch.
     assert.match(out, /numeric grades/i);
   } finally { fetchRestore(); }
 });

@@ -596,9 +596,9 @@ function getFollowUpTopicReply(topic, languageProfile = 'english') {
     case 'grades':
       return pickByLanguage(
         languageProfile,
-        'We no longer track numeric grades. Open your Student Dashboard and go to the Progress tab for remarks and updates from your tutor.',
-        'Hindi na kami nagtatala ng numeric grades. Buksan ang Student Dashboard mo at pumunta sa Progress tab para sa mga remarks at update mula sa tutor.',
-        'Hindi na namin tinatrack ang numeric grades. Buksan ang Student Dashboard mo tapos pumunta sa Progress tab para sa remarks at updates mula sa tutor mo.'
+        'Bee Bright does not use numeric grades. Open your Student Dashboard and go to the Progress tab for remarks and updates from your tutor.',
+        'Hindi gumagamit ng numeric grades ang Bee Bright. Buksan ang Student Dashboard mo at pumunta sa Progress tab para sa mga remarks at update mula sa tutor.',
+        'Hindi gumagamit ng numeric grades ang Bee Bright. Buksan ang Student Dashboard mo tapos pumunta sa Progress tab para sa remarks at updates mula sa tutor mo.'
       );
     case 'schedule':
       return pickByLanguage(
@@ -997,38 +997,41 @@ function isPaymentQuestion(normalized) {
 }
 
 function isPaymentMethodQuestion(normalized) {
-  return /(payment method|payment methods|mode of payment|modes of payment|how can i pay|what methods|anong payment method|mga payment method|paraan ng bayad|mode ng bayad|payment channel|gcash|seabank|sea bank|bdo|bank account|bank transfer|credit card|debit card|cash payment|saan.*magbabayad|magbabayad|saan.*payment)/.test(normalized);
+  // 'seabank'/'sea bank' kept as a legacy-brand alias (rebranded to Maribank, 2026-09-22) —
+  // still routes correctly if a user types the old name out of habit.
+  return /(payment method|payment methods|mode of payment|modes of payment|how can i pay|what methods|anong payment method|mga payment method|paraan ng bayad|mode ng bayad|payment channel|gcash|maribank|mari bank|seabank|sea bank|bdo|bank account|bank transfer|credit card|debit card|cash payment|onsite.*(pay|bayad)|(pay|bayad).*onsite|walk-?in.*(pay|bayad)|maya|paymaya|accept.*maya|tumatanggap.*maya|saan.*magbabayad|magbabayad|saan.*payment|ano.*(ginagamit|gamit).*(payment|bayad)|what payment.*(do you use|do you accept)|anong payment)/.test(normalized);
 }
 
 function getPaymentMethodsReply(languageProfile = 'english', normalized = '') {
   const asksOtherBank = /(bpi|metrobank|landbank|unionbank|rcbc|security bank|pnb)/.test(normalized);
   const asksCard = /(credit card|debit card|visa|mastercard)/.test(normalized);
-  const asksCash = /(cash payment|over the counter|walk-in)/.test(normalized);
+  const asksOnsite = /(cash payment|over the counter|walk-in|walk in|onsite|in person|in-person|personal(ly)?.*(pay|bayad)|(pay|bayad).*onsite)/.test(normalized);
+  const asksMaya = /(\bmaya\b|paymaya)/.test(normalized);
   const asksCrypto = /(blockchain|bitcoin|crypto|cryptocurrency|metamask|ethereum|\beth\b)/.test(normalized);
 
-  // Bee Bright accepts GCash, SeaBank, and BDO. (Blockchain payment was removed.)
+  // Bee Bright accepts GCash, Maribank, and BDO online, plus onsite payment at the center.
   const baseReply = pickByLanguage(
     languageProfile,
     [
-      'Bee Bright accepts three payment methods:',
+      'Bee Bright accepts three online payment methods:',
       '1. GCash',
-      '2. SeaBank',
+      '2. Maribank',
       '3. BDO',
-      'You can choose Full Payment or 50% Down Payment during enrollment, then submit your proof of payment for admin verification.'
+      'You can also pay onsite at the center if you prefer. Choose Full Payment or 50% Down Payment during enrollment, then submit your proof of payment for admin verification (onsite payments are verified at the center).'
     ].join('\n'),
     [
-      'Tumatanggap ang Bee Bright ng tatlong payment method:',
+      'Tumatanggap ang Bee Bright ng tatlong online payment method:',
       '1. GCash',
-      '2. SeaBank',
+      '2. Maribank',
       '3. BDO',
-      'Maaari kang pumili ng Full Payment o 50% Down Payment sa enrollment, pagkatapos ay mag-submit ng proof of payment para sa admin verification.'
+      'Pwede ka ring magbayad onsite sa center kung gusto mo. Pumili ng Full Payment o 50% Down Payment sa enrollment, pagkatapos ay mag-submit ng proof of payment para sa admin verification (ang onsite payments ay bine-verify sa center).'
     ].join('\n'),
     [
-      'Tumatanggap ang Bee Bright ng tatlong payment method:',
+      'Tumatanggap ang Bee Bright ng tatlong online payment method:',
       '1. GCash',
-      '2. SeaBank',
+      '2. Maribank',
       '3. BDO',
-      'Pwede kang pumili ng Full Payment or 50% Down Payment sa enrollment, then mag-submit ng proof of payment for admin verification.'
+      'Pwede ka ring magbayad onsite sa center kung gusto mo. Pumili ng Full Payment or 50% Down Payment sa enrollment, then mag-submit ng proof of payment for admin verification (ang onsite payments ay vine-verify sa center).'
     ].join('\n')
   );
 
@@ -1041,12 +1044,30 @@ function getPaymentMethodsReply(languageProfile = 'english', normalized = '') {
     );
   }
 
-  if (asksOtherBank || asksCard || asksCash) {
+  if (asksMaya) {
     return pickByLanguage(
       languageProfile,
-      `${baseReply}\n\nOther bank transfers, card payments, and over-the-counter cash are not available in the system.`,
-      `${baseReply}\n\nHindi available sa system ang ibang bank transfers, card payments, at over-the-counter cash.`,
-      `${baseReply}\n\nHindi available sa system ang ibang bank transfers, card payments, at over-the-counter cash.`
+      `No, Maya / PayMaya is not accepted. ${baseReply}`,
+      `Hindi, hindi tinatanggap ang Maya / PayMaya. ${baseReply}`,
+      `Hindi, hindi tinatanggap ang Maya / PayMaya. ${baseReply}`
+    );
+  }
+
+  if (asksOnsite) {
+    return pickByLanguage(
+      languageProfile,
+      `Yes, you can pay onsite at the Bee Bright center. ${baseReply}`,
+      `Oo, pwede kang magbayad onsite sa Bee Bright center. ${baseReply}`,
+      `Oo, pwede kang magbayad onsite sa Bee Bright center. ${baseReply}`
+    );
+  }
+
+  if (asksOtherBank || asksCard) {
+    return pickByLanguage(
+      languageProfile,
+      `${baseReply}\n\nOther bank transfers and card payments are not available in the system.`,
+      `${baseReply}\n\nHindi available sa system ang ibang bank transfers at card payments.`,
+      `${baseReply}\n\nHindi available sa system ang ibang bank transfers at card payments.`
     );
   }
 
@@ -1066,7 +1087,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       languageProfile,
       [
         'Yes, payments are handled with security checks in the Bee Bright system:',
-        '1. Only supported methods are accepted (GCash, SeaBank, or BDO).',
+        '1. Only supported methods are accepted (GCash, Maribank, or BDO).',
         '2. You must submit payment proof before activation.',
         '3. Admin reviews and verifies the payment before final approval.',
         '4. Your payment and enrollment status can be tracked in your dashboard.',
@@ -1074,7 +1095,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       ].join('\n'),
       [
         'Oo, may security checks ang payments sa Bee Bright system:',
-        '1. Tanging supported methods lang ang tinatanggap (GCash, SeaBank, o BDO).',
+        '1. Tanging supported methods lang ang tinatanggap (GCash, Maribank, o BDO).',
         '2. Kailangan magsumite ng payment proof bago ma-activate.',
         '3. Sinusuri at bine-verify ng admin ang bayad bago final approval.',
         '4. Makikita mo ang payment at enrollment status sa dashboard.',
@@ -1082,7 +1103,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       ].join('\n'),
       [
         'Oo, may security checks ang payments sa Bee Bright system:',
-        '1. Supported methods lang ang tinatanggap (GCash, SeaBank, or BDO).',
+        '1. Supported methods lang ang tinatanggap (GCash, Maribank, or BDO).',
         '2. Kailangan mag-submit ng payment proof bago ma-activate.',
         '3. Ire-review at ibe-verify ng admin ang bayad bago final approval.',
         '4. Makikita mo ang payment at enrollment status sa dashboard.',
@@ -1709,9 +1730,9 @@ async function getProgramPricingReply(message, languageProfile = 'english') {
     });
     return pickByLanguage(
       languageProfile,
-      [`${matched.label} — ${matched.ageText}. Available packages:`, ...lines, 'Payment is 50% on enrollment and the remaining 50% after completing half of the sessions. Accepted methods: GCash, SeaBank, or BDO.'].join('\n'),
-      [`${matched.label} — para sa ${matched.ageText}. Mga available na package:`, ...lines, 'Ang bayad ay 50% sa enrollment at ang natitirang 50% pagkatapos makumpleto ang kalahati ng sessions. Tinatanggap: GCash, SeaBank, o BDO.'].join('\n'),
-      [`${matched.label} — para sa ${matched.ageText}. Available packages:`, ...lines, 'Ang bayad ay 50% sa enrollment at ang remaining 50% pagkatapos ma-complete ang kalahati ng sessions. Accepted: GCash, SeaBank, o BDO.'].join('\n')
+      [`${matched.label} — ${matched.ageText}. Available packages:`, ...lines, 'Payment is 50% on enrollment and the remaining 50% after completing half of the sessions. Accepted methods: GCash, Maribank, or BDO.'].join('\n'),
+      [`${matched.label} — para sa ${matched.ageText}. Mga available na package:`, ...lines, 'Ang bayad ay 50% sa enrollment at ang natitirang 50% pagkatapos makumpleto ang kalahati ng sessions. Tinatanggap: GCash, Maribank, o BDO.'].join('\n'),
+      [`${matched.label} — para sa ${matched.ageText}. Available packages:`, ...lines, 'Ang bayad ay 50% sa enrollment at ang remaining 50% pagkatapos ma-complete ang kalahati ng sessions. Accepted: GCash, Maribank, o BDO.'].join('\n')
     );
   }
 
@@ -2643,17 +2664,52 @@ async function getAdminCountReply(user, message, languageProfile = 'english') {
   );
 }
 
-async function getAdminSystemKnowledgeReply(user, message, languageProfile = 'english') {
+// Admin follow-up continuity fix. A bare "who are them?" / "sino sila" /
+// "ilan ang tutor and sino sila?" after a count/list reply has no list keyword of its
+// own, so it used to fall through this whole function (return null) and land on the
+// generic parent/student-oriented 'tutor_help' reply further down the pipeline — wrong
+// for an admin asking who the tutors/students/admins are. This resolves such follow-ups
+// against the subject of the previous assistant reply.
+function getLastAssistantMessage(history = []) {
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const item of items) {
+    if (item && item.role === 'assistant' && typeof item.content === 'string' && item.content.trim()) {
+      return item.content;
+    }
+  }
+  return null;
+}
+
+function isNameListFollowUp(normalized) {
+  return /(who are (they|them|that|those)|who('?s| is| are) (that|those|they|them)|sino (sila|yan|yun|iyon|ito)|sino.*po sila|ano.*(pangalan|names).*(nila|nito)|can (i|you).*(get|see|have).*(names|list|student id|ids)|pwede.*(makuha|makita).*(pangalan|names|list)|name them|list (them|their names))/.test(normalized);
+}
+
+async function getAdminSystemKnowledgeReply(user, message, languageProfile = 'english', history = []) {
   if (!user || !['admin', 'super_admin'].includes(user.role)) {
     return null;
   }
 
   const normalized = normalizeMessage(message);
   const asksAll = isAdminFullKnowledgeQuery(normalized);
-  const asksTutorList = /(list.*tutor|tutor list|show.*tutor|mga tutor|listahan ng tutor)/.test(normalized);
-  const asksStudentList = /(list.*student|student list|show.*student|mga student|mga estudyante|listahan ng estudyante)/.test(normalized);
-  const asksAdminList = /(list.*admin|admin list|show.*admin|mga admin|listahan ng admin|administrators)/.test(normalized);
+  let asksTutorList = /(list.*tutor|tutor list|show.*tutor|mga tutor|listahan ng tutor|sino.*tutor|tutor.*sino|ilan.*tutor.*sino|sino.*ang.*tutor)/.test(normalized);
+  let asksStudentList = /(list.*student|student list|show.*student|mga student|mga estudyante|listahan ng estudyante|sino.*student|sino.*estudyante|student.*sino|ilan.*student.*sino|sino.*ang.*student)/.test(normalized);
+  let asksAdminList = /(list.*admin|admin list|show.*admin|mga admin|listahan ng admin|administrators|sino.*admin|admin.*sino)/.test(normalized);
   const asksOverview = asksAll || /(overview|dashboard summary|system summary|report)/.test(normalized);
+
+  // Bare follow-up ("who are them?", "sino sila") — resolve against what the previous
+  // assistant reply was actually about (a tutor count/list, a student count/list, etc.)
+  if (!asksAll && !asksTutorList && !asksStudentList && !asksAdminList && !asksOverview && isNameListFollowUp(normalized)) {
+    const prev = normalizeMessage(getLastAssistantMessage(history) || '');
+    if (prev) {
+      if (/\btutor/.test(prev)) {
+        asksTutorList = true;
+      } else if (/\bstudent|estudyante|enrolled/.test(prev)) {
+        asksStudentList = true;
+      } else if (/\badmin/.test(prev)) {
+        asksAdminList = true;
+      }
+    }
+  }
 
   if (!asksAll && !asksTutorList && !asksStudentList && !asksAdminList && !asksOverview) {
     return null;
@@ -2689,9 +2745,12 @@ async function getAdminSystemKnowledgeReply(user, message, languageProfile = 'en
     Schedule.findOne({ date: { $gte: new Date() } }).populate('student', 'firstName lastName fullName').populate('tutor', 'firstName lastName fullName').populate('subject', 'name').sort({ date: 1, startTime: 1 }).lean()
   ]);
 
-  const tutorList = (tutors || []).map((t) => t.fullName || [t.firstName, t.lastName].filter(Boolean).join(' ') || t.email).filter(Boolean).join(', ');
-  const studentList = (students || []).map((s) => `${s.fullName || [s.firstName, s.lastName].filter(Boolean).join(' ') || s.email}${s.gradeLevel ? ` (${s.gradeLevel})` : ''}`).filter(Boolean).join(', ');
-  const adminList = (admins || []).map((a) => `${a.fullName || [a.firstName, a.lastName].filter(Boolean).join(' ') || a.email} (${toDisplayRole(a.role)})`).filter(Boolean).join(', ');
+  const tutorNames = (tutors || []).map((t) => t.fullName || [t.firstName, t.lastName].filter(Boolean).join(' ') || t.email).filter(Boolean);
+  const studentNames = (students || []).map((s) => `${s.fullName || [s.firstName, s.lastName].filter(Boolean).join(' ') || s.email}${s.gradeLevel ? ` (${s.gradeLevel})` : ''}`).filter(Boolean);
+  const adminNames = (admins || []).map((a) => `${a.fullName || [a.firstName, a.lastName].filter(Boolean).join(' ') || a.email} (${toDisplayRole(a.role)})`).filter(Boolean);
+  const tutorList = tutorNames.join(', ');
+  const studentList = studentNames.join(', ');
+  const adminList = adminNames.join(', ');
   const scheduleText = nextSchedule
     ? `${new Date(nextSchedule.date).toLocaleDateString('en-US')} ${nextSchedule.startTime}-${nextSchedule.endTime} | Student: ${nextSchedule.student?.fullName || [nextSchedule.student?.firstName, nextSchedule.student?.lastName].filter(Boolean).join(' ') || 'N/A'} | Tutor: ${nextSchedule.tutor?.fullName || [nextSchedule.tutor?.firstName, nextSchedule.tutor?.lastName].filter(Boolean).join(' ') || 'N/A'} | Subject: ${nextSchedule.subject?.name || 'N/A'}`
     : 'No upcoming schedule found.';
@@ -2699,27 +2758,27 @@ async function getAdminSystemKnowledgeReply(user, message, languageProfile = 'en
   if (asksTutorList && !asksAll) {
     return pickByLanguage(
       languageProfile,
-      tutorList ? `Here is the tutor list: ${tutorList}` : 'No tutor records found in the system.',
-      tutorList ? `Narito ang listahan ng tutor: ${tutorList}` : 'Walang tutor records sa system.',
-      tutorList ? `Narito ang listahan ng tutor: ${tutorList}` : 'Walang tutor records sa system.'
+      tutorNames.length ? ['Here is the tutor list:', ...tutorNames].join('\n') : 'No tutor records found in the system.',
+      tutorNames.length ? ['Narito ang listahan ng tutor:', ...tutorNames].join('\n') : 'Walang tutor records sa system.',
+      tutorNames.length ? ['Narito ang listahan ng tutor:', ...tutorNames].join('\n') : 'Walang tutor records sa system.'
     );
   }
 
   if (asksStudentList && !asksAll) {
     return pickByLanguage(
       languageProfile,
-      studentList ? `Here is the student list: ${studentList}` : 'No student records found in the system.',
-      studentList ? `Narito ang listahan ng estudyante: ${studentList}` : 'Walang student records sa system.',
-      studentList ? `Narito ang listahan ng estudyante: ${studentList}` : 'Walang student records sa system.'
+      studentNames.length ? ['Here is the student list:', ...studentNames].join('\n') : 'No student records found in the system.',
+      studentNames.length ? ['Narito ang listahan ng estudyante:', ...studentNames].join('\n') : 'Walang student records sa system.',
+      studentNames.length ? ['Narito ang listahan ng estudyante:', ...studentNames].join('\n') : 'Walang student records sa system.'
     );
   }
 
   if (asksAdminList && !asksAll) {
     return pickByLanguage(
       languageProfile,
-      adminList ? `Here is the admin list: ${adminList}` : 'No admin records found in the system.',
-      adminList ? `Narito ang listahan ng admin: ${adminList}` : 'Walang admin records sa system.',
-      adminList ? `Narito ang listahan ng admin: ${adminList}` : 'Walang admin records sa system.'
+      adminNames.length ? ['Here is the admin list:', ...adminNames].join('\n') : 'No admin records found in the system.',
+      adminNames.length ? ['Narito ang listahan ng admin:', ...adminNames].join('\n') : 'Walang admin records sa system.',
+      adminNames.length ? ['Narito ang listahan ng admin:', ...adminNames].join('\n') : 'Walang admin records sa system.'
     );
   }
 
@@ -3653,17 +3712,17 @@ async function getStudentGradesReply(user, message, languageProfile = 'english',
   if (!user || user.role !== 'student') {
     return pickByLanguage(
       languageProfile,
-      'We no longer track numeric grades — check the Progress tab on the Student Dashboard for remarks and updates from your tutor.',
-      'Hindi na kami nagtatala ng numeric grades — tingnan ang Progress tab sa Student Dashboard para sa mga remarks at update mula sa tutor.',
-      'Hindi na namin tinatrack ang numeric grades — check mo na lang ang Progress tab sa Student Dashboard para sa remarks at updates mula sa tutor mo.'
+      'Bee Bright does not use numeric grades — check the Progress tab on the Student Dashboard for remarks and updates from your tutor.',
+      'Hindi gumagamit ng numeric grades ang Bee Bright — tingnan ang Progress tab sa Student Dashboard para sa mga remarks at update mula sa tutor.',
+      'Hindi gumagamit ng numeric grades ang Bee Bright — check mo na lang ang Progress tab sa Student Dashboard para sa remarks at updates mula sa tutor mo.'
     );
   }
 
   return pickByLanguage(
     languageProfile,
-    'We no longer track numeric grades — check the Progress tab for remarks and updates from your tutor.',
-    'Hindi na kami nagtatala ng numeric grades — tingnan ang Progress tab para sa mga remarks at update mula sa tutor.',
-    'Hindi na namin tinatrack ang numeric grades — check mo na lang ang Progress tab para sa remarks at updates mula sa tutor mo.'
+    'Bee Bright does not use numeric grades — check the Progress tab for remarks and updates from your tutor.',
+    'Hindi gumagamit ng numeric grades ang Bee Bright — tingnan ang Progress tab para sa mga remarks at update mula sa tutor.',
+    'Hindi gumagamit ng numeric grades ang Bee Bright — check mo na lang ang Progress tab para sa remarks at updates mula sa tutor mo.'
   );
 }
 
@@ -3853,7 +3912,7 @@ async function getTicketStatusReply(user, message, languageProfile = 'english', 
 //    lookup, already scoped by the caller-supplied role string, never touches the DB.
 //    Verified empirically (Task 34) against each mapped intent's canonical phrasing.
 //  'grades'                -> getStudentGradesReply — grades were retired 2026-09-30
-//    (see Student Remarks); always gives the honest "no longer tracked" answer now.
+//    (see Student Remarks); always gives the honest "does not use numeric grades" answer now.
 //  'grounded_grades'/'grounded_schedule'/'grounded_enrollment'/'grounded_payments' ->
 //    resolveGroundedContextForTopic(user, message, topic) — the SAME data-fetching
 //    function the live grounded-chat pipeline already calls (after its own
@@ -3880,8 +3939,8 @@ async function getTicketStatusReply(user, message, languageProfile = 'english', 
 //    list, so resolveNamedPerson returns null and the function asks "which student?"
 //    rather than ever falling back to a broader/unscoped lookup. Grades were retired
 //    2026-09-30 (see Student Remarks) — once a student resolves, this now always gives
-//    the honest "no longer tracked" answer. Non-tutor roles fall through this branch
-//    and return null (grounded pipeline unaffected).
+//    the honest "does not use numeric grades" answer. Non-tutor roles fall through this
+//    branch and return null (grounded pipeline unaffected).
 //  'tutor_attendance_static' -> getAttendanceReply — no account data at all, the exact
 //    same static "check the Attendance section" text already given to every role today;
 //    there is no real per-student attendance-history query handler to wire to, so this
@@ -3910,7 +3969,8 @@ const CLASSIFIER_INTENT_HANDLERS = Object.freeze({
   programs_overview: 'dataset',
   payment_methods: 'dataset',
   gcash: 'dataset',
-  seabank: 'dataset',
+  maribank: 'dataset',
+  seabank: 'dataset', // legacy label — 'maribank' rebrand (2026-09-22); kept until classifier is retrained on the renamed dataset labels
   bdo: 'dataset',
   refund_policy: 'dataset',
   transfer_payment: 'dataset',
@@ -4175,7 +4235,7 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
     return roleBasedContactDetailsReply;
   }
 
-  const adminKnowledgeReply = await getAdminSystemKnowledgeReply(user, message, effectiveLanguageProfile);
+  const adminKnowledgeReply = await getAdminSystemKnowledgeReply(user, message, effectiveLanguageProfile, history);
   if (adminKnowledgeReply) {
     return adminKnowledgeReply;
   }
@@ -4342,7 +4402,7 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
     return roleBasedContactDetailsReply;
   }
 
-  const adminKnowledgeReply = await getAdminSystemKnowledgeReply(user, message, effectiveLanguageProfile);
+  const adminKnowledgeReply = await getAdminSystemKnowledgeReply(user, message, effectiveLanguageProfile, history);
   if (adminKnowledgeReply) {
     return adminKnowledgeReply;
   }
@@ -4966,8 +5026,8 @@ async function buildTutorStudentNotesContext(tutorId, message) {
   // the current source of tutor-authored notes but has a different shape and is not
   // wired here — a future task, not part of this removal.
   return {
-    contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nGrades are no longer tracked; no legacy grade remarks to summarise.`,
-    fallbackReply: `Grades aren't tracked anymore, so there's nothing to summarise for ${personDisplayName(target)} this way — check the Remark History tab for your own written remarks on them.`,
+    contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nBee Bright does not use numeric grades; no legacy grade remarks to summarise.`,
+    fallbackReply: `Bee Bright does not use numeric grades, so there's nothing to summarise for ${personDisplayName(target)} this way — check the Remark History tab for your own written remarks on them.`,
   };
 }
 
@@ -4993,14 +5053,14 @@ async function buildTutorAtRiskContext(tutorId, message) {
 
   if (target) {
     return {
-      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nGrades are no longer tracked; no at-risk data available.`,
-      fallbackReply: `Grades aren't tracked anymore, so there isn't a data-based way to flag whether ${personDisplayName(target)} is at risk.`,
+      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nBee Bright does not use numeric grades; no at-risk data available.`,
+      fallbackReply: `Bee Bright does not use numeric grades, so there isn't a data-based way to flag whether ${personDisplayName(target)} is at risk.`,
     };
   }
 
   return {
-    contextText: `Role: tutor\nAssigned students: ${students.length}\nGrades are no longer tracked; no at-risk data available.`,
-    fallbackReply: `Grades aren't tracked anymore, so there isn't a data-based way to flag any of your students as at risk.`,
+    contextText: `Role: tutor\nAssigned students: ${students.length}\nBee Bright does not use numeric grades; no at-risk data available.`,
+    fallbackReply: `Bee Bright does not use numeric grades, so there isn't a data-based way to flag any of your students as at risk.`,
   };
 }
 
@@ -5044,9 +5104,9 @@ async function getAdminAtRiskStudentsReply(user, message, languageProfile = 'eng
   // numeric data source left to flag anyone from. See buildTutorAtRiskContext's comment.
   return pickByLanguage(
     languageProfile,
-    'Grades are no longer tracked, so there is no data-based way to flag at-risk students right now.',
-    'Hindi na kami nagtatala ng grades, kaya walang data-based na paraan para markahan ang mga estudyanteng at-risk sa ngayon.',
-    'Hindi na namin tinatrack ang grades, kaya walang data-based na paraan para i-flag ang mga at-risk na estudyante ngayon.'
+    'Bee Bright does not use numeric grades, so there is no data-based way to flag at-risk students right now.',
+    'Hindi gumagamit ng grades ang Bee Bright, kaya walang data-based na paraan para markahan ang mga estudyanteng at-risk sa ngayon.',
+    'Hindi gumagamit ng grades ang Bee Bright, kaya walang data-based na paraan para i-flag ang mga at-risk na estudyante ngayon.'
   );
 }
 
@@ -5375,8 +5435,8 @@ async function buildParentGradesContext(parentId, message) {
   }
 
   return {
-    contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nGrades are no longer tracked; check the Progress tab for remarks instead.`,
-    fallbackReply: `We no longer track numeric grades for ${childDisplayName(matched)} — check the Progress tab for remarks and updates from their tutor.`,
+    contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nBee Bright does not use numeric grades; check the Progress tab for remarks instead.`,
+    fallbackReply: `Bee Bright does not use numeric grades for ${childDisplayName(matched)} — check the Progress tab for remarks and updates from their tutor.`,
   };
 }
 
