@@ -1488,7 +1488,7 @@ function getTutorAccountCreationReply(languageProfile = 'english') {
 }
 
 function isLocationQuestion(normalized) {
-  if (/(location|located|locate|barangay|dagupan|visit|\bmap\b|find bee ?bright|saan (ang |ba )?(ang )?bee ?bright|nasaan (ang )?bee ?bright|where('?s| is) bee ?bright)/.test(normalized)) {
+  if (/(location|located|locate|matatagpuan|barangay|dagupan|teo-?tinay|tapuac|visit|\bmap\b|find bee ?bright|saan (ang |ba )?(ang )?bee ?bright|nasaan (ang )?bee ?bright|where('?s| is) bee ?bright)/.test(normalized)) {
     return true;
   }
   // Bare "address" alone can mean physical location, but "email address" is a contact-info
@@ -4150,7 +4150,7 @@ async function tryClassifierShortcut(req, message, history = []) {
         grounded_at_risk: 'at_risk',
         grounded_wellbeing_check: 'wellbeing_check',
       }[route];
-      const context = await resolveGroundedContextForTopic(req.user, message, topic);
+      const context = await resolveGroundedContextForTopic(req.user, message, topic, history);
       reply = context?.fallbackReply || null;
       break;
     }
@@ -4799,7 +4799,7 @@ function detectGroundedTopic(user, message) {
       return 'schedule';
     }
     if (!isPaymentQuestion(normalized)
-      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|down ?payment.*(status|left|remaining))/.test(normalized)) {
+      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|natitira|natira\b|matitira|kulang|babayaran|down ?payment.*(status|left|remaining))/.test(normalized)) {
       return 'payments';
     }
     if (!isEnrollmentStepsQuestion(normalized)
@@ -5268,7 +5268,10 @@ async function buildAdminScheduleContext() {
 }
 
 function isParentChildProgressQuestion(normalized) {
-  return /(grade|grades|grading|grado|progress|report card|marks|score|scores|failing|passing|behind|struggling|performing|performance|doing in|how is my (child|kid|son|daughter|anak)|how'?s my (child|kid|son|daughter|anak)|kumusta.*anak|anak ko.*(grade|aral|klase|marka))/.test(normalized);
+  // Batch 3 fix: "pwede ba malaman kung doing good sila" / "maayos ba siya" style
+  // well-being/progress check-ins were missing "doing in" as the only "doing ___" form
+  // covered, so they fell through to being misread as a different (schedule) intent.
+  return /(grade|grades|grading|grado|progress|report card|marks|score|scores|failing|passing|behind|struggling|performing|performance|doing in|doing (good|well|okay|ok|fine|great|bad|badly)|how is my (child|kid|son|daughter|anak)|how'?s my (child|kid|son|daughter|anak)|kumusta.*anak|anak ko.*(grade|aral|klase|marka)|maayos ba|mabuti ba|ok(?:ay)? lang ba|ayos lang ba)/.test(normalized);
 }
 
 async function getParentChildEnrollments(parentId) {
@@ -5299,6 +5302,39 @@ function resolveParentChild(message, enrollments) {
   return { matched: named.length === 1 ? named[0] : null };
 }
 
+// Scan recent turns (most recent first) for an earlier unambiguous mention of one of
+// this parent's children, by either side of the conversation. Returns null on no match
+// OR on an ambiguous mention (more than one child named in the same turn) — never guesses.
+function getParentChildReferenceFromHistory(history = [], enrollments = []) {
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const item of items) {
+    if (!item || typeof item.content !== 'string') {
+      continue;
+    }
+    const { matched } = resolveParentChild(item.content, enrollments);
+    if (matched) {
+      return matched;
+    }
+    // A turn that named 2+ children is genuinely ambiguous for carrying forward —
+    // keep scanning further back rather than guessing one of them.
+  }
+  return null;
+}
+
+// Batch 3 fix — a pronoun follow-up ("does he have class today?", "paano siya
+// ginagawa?") with no name in THIS message used to re-trigger "which child?"
+// disambiguation even when the child was already named earlier in the same
+// conversation. Falls back to the last unambiguous child mention in history before
+// giving up, so the conversation doesn't lose track of who it's already about.
+function resolveParentChildWithHistory(message, enrollments, history = []) {
+  const direct = resolveParentChild(message, enrollments);
+  if (direct.matched) {
+    return direct;
+  }
+  const fromHistory = getParentChildReferenceFromHistory(history, enrollments);
+  return { matched: fromHistory || null };
+}
+
 function parentDisambiguationContext(enrollments, topicLabel) {
   const names = enrollments.map(childDisplayName);
   const list = names.join(', ');
@@ -5315,7 +5351,7 @@ function parentDisambiguationContext(enrollments, topicLabel) {
   };
 }
 
-async function buildParentEnrollmentContext(parentId, message) {
+async function buildParentEnrollmentContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
     return {
@@ -5324,7 +5360,7 @@ async function buildParentEnrollmentContext(parentId, message) {
     };
   }
 
-  const { matched } = resolveParentChild(message, enrollments);
+  const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   const targets = matched ? [matched] : enrollments;
 
   const blocks = targets.map((e) => {
@@ -5354,7 +5390,7 @@ async function buildParentEnrollmentContext(parentId, message) {
   };
 }
 
-async function buildParentPaymentContext(parentId, message) {
+async function buildParentPaymentContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
     return {
@@ -5363,7 +5399,7 @@ async function buildParentPaymentContext(parentId, message) {
     };
   }
 
-  const { matched } = resolveParentChild(message, enrollments);
+  const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   const targets = matched ? [matched] : enrollments;
 
   const blocks = [];
@@ -5412,7 +5448,7 @@ async function buildParentPaymentContext(parentId, message) {
   };
 }
 
-async function buildParentScheduleContext(parentId, message) {
+async function buildParentScheduleContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
     return {
@@ -5421,7 +5457,7 @@ async function buildParentScheduleContext(parentId, message) {
     };
   }
 
-  const { matched } = resolveParentChild(message, enrollments);
+  const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   if (!matched) {
     return parentDisambiguationContext(enrollments, 'schedule');
   }
@@ -5469,7 +5505,7 @@ async function buildParentScheduleContext(parentId, message) {
 // their child's enrollment/name is still resolved (that part is unrelated to grades),
 // but the reply now always gives the honest current answer instead of querying a model
 // that's gone.
-async function buildParentGradesContext(parentId, message) {
+async function buildParentGradesContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
     return {
@@ -5478,7 +5514,7 @@ async function buildParentGradesContext(parentId, message) {
     };
   }
 
-  const { matched } = resolveParentChild(message, enrollments);
+  const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   if (!matched) {
     return parentDisambiguationContext(enrollments, 'grades');
   }
@@ -5501,7 +5537,7 @@ async function buildParentGradesContext(parentId, message) {
  * name needed; disambiguation only fires with 2+ children and no name match. This is
  * explicit in Task 36's own testing checklist, not an oversight.
  */
-async function buildParentTutorContactContext(parentId, message) {
+async function buildParentTutorContactContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
     return {
@@ -5514,7 +5550,7 @@ async function buildParentTutorContactContext(parentId, message) {
   if (enrollments.length === 1) {
     matched = enrollments[0];
   } else {
-    ({ matched } = resolveParentChild(message, enrollments));
+    ({ matched } = resolveParentChildWithHistory(message, enrollments, history));
     if (!matched) {
       return parentDisambiguationContext(enrollments, "tutor's contact info");
     }
@@ -5571,14 +5607,14 @@ async function buildParentTutorContactContext(parentId, message) {
   };
 }
 
-async function getGroundedChatContext(user, message) {
+async function getGroundedChatContext(user, message, history = []) {
   const topic = detectGroundedTopic(user, message);
 
   if (!topic) {
     return null;
   }
 
-  const context = await resolveGroundedContextForTopic(user, message, topic);
+  const context = await resolveGroundedContextForTopic(user, message, topic, history);
   if (context && !context.topic) {
     // Attach the resolved topic so callers (audit logging) know which record type was read.
     context.topic = topic;
@@ -5586,13 +5622,13 @@ async function getGroundedChatContext(user, message) {
   return context;
 }
 
-async function resolveGroundedContextForTopic(user, message, topic) {
+async function resolveGroundedContextForTopic(user, message, topic, history = []) {
   if (user.role === 'parent') {
-    if (topic === 'enrollment') return buildParentEnrollmentContext(user._id, message);
-    if (topic === 'payments') return buildParentPaymentContext(user._id, message);
-    if (topic === 'schedule') return buildParentScheduleContext(user._id, message);
-    if (topic === 'grades') return buildParentGradesContext(user._id, message);
-    if (topic === 'tutor_contact') return buildParentTutorContactContext(user._id, message);
+    if (topic === 'enrollment') return buildParentEnrollmentContext(user._id, message, history);
+    if (topic === 'payments') return buildParentPaymentContext(user._id, message, history);
+    if (topic === 'schedule') return buildParentScheduleContext(user._id, message, history);
+    if (topic === 'grades') return buildParentGradesContext(user._id, message, history);
+    if (topic === 'tutor_contact') return buildParentTutorContactContext(user._id, message, history);
   }
 
   if (user.role === 'student') {
@@ -5635,7 +5671,7 @@ function isBeeBrightTopic(message, groundedContext) {
   }
 
   const normalized = normalizeMessage(message);
-  return /(bee bright|enroll|enrollment|payment|gcash|tuition|schedule|class|session|tutor|dashboard|materials|announcement|announcements|program|programs|services?|serbisyo|inooffer|iniaalok|toddlers?|playgroup|pre-?kindergarten|kindergarten|academic tutorial|sped|exam|examination preparation|login|log ?in|sign ?in|forgot.*password|reset.*password|recover.*account|admin-login|barangay pantal|dagupan)/.test(normalized);
+  return /(bee bright|enroll|enrollment|payment|gcash|tuition|schedule|class|session|tutor|dashboard|materials|announcement|announcements|program|programs|services?|serbisyo|inooffer|iniaalok|toddlers?|playgroup|pre-?kindergarten|kindergarten|academic tutorial|sped|exam|examination preparation|login|log ?in|sign ?in|forgot.*password|reset.*password|recover.*account|admin-login|teo-?tinay|tapuac|dagupan)/.test(normalized);
 }
 
 function shouldUseDirectSystemReply(message, classifierResult, groundedContext) {
@@ -6243,7 +6279,7 @@ const chat = async (req, res) => {
     const languageProfile = detectLanguageProfile(resolvedMessage);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
     const classifierResult = getIntentReply(resolvedMessage);
-    const groundedContext = await getGroundedChatContext(req.user, resolvedMessage);
+    const groundedContext = await getGroundedChatContext(req.user, resolvedMessage, history);
     let baseReply = await getResolvedReply(req.user, resolvedMessage, classifierResult, groundedContext, effectiveLanguageProfile, history);
     let groundingPath = groundedContext ? 'grounded' : 'deterministic';
 
@@ -6368,7 +6404,7 @@ const ollamaChat = async (req, res) => {
       }
 
       const classifierResultForPrevious = getIntentReply(previousTopicMessage);
-      const groundedContextForPrevious = await getGroundedChatContext(req.user, previousTopicMessage);
+      const groundedContextForPrevious = await getGroundedChatContext(req.user, previousTopicMessage, history);
       const rewrittenReply = await getResolvedReply(
         req.user,
         previousTopicMessage,
@@ -6390,7 +6426,7 @@ const ollamaChat = async (req, res) => {
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
     const responsePreference = detectResponsePreference(resolvedMessage);
     const classifierResult = getIntentReply(resolvedMessage);
-    const groundedContext = await getGroundedChatContext(req.user, resolvedMessage);
+    const groundedContext = await getGroundedChatContext(req.user, resolvedMessage, history);
 
     // Keep Bee Bright system answers deterministic and scoped.
     const shouldForceDeterministicReply = ['english', 'filipino'].includes(effectiveLanguageProfile);
@@ -6445,7 +6481,7 @@ const ollamaChat = async (req, res) => {
     console.error('Ollama chat error:', error);
     const languageProfile = detectLanguageProfile(req.body?.message);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
-    const groundedContext = await getGroundedChatContext(req.user, req.body?.message);
+    const groundedContext = await getGroundedChatContext(req.user, req.body?.message, req.body?.history || []);
     const fallback = localizeKnownReply(groundedContext?.fallbackReply, effectiveLanguageProfile) || getChatReply(req.body?.message, effectiveLanguageProfile);
     await logAiInteraction({ req, message: req.body?.message, reply: fallback, groundedContext, groundingPath: 'error', language: effectiveLanguageProfile, status: 'FAILED' });
     res.status(200).json({ success: true, reply: fallback });
@@ -6485,14 +6521,14 @@ const CONTROLLER_EVAL_CASES = [
     id: 'payments_methods_en',
     message: 'What payment methods are available?',
     expectedLanguage: 'english',
-    mustInclude: [/gcash/i, /seabank/i, /bdo/i],
+    mustInclude: [/gcash/i, /maribank/i, /bdo/i],
     mustNotInclude: [/blockchain|metamask|ganache|crypto/i]
   },
   {
     id: 'location_en',
     message: 'Where is Bee Bright located?',
     expectedLanguage: 'english',
-    mustInclude: [/barangay pantal|dagupan/i],
+    mustInclude: [/teo-tinay|dagupan/i],
     mustNotInclude: [/not yet available|unknown/i]
   }
 ];

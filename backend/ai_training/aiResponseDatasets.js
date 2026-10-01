@@ -953,6 +953,15 @@ const AIResponseDatasets = {
         fil: 'Nasaan ang Bee Bright?',
         tgl: 'Nasaan ang Bee Bright?'
       },
+      // Batch 3 fix: "saan matatagpuan ang bee bright" was losing the dataset-match
+      // score to V001 (programs) — "matatagpuan" only appeared in this entry's reply
+      // text, never in its matchable query/keyword candidates, so it carried zero
+      // weight even after isLocationQuestion's own regex was fixed to recognize it.
+      // Same keywords-array pattern as V004 (Batch 2, Fix 4d).
+      keywords: [
+        'matatagpuan', 'nasaan', 'saan', 'location', 'address', 'teo-tinay', 'teo tinay',
+        'tapuac', 'dagupan', 'where located', 'where is bee bright',
+      ],
       expectedReply: {
         en: 'Bee Bright is located at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
         fil: 'Ang Bee Bright ay matatagpuan sa Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
