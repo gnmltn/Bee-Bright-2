@@ -3700,6 +3700,18 @@ async function getIntentKeywordDatasetReply(user, message, languageProfile = 'en
   if (rule.intent === 'student_schedule') {
     if (!user || user.role !== 'student') return unavailable;
 
+    // Live-testing fix (batch 5): this static-dataset intent runs in the pipeline BEFORE
+    // the grounded-chat context's new date/week/month scoping (parseScheduleDateRange) is
+    // ever consulted, and its own keyword list ("my schedule", "schedule ko") overlaps
+    // with date-scoped phrasings like "what is my schedule today" / "schedule ko this
+    // week" — silently shadowing the new date-aware reply with this older, date-unaware
+    // "just the next class" one. Defer to the grounded-chat pipeline whenever the message
+    // names an explicit date/week/month; keep this shortcut only for a genuinely plain
+    // "what's my schedule" query, where its behavior is unchanged.
+    if (parseScheduleDateRange(message)) {
+      return null;
+    }
+
     const schedule = await Schedule.findOne({ student: user._id, date: { $gte: new Date() } })
       .populate('subject', 'name')
       .sort({ date: 1, startTime: 1 })
@@ -4317,6 +4329,18 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
     return groundedContext.fallbackReply;
   }
 
+  // Live-testing fix (batch 5): a date/week/month-scoped schedule question ("what is my
+  // schedule today", "schedule ko this week") was being shadowed by an EARLIER static Q&A
+  // dataset entry (S021 — "Where can I see my class schedule?", matched via plain keyword
+  // overlap on "schedule"/"my"/"ko", no date awareness at all) before the grounded,
+  // date-aware reply ever got a chance to run — the same shape of bug as the CSV-intent
+  // 'student_schedule' shadowing fixed in getIntentKeywordDatasetReply above. Give a
+  // date-scoped schedule question's grounded reply priority over every static matcher
+  // below, the same way a parent's grounded answer already takes priority above.
+  if (groundedContext?.topic === 'schedule' && groundedContext.fallbackReply && parseScheduleDateRange(message)) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
+  }
+
   // Internal metrics / dataset stats are dashboard-only — never answered here (Task 20).
   if (isOutOfScopeMetricsQuestion(message)) {
     return getOutOfScopeMetricsReply(effectiveLanguageProfile);
@@ -4482,6 +4506,18 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   // that would tell a tutor to "check the Progress section".
   if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
     return groundedContext.fallbackReply;
+  }
+
+  // Live-testing fix (batch 5): a date/week/month-scoped schedule question ("what is my
+  // schedule today", "schedule ko this week") was being shadowed by an EARLIER static Q&A
+  // dataset entry (S021 — "Where can I see my class schedule?", matched via plain keyword
+  // overlap on "schedule"/"my"/"ko", no date awareness at all) before the grounded,
+  // date-aware reply ever got a chance to run — the same shape of bug as the CSV-intent
+  // 'student_schedule' shadowing fixed in getIntentKeywordDatasetReply above. Give a
+  // date-scoped schedule question's grounded reply priority over every static matcher
+  // below, the same way a parent's grounded answer already takes priority above.
+  if (groundedContext?.topic === 'schedule' && groundedContext.fallbackReply && parseScheduleDateRange(message)) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
   }
 
   // Internal metrics / dataset stats are dashboard-only — never answered here (Task 20).
@@ -4745,6 +4781,152 @@ function formatScheduleLine(session, counterpartLabel) {
   return `${formatDate(session.date)} ${session.startTime}-${session.endTime}: ${subjectName} with ${counterpartName}`;
 }
 
+// ── Batch 5 — schedule date/month scoping ──────────────────────────────────────────
+// Every schedule context builder (student, tutor, parent, admin) used to hardcode
+// "the next few upcoming sessions from today", with no way to answer a question that
+// names an actual date, week, or month ("schedule ko this month", "may klase ba ako sa
+// November 15", "klase namin next week"). parseScheduleDateRange pulls an explicit
+// range out of the message; callers fall back to their existing "upcoming" behavior
+// when it returns null, so this is purely additive — no change for a plain "what's my
+// next class" question.
+const SCHEDULE_MONTH_NAMES = {
+  january: 0, jan: 0, enero: 0,
+  february: 1, feb: 1, pebrero: 1,
+  march: 2, mar: 2, marso: 2,
+  april: 3, apr: 3, abril: 3,
+  may: 4, mayo: 4,
+  june: 5, jun: 5, hunyo: 5,
+  july: 6, jul: 6, hulyo: 6,
+  august: 7, aug: 7, agosto: 7,
+  september: 8, sept: 8, sep: 8, setyembre: 8,
+  october: 9, oct: 9, oktubre: 9,
+  november: 10, nov: 10, nobyembre: 10,
+  december: 11, dec: 11, disyembre: 11,
+};
+
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function endOfDay(date) {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function startOfWeek(date) {
+  const d = startOfDay(date);
+  d.setDate(d.getDate() - d.getDay()); // Sunday-start week
+  return d;
+}
+
+function endOfWeek(date) {
+  return endOfDay(addDays(startOfWeek(date), 6));
+}
+
+function startOfMonth(year, monthIdx) {
+  return new Date(year, monthIdx, 1, 0, 0, 0, 0);
+}
+
+function endOfMonth(year, monthIdx) {
+  return new Date(year, monthIdx + 1, 0, 23, 59, 59, 999);
+}
+
+/**
+ * Pull an explicit date/week/month scope out of a schedule-related question.
+ * @returns {{start: Date, end: Date, label: string}|null} null when no explicit range
+ *   is mentioned — callers should fall back to their existing "upcoming" behavior.
+ */
+function parseScheduleDateRange(message, now = new Date()) {
+  const normalized = normalizeMessage(message);
+  if (!normalized) return null;
+
+  if (/\btoday\b|\bngayong araw\b/.test(normalized)) {
+    const d = startOfDay(now);
+    return { start: d, end: endOfDay(d), label: 'today' };
+  }
+  if (/\btomorrow\b|\bbukas\b/.test(normalized)) {
+    const d = startOfDay(addDays(now, 1));
+    return { start: d, end: endOfDay(d), label: 'tomorrow' };
+  }
+  if (/\bnext week\b|\bsusunod na linggo\b/.test(normalized)) {
+    const start = addDays(startOfWeek(now), 7);
+    return { start, end: endOfWeek(start), label: 'next week' };
+  }
+  if (/\bthis week\b|\bngayong linggo\b/.test(normalized)) {
+    return { start: startOfWeek(now), end: endOfWeek(now), label: 'this week' };
+  }
+  if (/\bnext month\b|\bsusunod na buwan\b/.test(normalized)) {
+    const y = now.getFullYear();
+    const m = now.getMonth() + 1;
+    const ny = m > 11 ? y + 1 : y;
+    const nm = m > 11 ? 0 : m;
+    return { start: startOfMonth(ny, nm), end: endOfMonth(ny, nm), label: 'next month' };
+  }
+  if (/\bthis month\b|\bngayong buwan\b/.test(normalized)) {
+    return {
+      start: startOfMonth(now.getFullYear(), now.getMonth()),
+      end: endOfMonth(now.getFullYear(), now.getMonth()),
+      label: 'this month'
+    };
+  }
+
+  // A named month, optionally with a day and/or year: "November", "Nov 15",
+  // "November 15, 2026", "15 November". Numeric-only dates ("11/15") are deliberately
+  // not parsed here — MM/DD vs DD/MM is ambiguous without a locale signal, and a wrong
+  // guess is worse than falling back to the generic "upcoming" reply.
+  // "may" collides with the common Tagalog word "may" ("is there.../have...", as in "may
+  // klase ba ako November 15") — so when several month names appear in the same message,
+  // prefer whichever one actually has a day number next to it (a real date reference
+  // almost always does); only fall back to the last bare month mention when none do.
+  const monthPattern = Object.keys(SCHEDULE_MONTH_NAMES).sort((a, b) => b.length - a.length).join('|');
+  // (?!\d) after the digit group stops it from matching just the first 1-2 digits of a
+  // 4-digit YEAR next to the month name (e.g. "May 2027" must not read day=20 out of
+  // "2027").
+  const dayNear = (word) => new RegExp(
+    `(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s*${word}\\b|\\b${word}\\.?\\s*(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?`,
+    'i'
+  );
+  const monthMatches = [...normalized.matchAll(new RegExp(`\\b(${monthPattern})\\b`, 'gi'))];
+  if (monthMatches.length) {
+    const withDay = monthMatches.find((m) => dayNear(m[1]).test(normalized));
+    // Bare "may" (no day/year attached) is the common Tagalog word "may" ("is there.../
+    // have..."), not a month reference — too ambiguous to guess at, so this case alone
+    // falls through to null (the "upcoming" fallback) instead of guessing a whole month.
+    const monthMatch = withDay || monthMatches.filter((m) => m[1].toLowerCase() !== 'may').pop();
+    if (!monthMatch) return null;
+
+    const monthIdx = SCHEDULE_MONTH_NAMES[monthMatch[1].toLowerCase()];
+    const yearMatch = normalized.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? parseInt(yearMatch[1], 10) : now.getFullYear();
+    const dayMatch = normalized.match(dayNear(monthMatch[1]));
+    const day = dayMatch ? parseInt(dayMatch[1] || dayMatch[2], 10) : null;
+
+    if (day && day >= 1 && day <= 31) {
+      const d = new Date(year, monthIdx, day, 0, 0, 0, 0);
+      if (!Number.isNaN(d.getTime())) {
+        return { start: startOfDay(d), end: endOfDay(d), label: formatDate(d) };
+      }
+    }
+
+    return {
+      start: startOfMonth(year, monthIdx),
+      end: endOfMonth(year, monthIdx),
+      label: `${monthMatch[1][0].toUpperCase()}${monthMatch[1].slice(1)} ${year}`
+    };
+  }
+
+  return null;
+}
+
 function sanitizeOllamaReply(reply) {
   let cleaned = String(reply || '').trim();
 
@@ -4884,13 +5066,20 @@ function detectGroundedTopic(user, message) {
     if (isAcademicSubFeatureQuestion(normalized)) return null;
     if (isParentChildProgressQuestion(normalized)) return 'grades';
 
-    const scheduleKeyword = /(schedule|class|classes|session|sessions|lesson|lessons|calendar|timetable)/.test(normalized);
+    // "klase" added (Batch 5) — the Filipino word for "class", already used elsewhere in
+    // this file (online-class and progress-question checks), but missing from this gate,
+    // so a Filipino-phrased schedule question ("may klase ba ako") never even reached the
+    // date/month-scoping logic below.
+    const scheduleKeyword = /(schedule|class|classes|session|sessions|lesson|lessons|klase|calendar|timetable)/.test(normalized);
     const personalCue = /(\bnext\b|\bupcoming\b|\bmy\b|\bmine\b|\bour\b|\bhis\b|\bher\b|\btheir\b|\banak\b|\bchild\b|\bkid\b|\bson\b|\bdaughter\b|['’]s\b)/.test(normalized);
     if (scheduleKeyword && (personalCue || !isGeneralScheduleHoursQuestion(normalized))) {
       return 'schedule';
     }
     if (!isPaymentQuestion(normalized)
-      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|natitira|natira\b|matitira|kulang|babayaran|down ?payment.*(status|left|remaining))/.test(normalized)) {
+      // "bayarin" added (Batch 5) — normalizeTypos() silently fuzzy-corrects "nabayaran"
+      // (already paid) to "bayarin" (a bill to be paid, near-opposite meaning) before this
+      // regex ever runs, same root cause as the "natitira"->"natira" bug fixed in Batch 3.
+      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|bayarin|natitira|natira\b|matitira|kulang|babayaran|down ?payment.*(status|left|remaining))/.test(normalized)) {
       return 'payments';
     }
     if (!isEnrollmentStepsQuestion(normalized)
@@ -4924,7 +5113,9 @@ function detectGroundedTopic(user, message) {
     return 'payments';
   }
 
-  if (/(schedule|class|session|lesson|calendar|timetable)/.test(normalized)) {
+  // "klase" added (Batch 5) — same gap as the parent branch's scheduleKeyword above, for
+  // the student/tutor/admin fallback path.
+  if (/(schedule|class|session|lesson|klase|calendar|timetable)/.test(normalized)) {
     return 'schedule';
   }
 
@@ -5024,7 +5215,41 @@ async function buildStudentEnrollmentContext(userId) {
   };
 }
 
-async function buildStudentScheduleContext(userId) {
+async function buildStudentScheduleContext(userId, message = '') {
+  // Batch 5: an explicit date/week/month in the question ("schedule ko this month", "may
+  // klase ba ako November 15") now scopes the query to that range instead of always just
+  // showing the next few upcoming sessions.
+  const range = parseScheduleDateRange(message);
+
+  if (range) {
+    const sessions = await Schedule.find({
+      student: userId,
+      date: { $gte: range.start, $lte: range.end }
+    })
+      .populate('subject', 'name code')
+      .populate('tutor', 'firstName middleName lastName')
+      .sort({ date: 1, startTime: 1 })
+      .limit(20)
+      .lean();
+
+    if (!sessions.length) {
+      return {
+        contextText: `Role: student\nNo schedule entries found for ${range.label}.`,
+        fallbackReply: `I could not find a class on your schedule for ${range.label}.`
+      };
+    }
+
+    const list = sessions.map((session, index) => `${index + 1}. ${formatScheduleLine(session, 'tutor')}`).join('\n');
+    return {
+      contextText: [
+        'Role: student',
+        `Sessions for ${range.label}: ${sessions.length}`,
+        list
+      ].join('\n'),
+      fallbackReply: `You have ${sessions.length} class${sessions.length === 1 ? '' : 'es'} for ${range.label}:\n${list}`
+    };
+  }
+
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
@@ -5055,7 +5280,38 @@ async function buildStudentScheduleContext(userId) {
   };
 }
 
-async function buildTutorScheduleContext(userId) {
+async function buildTutorScheduleContext(userId, message = '') {
+  const range = parseScheduleDateRange(message);
+
+  if (range) {
+    const sessions = await Schedule.find({
+      tutor: userId,
+      date: { $gte: range.start, $lte: range.end }
+    })
+      .populate('subject', 'name code')
+      .populate('student', 'firstName middleName lastName')
+      .sort({ date: 1, startTime: 1 })
+      .limit(20)
+      .lean();
+
+    if (!sessions.length) {
+      return {
+        contextText: `Role: tutor\nNo schedule entries found for ${range.label}.`,
+        fallbackReply: `I could not find a tutoring session on your schedule for ${range.label}.`
+      };
+    }
+
+    const list = sessions.map((session, index) => `${index + 1}. ${formatScheduleLine(session, 'student')}`).join('\n');
+    return {
+      contextText: [
+        'Role: tutor',
+        `Sessions for ${range.label}: ${sessions.length}`,
+        list
+      ].join('\n'),
+      fallbackReply: `You have ${sessions.length} session${sessions.length === 1 ? '' : 's'} for ${range.label}:\n${list}`
+    };
+  }
+
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
@@ -5327,7 +5583,38 @@ async function buildAdminEnrollmentContext() {
   };
 }
 
-async function buildAdminScheduleContext() {
+async function buildAdminScheduleContext(message = '') {
+  const range = parseScheduleDateRange(message);
+
+  if (range) {
+    const sessions = await Schedule.find({
+      date: { $gte: range.start, $lte: range.end }
+    })
+      .populate('subject', 'name code')
+      .populate('student', 'firstName middleName lastName')
+      .populate('tutor', 'firstName middleName lastName')
+      .sort({ date: 1, startTime: 1 })
+      .limit(20)
+      .lean();
+
+    if (!sessions.length) {
+      return {
+        contextText: `Role: admin\nNo sessions are scheduled in the system for ${range.label}.`,
+        fallbackReply: `There are no sessions scheduled for ${range.label}.`
+      };
+    }
+
+    const list = sessions.map((session, index) => `${index + 1}. ${formatDate(session.date)} ${session.startTime}-${session.endTime}, ${session.subject?.name || 'Unknown subject'}, student ${buildFullName(session.student)}, tutor ${buildFullName(session.tutor)}`).join('\n');
+    return {
+      contextText: [
+        'Role: admin',
+        `Sessions for ${range.label}: ${sessions.length}`,
+        list
+      ].join('\n'),
+      fallbackReply: `There ${sessions.length === 1 ? 'is' : 'are'} ${sessions.length} session${sessions.length === 1 ? '' : 's'} scheduled for ${range.label}:\n${list}`
+    };
+  }
+
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
@@ -5560,6 +5847,41 @@ async function buildParentScheduleContext(parentId, message, history = []) {
     };
   }
 
+  // Batch 5: an explicit date/week/month in the question ("schedule niya this month", "may
+  // klase ba siya November 15") now scopes the query to that range instead of always just
+  // showing the next few upcoming sessions.
+  const range = parseScheduleDateRange(message);
+
+  if (range) {
+    const sessions = await Schedule.find({
+      $or: [{ student: matched.student }, { students: matched.student }],
+      date: { $gte: range.start, $lte: range.end },
+    })
+      .populate('subject', 'name code')
+      .populate('tutor', 'firstName middleName lastName')
+      .sort({ date: 1, startTime: 1 })
+      .limit(20)
+      .lean();
+
+    if (!sessions.length) {
+      return {
+        contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nNo sessions scheduled for ${range.label}.`,
+        fallbackReply: `I could not find a class for ${childDisplayName(matched)} for ${range.label}.`,
+      };
+    }
+
+    const list = sessions.map((s, i) => `${i + 1}. ${formatScheduleLine(s, 'tutor')}`).join('\n');
+    return {
+      contextText: [
+        'Role: parent',
+        `Child: ${childDisplayName(matched)}`,
+        `Sessions for ${range.label}: ${sessions.length}`,
+        list,
+      ].join('\n'),
+      fallbackReply: `${childDisplayName(matched)} has ${sessions.length} class${sessions.length === 1 ? '' : 'es'} for ${range.label}:\n${list}`,
+    };
+  }
+
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const sessions = await Schedule.find({
@@ -5698,8 +6020,46 @@ async function buildParentTutorContactContext(parentId, message, history = []) {
   };
 }
 
+// Batch 5 fix: a parent's bare-name reply to a disambiguation prompt ("Ana", nothing
+// else) has no topic keyword of its own, so detectGroundedTopic returns null for THIS
+// message alone and the ORIGINAL pending question (schedule? grades? tutor contact?) is
+// lost — the reply used to fall through to the generic, ungrounded pipeline instead of
+// answering about the named child. parentDisambiguationContext's own fallbackReply text
+// always embeds the topic label (either "Whose <topic> would you like?" for 2+ children,
+// or a quoted "<Name>'s <topic>" example for exactly one) — recovering it from the most
+// recent assistant turn lets the bare-name reply resolve to the SAME topic that was
+// asked about originally. If the "name" given doesn't actually match a child after all,
+// the target builder's own resolveParentChildWithHistory naturally re-asks via
+// parentDisambiguationContext again, so being permissive here is safe.
+const PARENT_DISAMBIGUATION_TOPIC_LABELS = {
+  schedule: 'schedule',
+  grades: 'grades',
+  "tutor's contact info": 'tutor_contact',
+};
+
+function getPendingParentDisambiguationTopic(history = []) {
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  const lastAssistant = items.find((item) => item && item.role === 'assistant' && typeof item.content === 'string');
+  if (!lastAssistant) return null;
+
+  // "whose X would you like" (2+ children) is tried first: the quoted-example fallback
+  // ("...for example "Ana's tutor's contact info".") has two possessive 's markers when
+  // the topic label itself contains one ("tutor's contact info"), so it needs a
+  // non-greedy prefix to stop at the child's name instead of swallowing part of the label.
+  const match = lastAssistant.content.match(/whose\s+([a-z'\s]+?)\s+would you like/i)
+    || lastAssistant.content.match(/for example "[^"]*?'s\s+([a-z'\s]+?)"\.?\s*$/i);
+  if (!match) return null;
+
+  const label = match[1].trim().toLowerCase();
+  return PARENT_DISAMBIGUATION_TOPIC_LABELS[label] || null;
+}
+
 async function getGroundedChatContext(user, message, history = []) {
-  const topic = detectGroundedTopic(user, message);
+  let topic = detectGroundedTopic(user, message);
+
+  if (!topic && user?.role === 'parent') {
+    topic = getPendingParentDisambiguationTopic(history);
+  }
 
   if (!topic) {
     return null;
@@ -5725,14 +6085,14 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
   if (user.role === 'student') {
     if (topic === 'payments') return buildStudentPaymentContext(user._id);
     if (topic === 'enrollment') return buildStudentEnrollmentContext(user._id);
-    if (topic === 'schedule') return buildStudentScheduleContext(user._id);
+    if (topic === 'schedule') return buildStudentScheduleContext(user._id, message);
   }
 
   if (user.role === 'tutor') {
     if (topic === 'student_notes') return buildTutorStudentNotesContext(user._id, message);
     if (topic === 'at_risk') return buildTutorAtRiskContext(user._id, message);
     if (topic === 'wellbeing_check') return buildTutorWellbeingCheckContext(user._id, message);
-    if (topic === 'schedule') return buildTutorScheduleContext(user._id);
+    if (topic === 'schedule') return buildTutorScheduleContext(user._id, message);
     if (topic === 'payments') {
       return {
         contextText: 'Role: tutor\nTutors do not manage student payment verification in this system.',
@@ -5750,7 +6110,7 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
   if (user.role === 'admin' || user.role === 'super_admin') {
     if (topic === 'payments') return buildAdminPaymentContext();
     if (topic === 'enrollment') return buildAdminEnrollmentContext();
-    if (topic === 'schedule') return buildAdminScheduleContext();
+    if (topic === 'schedule') return buildAdminScheduleContext(message);
   }
 
   return null;

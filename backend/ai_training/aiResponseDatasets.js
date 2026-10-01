@@ -96,21 +96,15 @@ const AIResponseDatasets = {
       }
     },
     // Enrollment
-    {
-      id: 'S006',
-      role: 'student',
-      topic: 'enrollment',
-      queries: {
-        en: 'How do I enroll in a program?',
-        fil: 'Paano ako mag-enroll sa program?',
-        tgl: 'Paano ako mag-enroll sa program?'
-      },
-      expectedReply: {
-        en: 'Open Enrollment page, fill out student info, select programs, choose payment method, and submit payment proof. Admin verifies and activates your enrollment.',
-        fil: 'Buksan ang Enrollment page, punan ang student info, piliin ang programs, piliin ang payment method, at i-submit ang payment proof. Ibe-verify ng admin at ia-activate ang enrollment.',
-        tgl: 'Buksan ang Enrollment page, punan ang student info, piliin ang programs, piliin ang payment method, at i-submit ang payment proof. Ibe-verify ng admin at ia-activate ang enrollment.'
-      }
-    },
+    // Batch 5 fix: S007 is defined BEFORE S006 (ids unchanged, only array position swapped).
+    // Both entries' canonical phrasing collapses to the exact same content-word set after
+    // stopword filtering ("need"/"what"/"how"/"do"/"to"/"i"/"a" are all stopwords), so a
+    // user asking S007's own canonical question ("What do I need to enroll?") scored a
+    // perfect, EXACT tie against S006 ("How do I enroll in a program?") — both reduce to
+    // {do, enroll} — and lost every time because findDatasetMatch's tie-break always keeps
+    // whichever entry is defined first. Defining S007 first here does not affect S006's own
+    // matching: S006's canonical phrasing keeps the extra content word "program", which S007
+    // doesn't have, so S006 still uniquely scores highest (not tied) for its own question.
     {
       id: 'S007',
       role: 'student',
@@ -124,6 +118,21 @@ const AIResponseDatasets = {
         en: 'You need: valid email, student name, contact info, program selection, and payment proof (screenshot of your GCash, Maribank, or BDO transaction).',
         fil: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng iyong GCash, Maribank, o BDO transaction).',
         tgl: 'Kailangan mo ng: valid email, student name, contact info, program selection, at payment proof (screenshot ng GCash, Maribank, o BDO transaction mo).'
+      }
+    },
+    {
+      id: 'S006',
+      role: 'student',
+      topic: 'enrollment',
+      queries: {
+        en: 'How do I enroll in a program?',
+        fil: 'Paano ako mag-enroll sa program?',
+        tgl: 'Paano ako mag-enroll sa program?'
+      },
+      expectedReply: {
+        en: 'Open Enrollment page, fill out student info, select programs, choose payment method, and submit payment proof. Admin verifies and activates your enrollment.',
+        fil: 'Buksan ang Enrollment page, punan ang student info, piliin ang programs, piliin ang payment method, at i-submit ang payment proof. Ibe-verify ng admin at ia-activate ang enrollment.',
+        tgl: 'Buksan ang Enrollment page, punan ang student info, piliin ang programs, piliin ang payment method, at i-submit ang payment proof. Ibe-verify ng admin at ia-activate ang enrollment.'
       }
     },
     {
