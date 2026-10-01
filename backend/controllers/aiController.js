@@ -2840,7 +2840,10 @@ function applyTemplate(template, values) {
 }
 
 function extractRequestedName(normalizedMessage = '') {
-  const m = normalizedMessage.match(/(?:for|named|si|kay|about|details? of)\s+([a-z][a-z\s.-]{1,60})$/i);
+  // "ni" added (Batch 4) — Filipino possessive marker ("contact list ni Nicole"), same role
+  // as "si"/"kay" here, was missing and caused name-bearing questions to silently resolve
+  // to no name at all.
+  const m = normalizedMessage.match(/(?:for|named|si|kay|ni|about|details? of)\s+([a-z][a-z\s.-]{1,60})$/i);
   return m?.[1]?.trim() || null;
 }
 
@@ -2935,8 +2938,8 @@ function extractSpecificContactTargetName(message = '', normalized = '') {
   }
 
   const candidates = [
-    String(message || '').match(/(?:for|of|about|named|name is|si|kay)\s+([a-z][a-z\s.'-]{1,80})/i),
-    normalized.match(/(?:for|of|about|named|si|kay)\s+([a-z][a-z\s.'-]{1,80})/i)
+    String(message || '').match(/(?:for|of|about|named|name is|si|kay|ni)\s+([a-z][a-z\s.'-]{1,80})/i),
+    normalized.match(/(?:for|of|about|named|si|kay|ni)\s+([a-z][a-z\s.'-]{1,80})/i)
   ];
 
   for (const match of candidates) {
@@ -3011,10 +3014,21 @@ async function getRoleBasedContactDetailsReply(user, message, languageProfile = 
   const requestedName = explicitRequestedName || ((pronounRef || !explicitRequestedName) ? historyRequestedName : null);
 
   if (['admin', 'super_admin'].includes(userRole)) {
+    // Policy: a student's own email/phone is never fetched through this feature — Bee
+    // Bright doesn't collect student contact info; it lives on the linked parent's
+    // account instead. Excluding role 'student' here keeps this contact-lookup query
+    // from ever touching that (synthetic/placeholder) data.
     const baseQuery = {
       deletedAt: null,
-      isArchived: { $ne: true }
+      isArchived: { $ne: true },
+      role: { $ne: 'student' }
     };
+    const studentContactDeclineReply = pickByLanguage(
+      languageProfile,
+      "Student contact details aren't available here — a student's contact number and email belong to their linked parent's account instead. Ask for the parent's contact, or for a tutor's contact.",
+      'Hindi available dito ang contact details ng estudyante — ang contact number at email ay nasa parent account nila. Itanong na lang ang contact ng parent, o ang contact ng tutor.',
+      'Hindi available dito ang contact details ng student — nasa parent account nila ang contact number at email. I-ask na lang ang contact ng parent, or ng tutor.'
+    );
 
     if (asksAllUsers) {
       const users = await User.find(baseQuery)
@@ -3037,18 +3051,25 @@ async function getRoleBasedContactDetailsReply(user, message, languageProfile = 
     }
 
     const nameMatchers = buildUserNameOrEmailMatchers(requestedName);
-    const targetUser = await User.findOne({
-      ...baseQuery,
+    // Look up the name across ANY role first so a student name can be recognized and
+    // declined explicitly, rather than silently falling through to "not found".
+    const matchedUser = await User.findOne({
+      deletedAt: null,
+      isArchived: { $ne: true },
       $or: nameMatchers
     })
       .select('firstName lastName fullName role email phone')
       .lean();
 
-    if (!targetUser) {
+    if (!matchedUser) {
       return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
     }
 
-    return formatContactDetailsBlock(targetUser);
+    if (matchedUser.role === 'student') {
+      return studentContactDeclineReply;
+    }
+
+    return formatContactDetailsBlock(matchedUser);
   }
 
   if (userRole === 'student') {
@@ -3208,10 +3229,13 @@ function getTutorReferenceFromHistory(history = []) {
     }
 
     // Parse assistant tutor list replies and use single-item list as context.
-    const listMatch = content.match(/here is the tutor list:\s*(.+)$/i) || content.match(/narito ang listahan ng tutor:\s*(.+)$/i);
+    // Batch 4 fix: the admin "tutor list" reply (getAdminSystemKnowledgeReply) now puts
+    // one name per LINE, not comma-separated — `[\s\S]+` (matches across newlines) and
+    // splitting on comma OR newline keeps this working for both list formats.
+    const listMatch = content.match(/here is the tutor list:\s*([\s\S]+)$/i) || content.match(/narito ang listahan ng tutor:\s*([\s\S]+)$/i);
     if (listMatch?.[1]) {
       const names = listMatch[1]
-        .split(',')
+        .split(/[,\n]/)
         .map((name) => cleanCandidateName(name))
         .filter(Boolean);
 
@@ -3415,7 +3439,56 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
   }
 
   if (['admin', 'super_admin'].includes(userRole)) {
-    const targetRole = asksTutor || historyTutorName ? 'tutor' : 'student';
+    // Batch 4 fix: when neither "tutor" nor "student" is said explicitly and history gives
+    // no tutor to carry forward, this used to default to 'student' even for a contact
+    // question ("contact list ni nicole" — a tutor's name, but no literal "tutor" word) —
+    // sending the query to the wrong collection entirely. Default ambiguous CONTACT
+    // questions to 'tutor' instead (students' own contact info is blocked below anyway).
+    const targetRole = asksTutor || historyTutorName
+      ? 'tutor'
+      : (asksStudent ? 'student' : (asksContact ? 'tutor' : 'student'));
+
+    // Policy: a student's email/phone is never fetched through this feature — Bee Bright
+    // does not collect a student's own contact info; it's the linked parent's account
+    // that holds contact details. Redirect instead of silently returning student rows.
+    if (asksContact && targetRole === 'student') {
+      return pickByLanguage(
+        languageProfile,
+        "Student contact details aren't available here — a student's contact number and email belong to their linked parent's account instead. Ask for the parent's contact, or for a tutor's contact.",
+        'Hindi available dito ang contact details ng estudyante — ang contact number at email ay nasa parent account nila. Itanong na lang ang contact ng parent, o ang contact ng tutor.',
+        'Hindi available dito ang contact details ng student — nasa parent account nila ang contact number at email. I-ask na lang ang contact ng parent, or ng tutor.'
+      );
+    }
+
+    // Live-testing fix (batch 4): a named contact question whose target happens to be a
+    // student, but says neither "student" nor "tutor" (e.g. "contact list ni Ana Cruz"),
+    // still defaults to querying ONLY the tutor collection via the ambiguous-default rule
+    // above — the name is never found there, and a generic "not available" reply leaks
+    // out instead of the explicit decline policy. Resolve the name across ANY role first,
+    // same as getRoleBasedContactDetailsReply's admin branch, so a student name is always
+    // recognized and declined explicitly rather than silently falling through.
+    if (asksContact && resolvedName && targetRole !== 'student') {
+      // buildUserNameOrEmailMatchers (already used by getRoleBasedContactDetailsReply
+      // above) splits a "first last" query into {firstName, lastName} pairs — a bare
+      // single-field regex can't match a two-word name since no User document stores
+      // first+last together (there is no queryable `fullName` field on the model at all,
+      // it's only ever computed ad hoc in auth responses).
+      const anyRoleMatch = await User.findOne({
+        isArchived: { $ne: true },
+        deletedAt: null,
+        $or: buildUserNameOrEmailMatchers(resolvedName),
+      }).select('role').lean();
+
+      if (anyRoleMatch?.role === 'student') {
+        return pickByLanguage(
+          languageProfile,
+          "Student contact details aren't available here — a student's contact number and email belong to their linked parent's account instead. Ask for the parent's contact, or for a tutor's contact.",
+          'Hindi available dito ang contact details ng estudyante — ang contact number at email ay nasa parent account nila. Itanong na lang ang contact ng parent, o ang contact ng tutor.',
+          'Hindi available dito ang contact details ng student — nasa parent account nila ang contact number at email. I-ask na lang ang contact ng parent, or ng tutor.'
+        );
+      }
+    }
+
     const query = {
       role: targetRole,
       isArchived: { $ne: true },
@@ -3423,13 +3496,9 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
     };
 
     if (resolvedName) {
-      const nameRegex = new RegExp(resolvedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [
-        { firstName: nameRegex },
-        { lastName: nameRegex },
-        { fullName: nameRegex },
-        { email: nameRegex }
-      ];
+      // Same two-word-name gap as the any-role guard above — reuse the same matcher
+      // instead of a bare single-field regex.
+      query.$or = buildUserNameOrEmailMatchers(resolvedName);
     }
 
     const rows = await User.find(query)
@@ -3452,18 +3521,25 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
       );
     }
 
-    const list = rows.map((row) => asksContact ? formatUserWithContact(row) : formatUserShort(row)).join(', ');
+    // Batch 4 fix: label by the collection actually queried (targetRole), not the
+    // "tutor" keyword literally appearing in this message — "contact list ni nicole"
+    // queries tutors (via the ambiguous-defaults-to-tutor rule above) even though the
+    // word "tutor" never appears, and the label must still say "tutor", not "student".
+    const isTutorList = targetRole === 'tutor';
+    // One block per person on its own lines (not comma-joined) — comma-joining several
+    // people's name/email/contact on one line was reported as unreadable.
+    const list = rows.map((row) => asksContact ? formatUserWithContact(row) : formatUserShort(row)).join('\n');
     return pickByLanguage(
       languageProfile,
-      asksTutor
-        ? (asksContact ? `Here are the tutor contacts: ${list}` : `Here is the tutor list: ${list}`)
-        : (asksContact ? `Here are the student contacts: ${list}` : `Here are the student details: ${list}`),
-      asksTutor
-        ? (asksContact ? `Narito ang contact ng mga tutor: ${list}` : `Narito ang listahan ng tutor: ${list}`)
-        : (asksContact ? `Narito ang contact ng mga estudyante: ${list}` : `Narito ang detalye ng mga estudyante: ${list}`),
-      asksTutor
-        ? (asksContact ? `Narito ang contact ng mga tutor: ${list}` : `Narito ang listahan ng tutor: ${list}`)
-        : (asksContact ? `Narito ang contact ng mga estudyante: ${list}` : `Narito ang detalye ng mga estudyante: ${list}`)
+      isTutorList
+        ? (asksContact ? `Here are the tutor contacts:\n${list}` : `Here is the tutor list:\n${list}`)
+        : (asksContact ? `Here are the student contacts:\n${list}` : `Here are the student details:\n${list}`),
+      isTutorList
+        ? (asksContact ? `Narito ang contact ng mga tutor:\n${list}` : `Narito ang listahan ng tutor:\n${list}`)
+        : (asksContact ? `Narito ang contact ng mga estudyante:\n${list}` : `Narito ang detalye ng mga estudyante:\n${list}`),
+      isTutorList
+        ? (asksContact ? `Narito ang contact ng mga tutor:\n${list}` : `Narito ang listahan ng tutor:\n${list}`)
+        : (asksContact ? `Narito ang contact ng mga estudyante:\n${list}` : `Narito ang detalye ng mga estudyante:\n${list}`)
     );
   }
 
@@ -3474,6 +3550,19 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
         'You can view your own profile in your account settings. Tutor-to-tutor personal details are restricted.',
         'Maaari mong tingnan ang sarili mong profile sa account settings. Restriction ang tutor-to-tutor personal details.',
         'Maaari mong tingnan ang sarili mong profile sa account settings. Restriction ang tutor-to-tutor personal details.'
+      );
+    }
+
+    // Policy: same as the admin branch above — a student's own email/phone is never
+    // fetched through this feature, since Bee Bright doesn't collect student contact
+    // info; it lives on the linked parent's account instead. Redirect rather than
+    // silently returning the student rows' (synthetic/placeholder) contact fields.
+    if (asksContact) {
+      return pickByLanguage(
+        languageProfile,
+        "Student contact details aren't available here — a student's contact number and email belong to their linked parent's account instead. Ask for a parent's contact if you need to reach them.",
+        'Hindi available dito ang contact details ng estudyante — ang contact number at email ay nasa parent account nila. Itanong na lang ang contact ng parent kung kailangan mo silang abutin.',
+        'Hindi available dito ang contact details ng student — nasa parent account nila ang contact number at email. I-ask na lang ang contact ng parent kung kailangan mo silang i-contact.'
       );
     }
 
@@ -3513,12 +3602,14 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
       );
     }
 
-    const list = students.map((row) => asksContact ? formatUserWithContact(row) : formatUserShort(row)).join(', ');
+    // One block per student on its own lines (not comma-joined) — see the formatting
+    // note above the admin-branch list.
+    const list = students.map((row) => asksContact ? formatUserWithContact(row) : formatUserShort(row)).join('\n');
     return pickByLanguage(
       languageProfile,
-      asksContact ? `Here are your assigned student contacts: ${list}` : `Here are your assigned student details: ${list}`,
-      asksContact ? `Narito ang contacts ng assigned mong estudyante: ${list}` : `Narito ang detalye ng mga assigned mong estudyante: ${list}`,
-      asksContact ? `Narito ang contacts ng assigned mong estudyante: ${list}` : `Narito ang detalye ng mga assigned mong estudyante: ${list}`
+      asksContact ? `Here are your assigned student contacts:\n${list}` : `Here are your assigned student details:\n${list}`,
+      asksContact ? `Narito ang contacts ng assigned mong estudyante:\n${list}` : `Narito ang detalye ng mga assigned mong estudyante:\n${list}`,
+      asksContact ? `Narito ang contacts ng assigned mong estudyante:\n${list}` : `Narito ang detalye ng mga assigned mong estudyante:\n${list}`
     );
   }
 

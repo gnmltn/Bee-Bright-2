@@ -957,10 +957,14 @@ const AIResponseDatasets = {
       // score to V001 (programs) — "matatagpuan" only appeared in this entry's reply
       // text, never in its matchable query/keyword candidates, so it carried zero
       // weight even after isLocationQuestion's own regex was fixed to recognize it.
-      // Same keywords-array pattern as V004 (Batch 2, Fix 4d).
+      // Same keywords-array pattern as V004 (Batch 2, Fix 4d). Batch 4 addition:
+      // "locate"/"malolocate"/"map" — "where i can locate bee bright" was still losing
+      // a scoring TIE to V001 ("locate" vs this entry's own "located" in `queries` are
+      // two separate tokens with no stemming), since "locate" itself wasn't a keyword yet.
       keywords: [
-        'matatagpuan', 'nasaan', 'saan', 'location', 'address', 'teo-tinay', 'teo tinay',
-        'tapuac', 'dagupan', 'where located', 'where is bee bright',
+        'matatagpuan', 'nasaan', 'saan', 'location', 'located', 'locate', 'malolocate',
+        'address', 'map', 'teo-tinay', 'teo tinay', 'tapuac', 'dagupan', 'where located',
+        'where is bee bright', 'where is', 'where i can locate',
       ],
       expectedReply: {
         en: 'Bee Bright is located at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.',
