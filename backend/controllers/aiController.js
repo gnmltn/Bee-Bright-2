@@ -2432,6 +2432,72 @@ async function getPaymentStatisticsReply(user, message, languageProfile = 'engli
   );
 }
 
+// ── Batch 7 — Admin revenue summarization ──────────────────────────────────────────
+// Distinct from getPaymentStatisticsReply above: that one counts payment DOCUMENTS by
+// status (submitted/verified/pending); this one sums the actual PESO AMOUNT of verified
+// payments, optionally scoped to a date range. "Revenue" already has a defined meaning
+// elsewhere in this codebase — dashboardController.js's getMonthlyRevenue() and
+// AdminDashboard.tsx's derivedMonthlyRevenue/reportSummary.verifiedRevenue both define it
+// as: sum of Payment.amount where status === 'verified', bucketed by verifiedAt (falling
+// back to createdAt when a payment was verified before that field existed). This reuses
+// that exact definition rather than inventing a new one, so the chatbot's number can
+// never disagree with the dashboard's stat card.
+function isRevenueQuestion(normalized) {
+  return /(\brevenue\b|gross (income|sales|collections?)|total (collections?|income|sales)|collections? (summary|report)|how much (did we|have we|has (the )?(center|school)) (collect|earn|make)|\bkita\b|\bkinita\b|\bkinikita\b|\bnakolekta\b|\bnatipon\b|\bkoleksyon\b|magkano ang (kita|nakolekta|natipon|koleksyon))/.test(normalized);
+}
+
+// Explicit "no date filter" phrasing — matches AdminDashboard.tsx's all-time
+// reportSummary.verifiedRevenue rather than the (default) current-month scope.
+function isAllTimeRevenueQuestion(normalized) {
+  return /(all.?time|lifetime|overall|since (we|the center|the school) started|from the (start|beginning)|lahat ng kita|sa kabuuan)/.test(normalized);
+}
+
+async function getRevenueSummaryReply(user, message, languageProfile = 'english') {
+  const normalized = normalizeMessage(message);
+  if (!isRevenueQuestion(normalized)) {
+    return null;
+  }
+
+  if (!user || !['admin', 'super_admin'].includes(user.role)) {
+    return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
+  }
+
+  // Date scoping: an explicit "all time"/"lifetime" phrase wins outright (no filter at
+  // all). Otherwise reuse parseScheduleDateRange — it's a generic NL date-range parser
+  // (today/this week/this month/a named month, EN+Tagalog) despite its schedule-era
+  // name, not re-implemented here. With no explicit date mentioned at all, default to
+  // the CURRENT MONTH, matching the dashboard's primary "Monthly Revenue" stat card.
+  const allTime = isAllTimeRevenueQuestion(normalized);
+  const range = allTime ? null : parseScheduleDateRange(message);
+  const now = new Date();
+  const effectiveRange = range || (allTime ? null : {
+    start: startOfMonth(now.getFullYear(), now.getMonth()),
+    end: endOfMonth(now.getFullYear(), now.getMonth()),
+    label: 'this month',
+  });
+
+  const pipeline = [
+    { $match: { status: 'verified' } },
+    { $addFields: { dateToUse: { $ifNull: ['$verifiedAt', '$createdAt'] } } },
+  ];
+  if (effectiveRange) {
+    pipeline.push({ $match: { dateToUse: { $gte: effectiveRange.start, $lte: effectiveRange.end } } });
+  }
+  pipeline.push({ $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } });
+
+  const [result] = await Payment.aggregate(pipeline);
+  const total = result?.total || 0;
+  const count = result?.count || 0;
+  const periodLabel = effectiveRange ? effectiveRange.label : 'all time';
+
+  return pickByLanguage(
+    languageProfile,
+    `Revenue (${periodLabel}): ${formatCurrency(total)} from ${count} verified payment${count === 1 ? '' : 's'}.`,
+    `Kita (${periodLabel}): ${formatCurrency(total)} mula sa ${count} verified na bayad.`,
+    `Kita (${periodLabel}): ${formatCurrency(total)} galing sa ${count} verified na bayad.`
+  );
+}
+
 async function getUpcomingSessionReply(user, message, languageProfile = 'english') {
   const normalized = normalizeMessage(message);
   if (!isUpcomingSessionQuestion(normalized)) {
@@ -4434,6 +4500,17 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
     return roleBasedContactDetailsReply;
   }
 
+  // Batch 7 — admin revenue summary (sum of verified payment amounts, date-scoped).
+  // Checked BEFORE getAdminSystemKnowledgeReply: that function's asksOverview gate
+  // matches any message containing the bare word "report" (e.g. "revenue report",
+  // "collection report this month") and, when none of its more specific list flags are
+  // set, falls through to its own generic "Admin System Overview" reply — which would
+  // otherwise shadow this feature's specific revenue number before it is ever reached.
+  const revenueSummaryReply = await getRevenueSummaryReply(user, message, effectiveLanguageProfile);
+  if (revenueSummaryReply) {
+    return revenueSummaryReply;
+  }
+
   const adminKnowledgeReply = await getAdminSystemKnowledgeReply(user, message, effectiveLanguageProfile, history);
   if (adminKnowledgeReply) {
     return adminKnowledgeReply;
@@ -4622,6 +4699,17 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   const roleBasedContactDetailsReply = await getRoleBasedContactDetailsReply(user, message, effectiveLanguageProfile, history);
   if (roleBasedContactDetailsReply) {
     return roleBasedContactDetailsReply;
+  }
+
+  // Batch 7 — admin revenue summary (sum of verified payment amounts, date-scoped).
+  // Checked BEFORE getAdminSystemKnowledgeReply: that function's asksOverview gate
+  // matches any message containing the bare word "report" (e.g. "revenue report",
+  // "collection report this month") and, when none of its more specific list flags are
+  // set, falls through to its own generic "Admin System Overview" reply — which would
+  // otherwise shadow this feature's specific revenue number before it is ever reached.
+  const revenueSummaryReply = await getRevenueSummaryReply(user, message, effectiveLanguageProfile);
+  if (revenueSummaryReply) {
+    return revenueSummaryReply;
   }
 
   const adminKnowledgeReply = await getAdminSystemKnowledgeReply(user, message, effectiveLanguageProfile, history);

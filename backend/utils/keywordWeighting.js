@@ -373,9 +373,23 @@ function fuzzyVocab() {
 }
 
 /** The canonical keyword a (possibly misspelled / affixed) word maps to, or null. */
+// Live-testing fix (batch 7) — complete, extremely common, correctly-spelled Filipino
+// words that the affix-strip step (below) would otherwise mis-read as a typo'd form of an
+// unrelated vocab word. "makita"/"nakikita"/"makikita" ("to see/be seen") strip their
+// "ma-"/"naki-"/"maki-" prefix down to "kita" — the vocab word for "income/revenue" — so
+// "paano makita ang schedule ko" (how do I see my schedule) was silently rewritten into
+// "paano kita ang schedule ko" and then misread as a revenue question. Unlike the
+// "natitira"->"natira" / "nabayaran"->"bayarin" collisions fixed in earlier batches (both
+// still topically-compatible near-misses, worked around locally in the detector regex),
+// this pairing is a genuine wrong-topic flip with no shared meaning at all, so it's
+// excluded here at the root rather than chased in every feature that happens to use the
+// word "kita".
+const TYPO_CORRECTION_DENYLIST = new Set(['makita', 'nakikita', 'makikita']);
+
 function fuzzyCanonical(word) {
   const w = String(word || '').toLowerCase();
   if (w.length < 4) return null;
+  if (TYPO_CORRECTION_DENYLIST.has(w)) return null;
   const vocab = fuzzyVocab();
   if (vocab.has(w) || STOPWORDS.has(w)) return null; // already good — leave it
 
