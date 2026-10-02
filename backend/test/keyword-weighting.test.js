@@ -38,6 +38,34 @@ test('findDatasetMatch: pure filler never matches', () => {
   assert.equal(findDatasetMatch('salamat', 'tutor'), null);
 });
 
+// Batch 9 — monitor-only overlapping entries (same general topic, different exact
+// question/answer). Not a live bug: findDatasetMatch's `itemScore > bestScore` (strictly
+// greater) plus role-specific entries sorted first in the search pool already make this
+// deterministic. Locked in here so a future dataset/pool-order change that accidentally
+// flips the winner gets caught immediately instead of silently shipping a wrong answer.
+test('findDatasetMatch: S009 vs V008 resolve by role, never swap', () => {
+  // A logged-in student asking about THEIR OWN status gets the dashboard answer (S009),
+  // not the logged-out Track Enrollment answer (V008) — even though both entries share
+  // the words "enrollment status".
+  assert.equal(findDatasetMatch('what is my enrollment status', 'student')?.id, 'S009');
+  // A visitor (no student pool at all) asking the same words gets V008 — there is no
+  // S009 in their search pool to begin with.
+  assert.equal(findDatasetMatch('what is my enrollment status', 'visitor')?.id, 'V008');
+  // The visitor-specific "without logging in" phrasing always resolves to V008, for
+  // either role — a student asking it that way still means the public Track Enrollment
+  // flow, not the dashboard.
+  assert.equal(findDatasetMatch('how do i check my enrollment status without logging in', 'visitor')?.id, 'V008');
+  assert.equal(findDatasetMatch('how do i check my enrollment status without logging in', 'student')?.id, 'V008');
+});
+
+test('findDatasetMatch: V005 vs V012 resolve by exact question, never swap', () => {
+  // "How do I enroll?" (general steps) vs "what is the pre-enrollment assessment for?"
+  // (a specific sub-topic) share the word "enroll(ment)" but must never cross-answer.
+  assert.equal(findDatasetMatch('how do i enroll', 'visitor')?.id, 'V005');
+  assert.equal(findDatasetMatch('what is the pre-enrollment assessment for', 'visitor')?.id, 'V012');
+  assert.equal(findDatasetMatch('what is the pre-enrollment assessment for', 'student')?.id, 'V012');
+});
+
 test('resolveDomainCategory: trilingual phrasing resolves to the same category', () => {
   for (const m of [
     'how much is the academic tutorial',              // EN
