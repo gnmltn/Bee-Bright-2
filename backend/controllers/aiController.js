@@ -5836,17 +5836,29 @@ function childDisplayName(enrollment) {
 // Match the child the parent named in this single message. Returns the enrollment when
 // exactly one child name matches, otherwise null (caller decides whether to disambiguate).
 // Only reads children linked to this parent via Enrollment.parent — never a broad query.
+//
+// Enrollments are per PROGRAM, not per child — a child who renewed or added a program has
+// 2+ records with the same name. Matching used to run directly against the flat list, so
+// such a child would produce 2 name matches and get reported as ambiguous ("which child?")
+// even though only one child was actually named. Grouped by child first (same
+// groupEnrollmentsByChild used by the admin-side and Renew/Add Program lookups) so the
+// cardinality check is "how many distinct children match", not "how many records match".
 function resolveParentChild(message, enrollments) {
   const normalized = normalizeMessage(message);
-  const named = enrollments.filter((e) => {
-    const snap = e.studentSnapshot || {};
+  const groups = groupEnrollmentsByChild(enrollments);
+  const named = groups.filter((records) => {
+    const snap = records[0].studentSnapshot || {};
     const fn = String(snap.firstName || '').toLowerCase().trim();
     const ln = String(snap.lastName || '').toLowerCase().trim();
     if (fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized)) return true;
     if (ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized)) return true;
     return false;
   });
-  return { matched: named.length === 1 ? named[0] : null };
+  // Groups arrive sorted createdAt desc (enrollments come from getParentChildEnrollments,
+  // which sorts that way), so each group's [0] is that child's most recent enrollment
+  // record — same "representative record" convention groupEnrollmentsByChild's other
+  // callers (buildParentRenewProgramContext, findChildEnrollmentGroupByName) already use.
+  return { matched: named.length === 1 ? named[0][0] : null };
 }
 
 // Scan recent turns (most recent first) for an earlier unambiguous mention of one of
@@ -5921,11 +5933,10 @@ const RENEW_PROGRAM_BLOCKING_STATUSES = new Set(['approved', 'active']);
 // birthdate (the same grouping key backfillPermanentStudentIds uses in
 // utils/studentIdentity.js), since an older or still-pending enrollment may not have
 // permanentStudentId filled in yet.
-// Known related gap, NOT fixed here (separate, lower-priority issue): the existing
-// resolveParentChild (used by schedule/grades/tutor_contact) matches against the flat
-// enrollment list, not grouped by child, so a child with 2+ enrollment records can make
-// it see "2 matches" and report false ambiguity. This builder sidesteps that by doing
-// its own grouped resolution rather than reusing resolveParentChild.
+// Batch 8 — resolveParentChild (used by schedule/grades/tutor_contact/enrollment/payment
+// context builders) now also groups by child before matching, for the same reason this
+// builder already did its own grouping: a child with 2+ enrollment records (renewed or
+// added a program) must not be seen as "2 matches" and reported as false ambiguity.
 function groupEnrollmentsByChild(enrollments) {
   const groups = new Map();
   for (const e of enrollments) {
@@ -6144,7 +6155,11 @@ async function buildParentEnrollmentContext(parentId, message, history = []) {
   }
 
   const { matched } = resolveParentChildWithHistory(message, enrollments, history);
-  const targets = matched ? [matched] : enrollments;
+  // Batch 8 live-testing fix: when no child is named, this used to fall back to the raw
+  // per-program enrollment list — a child with 2+ records (e.g. renewed a program) would
+  // appear twice in the "here is the latest on your children" summary. One representative
+  // record per child instead, same grouping resolveParentChild itself now uses.
+  const targets = matched ? [matched] : groupEnrollmentsByChild(enrollments).map((records) => records[0]);
 
   const blocks = targets.map((e) => {
     const programs = (e.packages || []).map((p) => p.displayName).filter(Boolean).join(', ')
@@ -6183,7 +6198,11 @@ async function buildParentPaymentContext(parentId, message, history = []) {
   }
 
   const { matched } = resolveParentChildWithHistory(message, enrollments, history);
-  const targets = matched ? [matched] : enrollments;
+  // Batch 8 live-testing fix: when no child is named, this used to fall back to the raw
+  // per-program enrollment list — a child with 2+ records (e.g. renewed a program) would
+  // appear twice in the "here is the latest on your children" summary. One representative
+  // record per child instead, same grouping resolveParentChild itself now uses.
+  const targets = matched ? [matched] : groupEnrollmentsByChild(enrollments).map((records) => records[0]);
 
   const blocks = [];
   const summaries = [];
@@ -6242,7 +6261,10 @@ async function buildParentScheduleContext(parentId, message, history = []) {
 
   const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   if (!matched) {
-    return parentDisambiguationContext(enrollments, 'schedule');
+    // Batch 8 live-testing fix: pass one representative record PER CHILD (same grouping
+    // resolveParentChild itself now uses), not the raw per-program enrollment list — a
+    // child with 2+ records would otherwise appear twice in the disambiguation name list.
+    return parentDisambiguationContext(groupEnrollmentsByChild(enrollments).map((records) => records[0]), 'schedule');
   }
 
   if (!matched.student) {
@@ -6334,7 +6356,8 @@ async function buildParentGradesContext(parentId, message, history = []) {
 
   const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   if (!matched) {
-    return parentDisambiguationContext(enrollments, 'grades');
+    // Batch 8 live-testing fix: same grouped-list fix as buildParentScheduleContext above.
+    return parentDisambiguationContext(groupEnrollmentsByChild(enrollments).map((records) => records[0]), 'grades');
   }
 
   return {
@@ -6364,13 +6387,19 @@ async function buildParentTutorContactContext(parentId, message, history = []) {
     };
   }
 
+  // Batch 8 live-testing fix: this shortcut used to check enrollments.length === 1 — the
+  // raw per-program record count, not the distinct-child count — so a parent with exactly
+  // ONE child who has 2+ enrollment records (e.g. renewed a program) would skip past this
+  // "only one child, no name needed" shortcut and incorrectly land on a disambiguation
+  // prompt. Grouped by child first, same as resolveParentChild itself now does.
+  const groups = groupEnrollmentsByChild(enrollments);
   let matched;
-  if (enrollments.length === 1) {
-    matched = enrollments[0];
+  if (groups.length === 1) {
+    matched = groups[0][0];
   } else {
     ({ matched } = resolveParentChildWithHistory(message, enrollments, history));
     if (!matched) {
-      return parentDisambiguationContext(enrollments, "tutor's contact info");
+      return parentDisambiguationContext(groups.map((records) => records[0]), "tutor's contact info");
     }
   }
 

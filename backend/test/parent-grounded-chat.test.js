@@ -93,6 +93,23 @@ test('resolveParentChild matches a named child and disambiguates otherwise', () 
   assert.equal(resolveParentChild('how is my child doing', kids).matched, null); // ambiguous
 });
 
+// Batch 8 fix — a child who renewed/added a program has 2+ Enrollment records (one per
+// program), all sharing the same name. Matching used to run against the flat list, so
+// naming that child produced 2 "matches" and was wrongly reported as ambiguous.
+test('resolveParentChild groups multi-enrollment children before matching', () => {
+  const multi = [
+    enrollment({ _id: 'ana-new', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' }, status: 'approved' }),
+    enrollment({ _id: 'ana-old', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' }, status: 'completed' }),
+    enrollment({ _id: 'ben-1', studentSnapshot: { firstName: 'Ben', lastName: 'Cruz' } }),
+  ];
+  // Naming the 2-enrollment child resolves to her most recent record, not false ambiguity.
+  assert.equal(resolveParentChild('how is ana doing', multi).matched?._id, 'ana-new');
+  // Still correctly ambiguous when two DISTINCT children are both named.
+  assert.equal(resolveParentChild('how are ana and ben doing', multi).matched, null);
+  // Still correctly ambiguous when no child is named at all.
+  assert.equal(resolveParentChild('how is my child doing', multi).matched, null);
+});
+
 test('childDisplayName falls back gracefully', () => {
   assert.equal(childDisplayName(enrollment()), 'Ana Cruz');
   assert.equal(childDisplayName({ studentSnapshot: {} }), 'your child');
