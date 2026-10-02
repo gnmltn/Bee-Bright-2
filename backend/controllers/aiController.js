@@ -405,10 +405,13 @@ const KNOWN_SYSTEM_INTENTS = new Set([
 
 // The 3 programs actually offered — matches the Pricing collection (TPG101/ACT102/EXP106)
 // and the landing page. Pricing detail comes from the DB (getProgramPricingReply), Task 14.
+// Batch 6 — each program's own code ('act102' etc.) added as an alias: an admin (or a
+// parent reading their dashboard) asking about a program by its internal code, not just
+// its name, is a realistic phrasing matchProgramCatalog previously could never match.
 const PROGRAM_CATALOG = [
-  { code: 'TPG101', label: 'Toddlers Playgroup', ageText: 'ages 2 to 4', format: 'group play sessions', focus: 'socialization, sensory play, and early development', aliases: ['toddlers playgroup', 'toddler playgroup', 'toddlers', 'toddler', 'playgroup'] },
-  { code: 'ACT102', label: 'Academic Tutorial', ageText: 'ages 2 and up', format: 'one-on-one tutoring', focus: 'subject-based support from pre-school through junior/senior high school', aliases: ['academic tutorial', 'academic', 'tutorial program', 'tutoring program'] },
-  { code: 'EXP106', label: 'Examination Preparation', ageText: 'ages 3 and up', format: 'one-on-one tutoring', focus: 'test mastery, mock exams, and test-taking strategies for a specific upcoming exam', aliases: ['examination preparation', 'exam preparation', 'exam prep', 'exam review', 'entrance exam', 'test prep', 'exam package'] },
+  { code: 'TPG101', label: 'Toddlers Playgroup', ageText: 'ages 2 to 4', format: 'group play sessions', focus: 'socialization, sensory play, and early development', aliases: ['toddlers playgroup', 'toddler playgroup', 'toddlers', 'toddler', 'playgroup', 'tpg101'] },
+  { code: 'ACT102', label: 'Academic Tutorial', ageText: 'ages 2 and up', format: 'one-on-one tutoring', focus: 'subject-based support from pre-school through junior/senior high school', aliases: ['academic tutorial', 'academic', 'tutorial program', 'tutoring program', 'act102'] },
+  { code: 'EXP106', label: 'Examination Preparation', ageText: 'ages 3 and up', format: 'one-on-one tutoring', focus: 'test mastery, mock exams, and test-taking strategies for a specific upcoming exam', aliases: ['examination preparation', 'exam preparation', 'exam prep', 'exam review', 'entrance exam', 'test prep', 'exam package', 'exp106'] },
 ];
 
 // Task 25 — the brochure prices only 3 packages. The items below are SCOPE of Academic
@@ -991,6 +994,16 @@ function isProgramPlacementQuestion(normalized) {
 
 function isEnrollmentStepsQuestion(normalized) {
   return /(how to enroll|how do i enroll|enrollment process|enrollment steps|register|registration|sign up|apply for enrollment|submit enrollment|paano.*enroll|pano.*enroll|paano mag.?enroll|ano.*enrollment process|requirements.*enroll)/.test(normalized);
+}
+
+// Batch 6 — "Renew / Add Program" for an EXISTING child (a second/later program, or the
+// same program again once its previous enrollment is no longer active). Distinct from a
+// brand-new enrollment question above.
+function isRenewProgramQuestion(normalized) {
+  // "add" uses a loose ".{0,30}" gap (like magdagdag/idagdag below) rather than a fixed
+  // "add program" / "add (a|another) program" phrase — "paano mag-add ng bagong program"
+  // has words between "add" and "program" that the old fixed phrasing missed entirely.
+  return /(renew|renewal|re-?enroll|mag-?add.{0,30}\b(program|programa)\b|\badd\b.{0,30}\b(program|programa)\b|magdagdag.*(ng )?(bagong )?(program|programa)|idagdag.*(program|programa)|mag-?renew|i-?renew|marenew|pa-?renew)/.test(normalized);
 }
 
 function isPaymentQuestion(normalized) {
@@ -2956,6 +2969,38 @@ function extractSpecificContactTargetName(message = '', normalized = '') {
   return null;
 }
 
+// Batch 6 — admin-style renew/add-program questions. Used INSTEAD OF
+// extractSpecificContactTargetName here (not alongside it): that function's
+// extractTutorNameFromMessage helper matches a bare "tutor" substring with no word
+// boundary, which false-positives on the program name "Academic Tutorial" (contains
+// "tutor") and would capture a garbage tail like "ial". Two phrasing shapes are tried:
+//   1. "can/does/is/will Jake [eligible to/be able to] renew/add ..." — EN phrasing with
+//      no "for/named/si/kay/ni" marker before the name at all, which extractRequestedName
+//      (marker-word AND end-of-string anchored) cannot pull "Jake" out of.
+//   2. "...ni/si/kay Jake yung/ng/para/na ACT102" — Tagalog marker phrasing where the
+//      name is followed by more words (a program code, "yung", etc.), not the end of the
+//      string, so extractRequestedName's end-anchor ($) can't match it either.
+function extractRenewProgramTargetName(message = '', normalized = '') {
+  const isRejected = (value) => !value
+    || /^(all users?|every user|all tutors?|all students?)$/i.test(value)
+    || /^(her|him|them|siya|sya|niya|nya|that tutor|this tutor|that student|this student|he|she|they)$/i.test(value);
+
+  // Capture 1-2 name words right after "can/does/is/will", then optionally swallow a
+  // helper phrase ("be able to", "eligible to") before the actual verb, so "is Jake
+  // eligible to add another program?" yields "Jake" rather than "Jake eligible to".
+  const m1 = String(message || '').match(/\b(?:can|could|does|is|will|dapat ba|pwede ba(?:ng)?)\s+([a-z][a-z.'-]{1,40}(?:\s+[a-z][a-z.'-]{1,40})?)\s+(?:is\s+|be\s+able\s+to\s+|eligible\s+to\s+)?(?:re-?new|renew|re-?enroll|add)\b/i);
+  const v1 = cleanCandidateName(m1?.[1] || '');
+  if (!isRejected(v1)) return v1;
+
+  // Tagalog marker phrasing: name sits between "ni/si/kay" and a following function word
+  // (not the end of string), most often because a program code/name comes after it.
+  const m2 = String(message || '').match(/\b(?:ni|si|kay)\s+([a-z][a-z\s.'-]{1,40}?)\s+(?:yung|yun|ng|na|para|ba)\b/i);
+  const v2 = cleanCandidateName(m2?.[1] || '');
+  if (!isRejected(v2)) return v2;
+
+  return null;
+}
+
 function isPronounReference(message = '') {
   const normalized = normalizeMessage(message);
   return /(\bher\b|\bhim\b|\bthem\b|\bsiya\b|\bsya\b|\bniya\b|\bnya\b|\bthat tutor\b|\bthis tutor\b|\bthat student\b|\bthis student\b)/.test(normalized);
@@ -4323,6 +4368,17 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
     return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
   }
 
+  // Batch 6 — admin renew/add-program answers (guidance + per-student eligibility) take
+  // priority over every admin-scoped handler and dataset match below, for the same
+  // shadowing reason as the parent short-circuit just above: isEnrollmentStepsQuestion
+  // (further down, inside getDirectSystemReply), the CSV intent dataset, and the Q&A
+  // dataset match can all match "renew"/"add program" admin phrasing (e.g. a Tagalog
+  // "paano mag-renew ng enrollment" also contains "enroll") and swallow this topic's
+  // specific eligibility answer before groundedContext.fallbackReply is ever consulted.
+  if ((user?.role === 'admin' || user?.role === 'super_admin') && groundedContext?.topic === 'renew_program' && groundedContext?.fallbackReply) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
+  }
+
   // Tutor student-notes digest (Task 7) — deterministic, before the generic grade handler
   // that would tell a tutor to "check the Progress section".
   if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
@@ -4499,6 +4555,17 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   // Parent grounded answers take priority over the admin-scoped statistic handlers
   // below, which would otherwise return "not available in the system" for a parent.
   if (user?.role === 'parent' && groundedContext?.fallbackReply) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
+  }
+
+  // Batch 6 — admin renew/add-program answers (guidance + per-student eligibility) take
+  // priority over every admin-scoped handler and dataset match below, for the same
+  // shadowing reason as the parent short-circuit just above: isEnrollmentStepsQuestion
+  // (further down, inside getDirectSystemReply), the CSV intent dataset, and the Q&A
+  // dataset match can all match "renew"/"add program" admin phrasing (e.g. a Tagalog
+  // "paano mag-renew ng enrollment" also contains "enroll") and swallow this topic's
+  // specific eligibility answer before groundedContext.fallbackReply is ever consulted.
+  if ((user?.role === 'admin' || user?.role === 'super_admin') && groundedContext?.topic === 'renew_program' && groundedContext?.fallbackReply) {
     return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
   }
 
@@ -5060,6 +5127,13 @@ function detectGroundedTopic(user, message) {
       return 'tutor_contact';
     }
 
+    // Batch 6 — checked before isPersonInfoQuery for the same reason as tutor_contact
+    // above: a "renew"/"add program" question is specific enough on its own that it
+    // should never be swallowed by isPersonInfoQuery's broader checks.
+    if (isRenewProgramQuestion(normalized)) {
+      return 'renew_program';
+    }
+
     if (isPersonInfoQuery(normalized)) return null;
     // Task 25a — "may SPED tutorial / homework assistance / lesson advancement ba kayo?"
     // is a program-scope question, not a request about this child's own schedule/grades.
@@ -5101,6 +5175,13 @@ function detectGroundedTopic(user, message) {
 
   if (isPersonInfoQuery(normalized)) {
     return null;
+  }
+
+  // Batch 6 — Renew/Add Program guidance + eligibility check is scoped to admin only
+  // here (parents are handled in their own branch above; students/tutors don't have
+  // this feature, so this intentionally does not fire for them).
+  if ((user.role === 'admin' || user.role === 'super_admin') && isRenewProgramQuestion(normalized)) {
+    return 'renew_program';
   }
 
   const prediction = getIntentReply(message);
@@ -5729,6 +5810,242 @@ function parentDisambiguationContext(enrollments, topicLabel) {
   };
 }
 
+// ── Batch 6 — Renew / Add Program guidance + eligibility check ─────────────────────
+// "Renew / Add Program" is a real, already-built in-dashboard wizard (same Programs ->
+// Schedule -> Billing -> Agreement -> Review steps as the main enrollment wizard),
+// launched from a button on the child's card in the parent's "My Child" tab — the
+// chatbot cannot and should not try to run that wizard itself (payment proof upload,
+// consent, etc.). Its job here is narrower: explain how/where to do it, and — since the
+// business rule is a simple, already-computable check — tell a parent or admin whether
+// a specific child is currently eligible to renew/add a given program.
+//
+// Business rule (frontend StudentDashboard.tsx's handleRenewChild): a child is BLOCKED
+// from renewing/adding a SPECIFIC program only while they have an 'approved' or 'active'
+// enrollment for that SAME program (unfinished sessions). A different program, or the
+// same program once that enrollment is no longer approved/active (completed/rejected/
+// cancelled), is unaffected.
+const RENEW_PROGRAM_BLOCKING_STATUSES = new Set(['approved', 'active']);
+
+// Group a flat list of Enrollment docs by the CHILD they belong to. Enrollments are per
+// PROGRAM, not per child — a child who renewed or added a program has more than one
+// record — so the eligibility check (and even "how many children does this parent
+// have") needs them grouped first. Keyed by permanentStudentId when set, else by name +
+// birthdate (the same grouping key backfillPermanentStudentIds uses in
+// utils/studentIdentity.js), since an older or still-pending enrollment may not have
+// permanentStudentId filled in yet.
+// Known related gap, NOT fixed here (separate, lower-priority issue): the existing
+// resolveParentChild (used by schedule/grades/tutor_contact) matches against the flat
+// enrollment list, not grouped by child, so a child with 2+ enrollment records can make
+// it see "2 matches" and report false ambiguity. This builder sidesteps that by doing
+// its own grouped resolution rather than reusing resolveParentChild.
+function groupEnrollmentsByChild(enrollments) {
+  const groups = new Map();
+  for (const e of enrollments) {
+    const snap = e.studentSnapshot || {};
+    const key = e.permanentStudentId
+      || `${String(snap.firstName || '').toLowerCase().trim()}|${String(snap.lastName || '').toLowerCase().trim()}|${snap.birthdate ? new Date(snap.birthdate).toISOString().slice(0, 10) : ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  }
+  // Enrollments arrive sorted createdAt desc, so each group's [0] is that child's most
+  // recent enrollment record — used as the "representative" record for display.
+  return [...groups.values()];
+}
+
+// Same blockedPrograms computation as StudentDashboard.tsx's handleRenewChild, so the
+// chatbot's answer can never disagree with what the parent/admin sees when they actually
+// open the Renew/Add Program modal.
+function computeBlockedPrograms(childRecords) {
+  const blocked = {};
+  for (const e of childRecords) {
+    if (!RENEW_PROGRAM_BLOCKING_STATUSES.has(e.status)) continue;
+    for (const pkg of e.packages || []) {
+      if (pkg.programCode && !blocked[pkg.programCode]) {
+        blocked[pkg.programCode] = pkg.displayName || pkg.programCode;
+      }
+    }
+  }
+  return blocked;
+}
+
+function renewProgramStatusLines(blockedPrograms) {
+  return PROGRAM_CATALOG.map((p) => {
+    const blockedAs = blockedPrograms[p.code];
+    return blockedAs
+      ? `${p.label}: NOT available yet — already enrolled with unfinished sessions`
+      : `${p.label}: available to add/renew now`;
+  });
+}
+
+async function buildParentRenewProgramContext(parentId, message, history = []) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
+      fallbackReply: 'I could not find any enrolled child linked to your account yet, so there is nothing to renew or add a program for.',
+    };
+  }
+
+  const groups = groupEnrollmentsByChild(enrollments);
+
+  const matchInText = (text) => {
+    const normalized = normalizeMessage(text);
+    return groups.filter((records) => {
+      const snap = records[0].studentSnapshot || {};
+      const fn = String(snap.firstName || '').toLowerCase().trim();
+      const ln = String(snap.lastName || '').toLowerCase().trim();
+      return (fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized))
+        || (ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized));
+    });
+  };
+
+  let targetGroup = null;
+  if (groups.length === 1) {
+    targetGroup = groups[0];
+  } else {
+    const direct = matchInText(message);
+    if (direct.length === 1) {
+      targetGroup = direct[0];
+    } else {
+      const items = Array.isArray(history) ? history.slice().reverse() : [];
+      for (const item of items) {
+        if (!item || typeof item.content !== 'string') continue;
+        const fromHistory = matchInText(item.content);
+        if (fromHistory.length === 1) { targetGroup = fromHistory[0]; break; }
+        if (fromHistory.length > 1) break; // ambiguous turn — stop, don't guess
+      }
+    }
+  }
+
+  if (!targetGroup) {
+    // One representative enrollment per distinct child, for parentDisambiguationContext's
+    // name list. "program renewal options" is recognized by getPendingParentDisambiguationTopic
+    // so a bare-name follow-up reply carries this topic forward too.
+    return parentDisambiguationContext(groups.map((records) => records[0]), 'program renewal options');
+  }
+
+  const child = targetGroup[0];
+  const childName = childDisplayName(child);
+  const blockedPrograms = computeBlockedPrograms(targetGroup);
+  const namedProgram = matchProgramCatalog(normalizeMessage(message));
+
+  if (namedProgram) {
+    const blockedAs = blockedPrograms[namedProgram.code];
+    if (blockedAs) {
+      return {
+        contextText: `Role: parent\nChild: ${childName}\nAsked-about program: ${namedProgram.label}\nStatus: BLOCKED — already enrolled (${blockedAs}) with unfinished sessions.`,
+        fallbackReply: `${childName} already has an active enrollment in ${namedProgram.label} with unfinished sessions, so renewing/adding it again isn't available yet. Once those sessions are done, go to the My Child tab on your dashboard and use the Renew/Add Program button for ${childName}.`,
+      };
+    }
+    return {
+      contextText: `Role: parent\nChild: ${childName}\nAsked-about program: ${namedProgram.label}\nStatus: available now.`,
+      fallbackReply: `${childName} is eligible to add/renew ${namedProgram.label} now. Go to the My Child tab on your dashboard, find ${childName}'s card, and click Renew/Add Program to start.`,
+    };
+  }
+
+  const lines = renewProgramStatusLines(blockedPrograms);
+  return {
+    contextText: [
+      'Role: parent',
+      `Child: ${childName}`,
+      'Program renewal/add status:',
+      ...lines,
+    ].join('\n'),
+    fallbackReply: `For ${childName}: ${lines.join('; ')}. To renew or add a program, go to the My Child tab on your dashboard and click the Renew/Add Program button on ${childName}'s card.`,
+  };
+}
+
+// Admin-side name lookup: Enrollment.studentSnapshot is denormalized, so this is matched
+// directly rather than via a User lookup (a pending/unapproved child may not have a User
+// account yet at all).
+async function findChildEnrollmentGroupByName(name) {
+  // Live-testing fix (batch 6): a bare single-field regex can't match a two-word "First
+  // Last" name, since studentSnapshot has separate firstName/lastName fields and neither
+  // alone ever contains both — the exact same gap buildUserNameOrEmailMatchers was built
+  // to close for User lookups in batch 4. Split a multi-word name into firstName/lastName
+  // token pairs the same way, so "Jake Lim" actually matches.
+  const trimmed = String(name || '').trim();
+  const fullRegex = new RegExp(escapeRegex(trimmed), 'i');
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const orClauses = [
+    { 'studentSnapshot.firstName': fullRegex },
+    { 'studentSnapshot.lastName': fullRegex },
+  ];
+  if (tokens.length >= 2) {
+    const first = new RegExp(escapeRegex(tokens[0]), 'i');
+    const last = new RegExp(escapeRegex(tokens[tokens.length - 1]), 'i');
+    orClauses.push({ 'studentSnapshot.firstName': first, 'studentSnapshot.lastName': last });
+    orClauses.push({ 'studentSnapshot.firstName': last, 'studentSnapshot.lastName': first });
+  }
+  const matches = await Enrollment.find({ $or: orClauses })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (!matches.length) return { found: false };
+
+  const groups = groupEnrollmentsByChild(matches);
+  if (groups.length > 1) {
+    return { found: true, ambiguous: true, groups };
+  }
+  return { found: true, ambiguous: false, records: groups[0] };
+}
+
+async function buildAdminRenewProgramContext(message) {
+  const normalized = normalizeMessage(message);
+  // extractRenewProgramTargetName tried FIRST, and extractSpecificContactTargetName not
+  // used at all here: that function's extractTutorNameFromMessage helper matches on a bare
+  // "tutor" substring with no word boundary, which false-positives on the program name
+  // "Academic Tutorial" (contains "tutor") and would otherwise capture a garbage tail like
+  // "ial" out of "can Jake Lim renew Academic Tutorial".
+  const requestedName = extractRenewProgramTargetName(message, normalized)
+    || extractRequestedName(normalized);
+  const namedProgram = matchProgramCatalog(normalized);
+
+  if (requestedName) {
+    const result = await findChildEnrollmentGroupByName(requestedName);
+
+    if (!result.found) {
+      return {
+        contextText: `Role: admin\nNo enrollment record found matching "${requestedName}".`,
+        fallbackReply: `I could not find an enrollment record matching "${requestedName}".`,
+      };
+    }
+
+    if (result.ambiguous) {
+      const names = result.groups.map((records) => childDisplayName(records[0])).join(', ');
+      return {
+        contextText: `Role: admin\nMultiple students matched "${requestedName}": ${names}.`,
+        fallbackReply: `More than one student matches "${requestedName}": ${names}. Please specify the full name.`,
+      };
+    }
+
+    const childName = childDisplayName(result.records[0]);
+    const blockedPrograms = computeBlockedPrograms(result.records);
+
+    if (namedProgram) {
+      const blockedAs = blockedPrograms[namedProgram.code];
+      return {
+        contextText: `Role: admin\nStudent: ${childName}\nAsked-about program: ${namedProgram.label}\nStatus: ${blockedAs ? 'BLOCKED' : 'available'}.`,
+        fallbackReply: blockedAs
+          ? `${childName} already has an active enrollment in ${namedProgram.label} with unfinished sessions, so they can't renew/add it yet. If this needs to be cleared sooner, complete or cancel their existing schedule for that program first.`
+          : `${childName} is eligible to renew/add ${namedProgram.label} now — the parent can do this from the My Child tab on their dashboard.`,
+      };
+    }
+
+    const lines = renewProgramStatusLines(blockedPrograms);
+    return {
+      contextText: ['Role: admin', `Student: ${childName}`, 'Program renewal/add status:', ...lines].join('\n'),
+      fallbackReply: `For ${childName}: ${lines.join('; ')}.`,
+    };
+  }
+
+  // No specific student named — general policy explanation.
+  return {
+    contextText: 'Role: admin\nGeneral explanation of the Renew/Add Program policy was given.',
+    fallbackReply: "Parents renew or add a program for an existing child from the My Child tab on their dashboard — a Renew/Add Program button on the child's card opens the same Programs, Schedule, Billing, Agreement, and Review steps as a new enrollment, pre-filled with the child's info. A specific program is blocked for that child only while they already have an active/approved enrollment in that SAME program with unfinished sessions; a different program, or that same program once it's completed/rejected/cancelled, is unaffected. Ask me about a specific student (e.g. \"can Jake renew Academic Tutorial?\") for their current status.",
+  };
+}
+
 async function buildParentEnrollmentContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
@@ -6035,6 +6352,7 @@ const PARENT_DISAMBIGUATION_TOPIC_LABELS = {
   schedule: 'schedule',
   grades: 'grades',
   "tutor's contact info": 'tutor_contact',
+  "program renewal options": 'renew_program',
 };
 
 function getPendingParentDisambiguationTopic(history = []) {
@@ -6080,6 +6398,7 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
     if (topic === 'schedule') return buildParentScheduleContext(user._id, message, history);
     if (topic === 'grades') return buildParentGradesContext(user._id, message, history);
     if (topic === 'tutor_contact') return buildParentTutorContactContext(user._id, message, history);
+    if (topic === 'renew_program') return buildParentRenewProgramContext(user._id, message, history);
   }
 
   if (user.role === 'student') {
@@ -6111,6 +6430,7 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
     if (topic === 'payments') return buildAdminPaymentContext();
     if (topic === 'enrollment') return buildAdminEnrollmentContext();
     if (topic === 'schedule') return buildAdminScheduleContext(message);
+    if (topic === 'renew_program') return buildAdminRenewProgramContext(message);
   }
 
   return null;
