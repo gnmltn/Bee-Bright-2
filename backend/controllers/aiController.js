@@ -3974,8 +3974,18 @@ async function getIntentKeywordDatasetReply(user, message, languageProfile = 'en
   if (rule.intent === 'tutor_students') {
     if (!user || user.role !== 'tutor') return unavailable;
 
-    const studentIds = await Schedule.distinct('student', { tutor: user._id });
-    if (!studentIds.length) {
+    // Batch 13 — this used to run its own Schedule.distinct('student', { tutor: user._id })
+    // query, which only reads the singular `tutor`/`student` fields on a Schedule doc. Group
+    // sessions (Toddlers Playgroup, multi-tutor sessions) store their people in the plural
+    // `tutors`/`students` array fields instead, so a tutor whose only "solo" schedule entries
+    // were with one student (e.g. an Academic Tutorial 1-on-1) but who also has 3 more
+    // students via group sessions would see only that 1 name here — while the Remarks tab
+    // (getTutorStudents, used by buildTutorStudentNotesContext) already correctly reads BOTH
+    // singular and plural fields and shows all 4. Reusing that same helper instead of a
+    // second, narrower, duplicate query keeps "who are my assigned students" consistent
+    // everywhere a tutor asks it.
+    const students = await getTutorStudents(user._id);
+    if (!students.length) {
       return pickByLanguage(
         languageProfile,
         'You currently have no assigned students in the schedule yet.',
@@ -3984,24 +3994,7 @@ async function getIntentKeywordDatasetReply(user, message, languageProfile = 'en
       );
     }
 
-    const students = await User.find({ _id: { $in: studentIds } })
-      .select('firstName lastName fullName email')
-      .sort({ lastName: 1, firstName: 1 })
-      .lean();
-
-    if (!students.length) {
-      return pickByLanguage(
-        languageProfile,
-        'I found schedule records, but student details are not available right now.',
-        'May nakita akong schedule records pero hindi available ang student details ngayon.',
-        'May nakita akong schedule records pero hindi available ang student details ngayon.'
-      );
-    }
-
-    const studentList = students
-      .map((s) => s.fullName || [s.firstName, s.lastName].filter(Boolean).join(' ') || s.email || 'Student')
-      .filter(Boolean)
-      .join(', ');
+    const studentList = students.map(personDisplayName).join(', ');
 
     return applyTemplate(template, { studentList });
   }
@@ -7890,6 +7883,8 @@ module.exports = {
   getModelMetrics,
   findDatasetMatch,
   getContextualDatasetResponse,
+  // Batch 13 — exported for test/tutor-students-dataset.test.js (the getTutorStudents fix)
+  getIntentKeywordDatasetReply,
   buildPhiReferenceContext,
   generatePhiReply,
   sanitizeOllamaReply,
