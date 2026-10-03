@@ -1008,6 +1008,19 @@ function isPersonInfoQuery(normalized) {
     return false;
   }
 
+  // Batch 16 — "who should i contact if X" / "what should i contact for Y" is a
+  // procedural "who do i go to for help" question, not a request for a specific person's
+  // contact details — but the bare `contact` alternative a few lines below (meant for
+  // "contact number of so-and-so") can't tell the two apart on its own. Live QA testing
+  // found "who should i contact if my tutor account information is incorrect?" matched
+  // purely on the word "contact" and was misrouted into getRoleAwarePersonInfoReply's
+  // tutor branch ("You can view your own profile... Tutor-to-tutor personal details are
+  // restricted.") — unrelated to the question, which was about getting the tutor's own
+  // incorrect account record corrected, not about looking up another tutor's contact info.
+  if (/\b(who|what)\s+(should|can|do|would)\s+i\s+contact\b/.test(normalized)) {
+    return false;
+  }
+
   // Batch 10 — "tel\.?" (meant to catch the "Tel:" / "Tel." abbreviation) had no word
   // boundaries, so it matched as a bare substring inside unrelated words — "tell",
   // "attendance" (no, but "tell" especially). A tutor asking "how can i tell which date
@@ -5273,7 +5286,20 @@ function sanitizeOllamaReply(reply) {
     // two ways that mattered: the contraction "you're" instead of "you are", and "working
     // with" instead of "working for" — both still assign the user a fictional staff role
     // at Bee Bright, so both need to be caught.
-    /\byou'?(?:re| are) (?:a|an) [a-z][a-z\s]{0,40}\bworking (?:for|with)\b/i,
+    // Batch 16 — a THIRD variant of the same jailbreak capture, found 4 more times further
+    // into the transcript: "You're an IoT Engineer working on integrating Bee Bright's
+    // system with smart devices for better user experience. You have four tasks at hand:
+    // 1) Develop a voice-activated feature... 2) Implement a real-time tracking system
+    // that shows the location of each student in the center. 3) Create an AI chatbot...".
+    // Neither the Batch 10 ("working for") nor Batch 15 ("working with") patterns catch
+    // "working on integrating" — broadened the verb-phrase pattern to cover "on" as well,
+    // plus 3 standalone markers for this capture's distinctive numbered-task-list shape
+    // (the "real-time tracking system"/"location of each student" line in particular reads
+    // like a real, alarming feature request and must never reach a user unfiltered).
+    /\byou'?(?:re| are) (?:a|an) [a-z][a-z\s]{0,40}\bworking (?:on|for|with)\b/i,
+    /\breal-time tracking system\b/i,
+    /\bvoice-activated feature\b/i,
+    /\b(?:two|three|four|five) tasks at hand\b/i,
     /\byou'?ve been asked to solve this (?:issue|problem) (?:by|using)\b/i,
     /\bthe system has a unique feature\b/i,
     /\bthe rules are as follows\b/i,
@@ -7732,10 +7758,28 @@ function findDatasetMatch(message, role = 'student') {
     searchPool = [...searchPool, ...AIResponseDatasets.visitorQueries];
   }
 
+  // Batch 16 — "login" and "logout" dataset entries share almost every word that
+  // weightedOverlapScore actually weighs ("log", the role name, "account", "credentials"),
+  // and differ only by "in" vs "out" — too short/common to carry any weight of its own.
+  // So a clearly LOGOUT-phrased question (isLogoutQuestion, already defined above and
+  // already correct) could still outscore the real logout handling and land on a *login*
+  // dataset entry instead. Live QA testing caught this exactly: "how do i log out on my
+  // tutor account?" scored 0.600 against T001 ("How do I log in as a tutor?") — comfortably
+  // above DATASET_MATCH_THRESHOLD (0.55) — and returned "Visit /login, use your tutor email
+  // and password assigned by admin..." for someone asking how to sign OUT. Skipping every
+  // topic:'login' item whenever the message itself reads as a logout question lets the
+  // message fall through to the dedicated, already-correct isLogoutQuestion/getLogoutReply
+  // handling further down the reply pipeline instead.
+  const isLogoutPhrasedMessage = isLogoutQuestion(normalized);
+
   let best = null;
   let bestScore = 0;
 
   for (const item of searchPool) {
+    if (isLogoutPhrasedMessage && item.topic === 'login') {
+      continue;
+    }
+
     const candidates = [item.queries?.en, item.queries?.fil, item.queries?.tgl].filter(Boolean);
     // The item may also carry an explicit keyword list — treat those as candidate text.
     if (Array.isArray(item.keywords) && item.keywords.length) {
