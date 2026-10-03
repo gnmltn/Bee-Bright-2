@@ -51,6 +51,7 @@ import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
 import { enrollmentService, userService, dashboardService, subjectService, scheduleService, weeklyScheduleService, paymentService, announcementService, auditLogService, pricingService, uploadsBaseUrl, type AdminEnrollment, type AdminUser, type ParentChild, type AdminSchedule, type AdminPaymentItem, type DashboardStats, type AnnouncementItem, type AuditLogAdminItem, type AuditLogItem, type WeeklyScheduleTutorOption, type SuspensionRecord, type PricingPackage, type PendingBalanceItem } from "@/services/api";
 import { adminEmailVerificationService } from "@/services/adminEmailVerification";
+import { reportService, type WeeklyDigestItem } from "@/services/reportService";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2737,6 +2738,83 @@ export default function AdminDashboard() {
     return summary;
   }, [allPaymentsList]);
 
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [weeklyDigests, setWeeklyDigests] = useState<WeeklyDigestItem[]>([]);
+  const [weeklyDigestsLoading, setWeeklyDigestsLoading] = useState(false);
+  const [viewDigest, setViewDigest] = useState<WeeklyDigestItem | null>(null);
+  const [downloadingDigestId, setDownloadingDigestId] = useState<string | null>(null);
+
+  const downloadBlobAsFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const digestFilename = (weekStart: string) => `beebright_weekly_digest_${weekStart.slice(0, 10)}.pdf`;
+
+  const readBlobErrorMessage = async (err: unknown, fallback: string): Promise<string> => {
+    const data = (err as { response?: { data?: unknown } })?.response?.data;
+    if (data instanceof Blob) {
+      try {
+        const parsed = JSON.parse(await data.text());
+        if (parsed?.message) return parsed.message as string;
+      } catch {
+        // not JSON — fall through to the generic fallback
+      }
+    }
+    return (err as { response?: { data?: { message?: string } } })?.response?.data?.message || fallback;
+  };
+
+  const fetchWeeklyDigests = () => {
+    setWeeklyDigestsLoading(true);
+    reportService
+      .listWeeklyDigests()
+      .then((res) => {
+        if (res.data?.success && Array.isArray(res.data.digests)) {
+          setWeeklyDigests(res.data.digests);
+        } else {
+          setWeeklyDigests([]);
+        }
+      })
+      .catch(() => setWeeklyDigests([]))
+      .finally(() => setWeeklyDigestsLoading(false));
+  };
+
+  useEffect(() => {
+    if (currentHash === "#reports") fetchWeeklyDigests();
+  }, [currentHash]);
+
+  const handleGenerateWeeklyDigest = async () => {
+    setIsGeneratingReport(true);
+    try {
+      const res = await reportService.generateWeeklyDigest();
+      downloadBlobAsFile(res.data as Blob, digestFilename(new Date().toISOString()));
+      toast.success("Weekly digest generated!");
+      fetchWeeklyDigests();
+    } catch (err) {
+      toast.error(await readBlobErrorMessage(err, "Failed to generate weekly digest."));
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  const handleDownloadWeeklyDigestPdf = async (digest: WeeklyDigestItem) => {
+    setDownloadingDigestId(digest._id);
+    try {
+      const res = await reportService.downloadWeeklyDigestPdf(digest._id);
+      downloadBlobAsFile(res.data as Blob, digestFilename(digest.weekStart));
+    } catch (err) {
+      toast.error(await readBlobErrorMessage(err, "Failed to download digest PDF."));
+    } finally {
+      setDownloadingDigestId(null);
+    }
+  };
+
   const roleIcons: Record<string, typeof Users> = {
     student: GraduationCap,
     tutor: BookOpen,
@@ -3435,10 +3513,25 @@ export default function AdminDashboard() {
               <div className="bg-card rounded-xl border border-border overflow-hidden">
                 <div className="p-4 border-b border-border flex items-center justify-between">
                   <h3 className="font-display font-bold text-lg text-foreground">Reports</h3>
-                  <Button variant="outline" size="sm" onClick={() => handleExportAll(enrollments, users, allPaymentsList)}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Export CSV
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => handleExportAll(enrollments, users, allPaymentsList)}>
+                      <Download className="h-4 w-4 mr-2" />
+                      Export CSV
+                    </Button>
+                    <Button variant="default" size="sm" onClick={handleGenerateWeeklyDigest} disabled={isGeneratingReport}>
+                      {isGeneratingReport ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="h-4 w-4 mr-2" />
+                          Generate Report
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 <div className="p-4 space-y-6">
                   <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -3526,9 +3619,96 @@ export default function AdminDashboard() {
                   <p className="text-xs text-muted-foreground">
                     Report data is computed live from current database-backed dashboard sources (users, enrollments, and payments). Export downloads the same data snapshot as CSV.
                   </p>
+
+                  <div className="rounded-lg border border-border overflow-hidden">
+                    <div className="p-3 border-b border-border bg-muted/30">
+                      <h4 className="font-semibold text-foreground">Past Digests</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted">
+                          <tr>
+                            <th className="text-left p-3 font-semibold text-foreground">Week</th>
+                            <th className="text-left p-3 font-semibold text-foreground">Generated</th>
+                            <th className="text-right p-3 font-semibold text-foreground">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {weeklyDigestsLoading ? (
+                            <tr>
+                              <td colSpan={3} className="p-4 text-center text-muted-foreground">Loading...</td>
+                            </tr>
+                          ) : weeklyDigests.length === 0 ? (
+                            <tr>
+                              <td colSpan={3} className="p-4 text-center text-muted-foreground">No digests generated yet.</td>
+                            </tr>
+                          ) : (
+                            weeklyDigests.map((digest) => (
+                              <tr key={digest._id} className="hover:bg-muted/40">
+                                <td className="p-3 text-foreground">
+                                  {new Date(digest.weekStart).toLocaleDateString("en-PH", { month: "short", day: "numeric" })}
+                                  {" – "}
+                                  {new Date(digest.weekEnd).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                                </td>
+                                <td className="p-3 text-foreground">{new Date(digest.createdAt).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" })}</td>
+                                <td className="p-3 text-right">
+                                  <Button variant="outline" size="sm" className="mr-2" onClick={() => setViewDigest(digest)}>
+                                    View
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleDownloadWeeklyDigestPdf(digest)}
+                                    disabled={downloadingDigestId === digest._id}
+                                  >
+                                    {downloadingDigestId === digest._id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Download className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               </div>
             </TabsContent>
+
+            <Dialog open={!!viewDigest} onOpenChange={(open) => !open && setViewDigest(null)}>
+              <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>BeeBright Weekly Digest</DialogTitle>
+                  <DialogDescription>
+                    {viewDigest && (
+                      <>
+                        {new Date(viewDigest.weekStart).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                        {" – "}
+                        {new Date(viewDigest.weekEnd).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                      </>
+                    )}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="text-sm text-foreground whitespace-pre-wrap">{viewDigest?.reportText}</div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setViewDigest(null)}>Close</Button>
+                  {viewDigest && (
+                    <Button onClick={() => handleDownloadWeeklyDigestPdf(viewDigest)} disabled={downloadingDigestId === viewDigest._id}>
+                      {downloadingDigestId === viewDigest._id ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Download className="h-4 w-4 mr-2" />
+                      )}
+                      Download PDF
+                    </Button>
+                  )}
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* Schedule Tab – calendar view */}
             <TabsContent value="schedule" className="space-y-6">

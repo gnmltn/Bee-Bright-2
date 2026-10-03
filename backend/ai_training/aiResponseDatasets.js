@@ -1344,7 +1344,13 @@ const AIResponseDatasets = {
       roleScope: 'admin',
       keywords: [
         'admin student count', 'how many students', 'total students', 'number of students', 'student count',
-        'ilang students', 'ilang estudyante', 'bilang ng estudyante'
+        'ilang students', 'ilang estudyante', 'bilang ng estudyante',
+        // Batch 17 — "ilang X" (contracted linker) and "ilan ang X" (separate "ang" marker)
+        // are both natural, equally common ways to ask "how many X" in Filipino, but the
+        // keyword matcher needs each exact phrase or exact token set — "ilan ang estudyante"
+        // produces the tokens {ilan, ang, estudyante}, none of which equal the single token
+        // "ilang", so it matched nothing at all before this was added.
+        'ilan ang estudyante', 'ilan ang student', 'ilan ang mga estudyante'
       ],
       replies: {
         en: 'There are currently {studentCount} students in the system.',
@@ -1528,7 +1534,15 @@ const AIResponseDatasets = {
       roleScope: 'admin',
       keywords: [
         'admin tutor count', 'how many tutors', 'total tutors', 'number of tutors', 'tutor count',
-        'ilang tutor', 'bilang ng tutor'
+        'ilang tutor', 'bilang ng tutor',
+        // Batch 17 — same gap as admin_student_count: "ilan ang tutor" (separate "ang"
+        // marker) produces different tokens than the single word "ilang", so it never
+        // matched. Live QA testing: "ilan ang tutor natin" ("how many tutors do we have")
+        // matched nothing here and fell through to getTutorContactReply's generic fallback
+        // ("Pwede mong i-contact ang tutor mo sa Quick Actions...") — a "contact your own
+        // tutor" reply, nonsensical for an admin (who has no "own tutor") asking a count
+        // question.
+        'ilan ang tutor', 'ilan ang mga tutor'
       ],
       replies: {
         en: 'There are currently {tutorCount} tutors in the system.',

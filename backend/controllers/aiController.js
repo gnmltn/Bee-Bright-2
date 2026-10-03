@@ -2895,9 +2895,23 @@ async function getAdminSystemKnowledgeReply(user, message, languageProfile = 'en
   let asksAdminList = /(list.*admin|admin list|show.*admin|mga admin|listahan ng admin|administrators|sino.*admin|admin.*sino)/.test(normalized);
   const asksOverview = asksAll || /(overview|dashboard summary|system summary|report)/.test(normalized);
 
+  // Batch 17 — isNameListFollowUp also matches a brand-new, explicit request that just
+  // happens to share its phrasing with a follow-up ("can i have the names of the X" fits
+  // both "can i have the names of the parents" AND a bare "can i have the names?" follow-
+  // up). When the CURRENT message already names its own topic, that must win over
+  // guessing from the previous assistant reply — otherwise a first-time question about
+  // parents gets silently resolved against whatever the prior turn happened to be about.
+  // Live QA testing caught exactly this: "can i have the names of the parents?" was
+  // treated as a tutor/student/admin follow-up (none of which the question is about) and
+  // returned "Here is the admin list: Jay Soriano (Admin), Super Admin (Super Admin)" —
+  // admin names, for a question about parents. There's no parent-list capability here, so
+  // the right behavior is to not match at all (this function returns null below) rather
+  // than silently answering about the wrong group of people.
+  const asksAboutParents = /\b(parent|parents|magulang)\b/.test(normalized);
+
   // Bare follow-up ("who are them?", "sino sila") — resolve against what the previous
   // assistant reply was actually about (a tutor count/list, a student count/list, etc.)
-  if (!asksAll && !asksTutorList && !asksStudentList && !asksAdminList && !asksOverview && isNameListFollowUp(normalized)) {
+  if (!asksAll && !asksTutorList && !asksStudentList && !asksAdminList && !asksOverview && !asksAboutParents && isNameListFollowUp(normalized)) {
     const prev = normalizeMessage(getLastAssistantMessage(history) || '');
     if (prev) {
       if (/\btutor/.test(prev)) {
@@ -4138,6 +4152,23 @@ async function getTutorContactReply(user, message, languageProfile = 'english', 
     return getStudentTutorContactReply(user, languageProfile);
   }
 
+  // Batch 17 — an admin/super_admin has no "own assigned tutor" at all — that's a
+  // student/parent concept. This route is reached one of two ways: isTutorContactQuestion
+  // matching a literal "contact my tutor" phrase (which an admin would only type by
+  // confusion), or — the case live QA testing actually caught — the external trained
+  // classifier's `contact_tutor` intent firing via skipKeywordCheck for an admin message
+  // that was never about contacting anyone's tutor at all. "ilan ang tutor natin" ("how
+  // many tutors do we have") got classified as `contact_tutor` and returned "Please check
+  // your assigned tutor details in your dashboard..." — nonsensical for an admin asking a
+  // count question. Returning null here (instead of the generic non-personal text the
+  // comment above this function called correct for "every other role") lets the message
+  // fall through to the rest of the pipeline — including the admin_tutor_count /
+  // admin_student_count keyword rules — rather than confidently answering with an
+  // irrelevant, student/parent-shaped reply.
+  if (user?.role === 'admin' || user?.role === 'super_admin') {
+    return null;
+  }
+
   return pickByLanguage(
     languageProfile,
     'Please check your assigned tutor details in your dashboard. You may also visit Bee Bright at Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines for direct assistance.',
@@ -5300,6 +5331,16 @@ function sanitizeOllamaReply(reply) {
     /\breal-time tracking system\b/i,
     /\bvoice-activated feature\b/i,
     /\b(?:two|three|four|five) tasks at hand\b/i,
+    // Batch 17 — a FOURTH jailbreak-roleplay variant, this one assigning an analyst role
+    // instead of an engineer: "You are a Business Intelligence Analyst for Bee Bright
+    // Tutorial Management System and your task is to analyze user data from three
+    // different users - User A, User B, and User C. You know: 1) ... 2) ... 3) ...". Found
+    // right after the bot correctly declined to invent a nonexistent student's info ("I do
+    // not have Ken's information") — the hallucination continued past that correct refusal
+    // with this fabricated logic-puzzle framing, which must never reach the user either.
+    /\byou are (?:a|an) business intelligence analyst\b/i,
+    /\byour task is to analyze (?:user )?data from (?:two|three|four|five) different users\b/i,
+    /\buser a\b.{0,20}\buser b\b.{0,20}\buser c\b/i,
     /\byou'?ve been asked to solve this (?:issue|problem) (?:by|using)\b/i,
     /\bthe system has a unique feature\b/i,
     /\bthe rules are as follows\b/i,

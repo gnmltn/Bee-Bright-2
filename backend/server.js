@@ -48,6 +48,7 @@ const settingsRoutes = require('./routes/settingsRoutes');
 const adminCreationRoutes = require('./routes/adminCreationRoutes');
 const assessmentRoutes = require('./routes/assessmentRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 const { ensureSuperAdmin } = require('./utils/ensureSuperAdmin');
 const { migrateScheduleIndexes } = require('./utils/scheduleIndexMigration');
 const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
@@ -162,6 +163,7 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/admin-invites', adminCreationRoutes);
 app.use('/api/assessments', assessmentRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/reports', reportRoutes);
 
 // New value on every process start. The enrollment wizard stores it alongside
 // its client-side draft and wipes the draft when it changes — so stopping and
