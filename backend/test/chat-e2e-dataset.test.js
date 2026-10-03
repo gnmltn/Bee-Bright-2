@@ -57,7 +57,12 @@ test('chat(): Task 20 — filler ("can you pls help me") does not drown the topi
     STUDENT,
   );
   assert.equal(out.success, true);
-  assert.match(out.reply, /announcements section/i);
+  // Batch 15: this now correctly resolves to the dedicated navigation_announcements
+  // dataset intent (previously silently discarded by getIntentKeywordDatasetReply, so
+  // this message used to fall through to a different, coincidentally-matching dataset
+  // entry whose wording happened to contain "announcements section"). The assertion only
+  // needs to confirm the topic survived the filler words, not the exact old phrasing.
+  assert.match(out.reply, /Announcements/i);
 });
 
 test('chat(): pure filler still resolves to no dataset match (no false positive)', async () => {

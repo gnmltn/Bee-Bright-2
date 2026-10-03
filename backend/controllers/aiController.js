@@ -4035,6 +4035,43 @@ async function getIntentKeywordDatasetReply(user, message, languageProfile = 'en
     return template;
   }
 
+  // Batch 15 — intentKeywordRules has 11 entries (navigation_activity,
+  // navigation_announcements, navigation_dashboard, navigation_help,
+  // navigation_homepage, navigation_notifications, navigation_profile,
+  // navigation_refresh, navigation_search, navigation_sidebar, theme_toggle) that are
+  // pure static "where/how to find X" templates — no DB lookup, no {placeholder} in
+  // their text, exactly like tutor_materials_location/conversation_continue/ai_help
+  // just above. getIntentKeywordMatch() was already finding the right rule for them
+  // (confirmed directly), but because none of them had a matching `rule.intent === ...`
+  // branch here, every one of them fell through to the `return null` below and was
+  // silently discarded — as if nothing had matched at all. The message then kept
+  // falling through the rest of the reply pipeline (dataset fuzzy-match, the local
+  // 9-intent classifier's topic shortcut, Ollama) and surfaced whatever those happened
+  // to force-match instead. Live QA testing on the (TUTOR) ACTIVITY TAB section caught
+  // this via "navigation_activity": "what is shown in the activity tab?" and "what does
+  // an activity status of 'success' mean?" both got "Tutors do not manage payment
+  // verification. Please contact admin for payment concerns." (the local classifier's
+  // payments-intent fallback), "why does my activity tab say there is no activity?" got
+  // a bare greeting, and so on — a different wrong reply per phrasing, all for the same
+  // underlying reason. The other 10 orphaned intents have the exact same shape and were
+  // equally unreachable for every role, not just tutor.
+  const STATIC_NAVIGATION_INTENTS = new Set([
+    'navigation_activity',
+    'navigation_announcements',
+    'navigation_dashboard',
+    'navigation_help',
+    'navigation_homepage',
+    'navigation_notifications',
+    'navigation_profile',
+    'navigation_refresh',
+    'navigation_search',
+    'navigation_sidebar',
+    'theme_toggle'
+  ]);
+  if (STATIC_NAVIGATION_INTENTS.has(rule.intent)) {
+    return template;
+  }
+
   return null;
 }
 
@@ -5228,6 +5265,17 @@ function sanitizeOllamaReply(reply) {
     // user unfiltered. The three patterns below catch the shape, not the exact wording.
     /hypothetical (scenario|situation|example|case)/i,
     /\byou are (?:a|an) [a-z][a-z\s]{0,40}\bworking for\b/i,
+    // Batch 15 — same roleplay-assignment jailbreak shape, a variant the Batch 10 patterns
+    // still missed: "You're an IoT Engineer working with the Bee Bright system, which is
+    // designed to manage online tutoring sessions... there's a bug in the system where it
+    // sometimes fails to record attendance... You've been asked to solve this issue by
+    // using your IoT engineering skills." Differs from the Batch 10 capture in exactly the
+    // two ways that mattered: the contraction "you're" instead of "you are", and "working
+    // with" instead of "working for" — both still assign the user a fictional staff role
+    // at Bee Bright, so both need to be caught.
+    /\byou'?(?:re| are) (?:a|an) [a-z][a-z\s]{0,40}\bworking (?:for|with)\b/i,
+    /\byou'?ve been asked to solve this (?:issue|problem) (?:by|using)\b/i,
+    /\bthe system has a unique feature\b/i,
     /\bthe rules are as follows\b/i,
     /\bdesign (?:a|an) smart system\b/i,
     /let's say that/i,

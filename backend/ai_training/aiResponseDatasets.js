@@ -1428,9 +1428,18 @@ const AIResponseDatasets = {
           'pwede check activity', 'pwede view activity', 'maaari check activity',
           'is it possible check activity', 'can you explain activity'
         ],
+        // Batch 15 — corrected against the real backend (auditController.js's
+        // getMyActivity): it returns the signed-in user's OWN AuditLog entries only (never
+        // another user's), each with an action, module, description, status, and
+        // date/time, up to the 50 most recent by default. It explicitly filters OUT
+        // login/logout/admin-login-MFA entries (isHiddenAuditAction) — the old wording
+        // here claimed the opposite ("including logins"), which was never true. Baking in
+        // "your own account" and "up to 50" directly answers two of the tester's exact
+        // questions ("can i view another tutor's activity?", "how many recent activity
+        // records can i see?") without needing separate dedicated replies for them.
         replies: {
-          en: 'Click on "Activity" in the sidebar or main menu to see your recent actions including logins, enrollment updates, payment submissions, and schedule changes.',
-          fil: 'I-click ang "Activity" sa sidebar o main menu para makita ang recent actions mo kasama ang logins, enrollment updates, payment submissions, at schedule changes.'
+          en: 'Click on "Activity" in the sidebar or main menu to see your own recent account actions — such as enrollment updates, payment submissions, and schedule changes — each with an action, status, and date/time, up to the 50 most recent. This only covers your own account, not other users’, and login/logout events are not included in this list.',
+          fil: 'I-click ang "Activity" sa sidebar o main menu para makita ang sarili mong recent account actions — tulad ng enrollment updates, payment submissions, at schedule changes — may kasamang action, status, at date/time, hanggang 50 pinakabago. Sarili mo lang na account ang makikita rito, hindi sa ibang user, at hindi kasama ang login/logout events sa listahan.'
         }
       },
       {
@@ -1775,7 +1784,18 @@ const AIResponseDatasets = {
     if (!normalized) return null;
 
     const roleNormalized = role === 'super_admin' ? 'admin' : role;
-    const msgWords = new Set(normalized.split(/\s+/).filter(Boolean));
+    // Batch 15 — strip leading/trailing punctuation from each token before building the
+    // match set. Without this, a single-word keyword rule (e.g. "activity") never matched
+    // when that word was the last one in the message, because the token still carried the
+    // question mark ("activity?" !== "activity") — live QA testing found "where can i see
+    // my recent account activity?" and "can i view another tutor's activity?" both missing
+    // the navigation_activity rule for exactly this reason, while every other phrasing of
+    // the same question (where "activity" wasn't the final word) matched correctly.
+    const msgWords = new Set(
+      normalized.split(/\s+/)
+        .map((w) => w.replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, ''))
+        .filter(Boolean)
+    );
     const stopWords = this._keywordStopWords;
 
     return this.intentKeywordRules.find((rule) => {
