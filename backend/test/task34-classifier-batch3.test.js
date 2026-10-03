@@ -146,7 +146,10 @@ test('route "tutor_attendance_static": no DB access, matches getAttendanceReply 
     const fetchRestore = stubFetch(intent, 0.9);
     try {
       const out = await tryClassifierShortcut({ user: tutorA, body: {}, headers: {} }, 'attendance history for my student', []);
-      assert.equal(out, getAttendanceReply('english'));
+      // Batch 11: this route now passes the caller's role through, so a tutor (tutorA)
+      // gets the role-accurate "you mark attendance yourself" reply, not the
+      // student/parent-facing "recorded automatically" text.
+      assert.equal(out, getAttendanceReply('english', {}, 'tutor'));
     } finally { fetchRestore(); }
   }
 });

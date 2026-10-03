@@ -1340,8 +1340,29 @@ function getPaymentProcessReply(languageProfile = 'english', responsePreference 
   );
 }
 
-function getAttendanceReply(languageProfile = 'english', responsePreference = {}) {
+// Batch 11 — this is the role-agnostic fallback used whenever no more specific attendance
+// handler/dataset entry matches (~20 distinct phrasings in live QA testing all fell through
+// to this one). The original wording ("recorded automatically") is correct for a
+// student/parent, who only ever VIEW attendance that someone else recorded — but it is
+// FALSE for a tutor, who is the one who manually marks it via the Attendance tab (open the
+// tab, pick the session, mark each student Present/Absent, save). Every tester Note on every
+// one of those ~20 tutor-role attendance questions flagged exactly this: "Huwag sabihing
+// automatic ang attendance" / "ituro ang Attendance tab". This does NOT add any new DB-backed
+// capability (mark_attendance stays deliberately unwired, per the existing Task 34 decision
+// above `CLASSIFIER_INTENT_HANDLERS`) — it only corrects the static deflection text per role,
+// same "safe deflection" shape as before.
+function getAttendanceReply(languageProfile = 'english', responsePreference = {}, role = '') {
+  const isTutor = String(role || '').toLowerCase() === 'tutor';
+
   if (responsePreference.wantsSummary) {
+    if (isTutor) {
+      return pickByLanguage(
+        languageProfile,
+        'Open the Attendance tab in your dashboard to mark or review attendance — it is not automatic, you record it yourself per session.',
+        'Buksan ang Attendance tab sa dashboard mo para markahan o tingnan ang attendance — hindi ito automatic, ikaw mismo ang nagmamarka per session.',
+        'Buksan ang Attendance tab sa dashboard mo para i-mark o tingnan ang attendance — hindi ito automatic, ikaw mismo ang nagmamarka per session.'
+      );
+    }
     return pickByLanguage(
       languageProfile,
       'You can view your attendance records in the Attendance section of your dashboard.',
@@ -1351,6 +1372,35 @@ function getAttendanceReply(languageProfile = 'english', responsePreference = {}
   }
 
   if (responsePreference.wantsStepByStep || responsePreference.wantsDetailed || responsePreference.wantsSimple) {
+    if (isTutor) {
+      return pickByLanguage(
+        languageProfile,
+        [
+          'How to Mark Attendance (Step-by-Step):',
+          '1. Open the Attendance tab in your tutor dashboard.',
+          '2. Select the session you want to record.',
+          '3. Mark each student Present or Absent.',
+          '4. Save to record it.',
+          'Note: Attendance is not automatic — you mark and save it yourself. If something looks wrong or won\'t save, contact admin to verify.'
+        ].join('\n'),
+        [
+          'Paano Mag-mark ng Attendance (Sunod-sunod na Hakbang):',
+          '1. Buksan ang Attendance tab sa tutor dashboard mo.',
+          '2. Piliin ang session na gusto mong markahan.',
+          '3. Markahan ang bawat estudyante bilang Present o Absent.',
+          '4. I-save para maitala ito.',
+          'Tandaan: Hindi automatic ang attendance — ikaw mismo ang nagmamarka at nagse-save. Kung may mali o hindi na-save, kontakin ang admin para i-verify.'
+        ].join('\n'),
+        [
+          'Paano Mag-mark ng Attendance (Sunod-sunod na Hakbang):',
+          '1. Buksan ang Attendance tab sa tutor dashboard mo.',
+          '2. Piliin ang session na gusto mong markahan.',
+          '3. I-mark ang bawat student bilang Present o Absent.',
+          '4. I-save para ma-record ito.',
+          'Note: Hindi automatic ang attendance — ikaw mismo ang nagmamarka at nagse-save. Kung may mali o hindi na-save, kontakin ang admin para i-verify.'
+        ].join('\n')
+      );
+    }
     return pickByLanguage(
       languageProfile,
       [
@@ -1377,6 +1427,15 @@ function getAttendanceReply(languageProfile = 'english', responsePreference = {}
         '4. Kung may napansin mong error, makipag-ugnayan sa tutor or admin.',
         'Note: Automatic na nire-record ang attendance during class sessions.'
       ].join('\n')
+    );
+  }
+
+  if (isTutor) {
+    return pickByLanguage(
+      languageProfile,
+      'Open the Attendance tab in your dashboard, select the session, and mark each student Present or Absent, then save — attendance does not record itself, you mark it yourself. If something looks wrong or won\'t save, contact admin to verify.',
+      'Buksan ang Attendance tab sa dashboard mo, piliin ang session, at markahan ang bawat estudyante bilang Present o Absent, tapos i-save — hindi automatic ang attendance, ikaw mismo ang nagmamarka. Kung may mali o hindi na-save, kontakin ang admin para i-verify.',
+      'Buksan ang Attendance tab sa dashboard mo, piliin ang session, i-mark ang bawat student bilang Present o Absent, tapos i-save — hindi automatic ang attendance, ikaw mismo ang nagmamarka. Kung may mali o hindi na-save, kontakin ang admin para i-verify.'
     );
   }
 
@@ -2111,7 +2170,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
   }
 
   if (isAttendanceQuestion(normalized)) {
-    return getAttendanceReply(effectiveLanguageProfile, responsePreference);
+    return getAttendanceReply(effectiveLanguageProfile, responsePreference, user?.role);
   }
 
   if (isTutorAccountCreationQuestion(normalized)) {
@@ -4195,10 +4254,11 @@ async function getTicketStatusReply(user, message, languageProfile = 'english', 
 //    2026-09-30 (see Student Remarks) — once a student resolves, this now always gives
 //    the honest "does not use numeric grades" answer. Non-tutor roles fall through this
 //    branch and return null (grounded pipeline unaffected).
-//  'tutor_attendance_static' -> getAttendanceReply — no account data at all, the exact
-//    same static "check the Attendance section" text already given to every role today;
-//    there is no real per-student attendance-history query handler to wire to, so this
-//    is a safe deflection, not a new capability.
+//  'tutor_attendance_static' -> getAttendanceReply — no account data at all, still a
+//    static deflection (no per-student attendance-history query handler is wired, by
+//    design — not a new capability); Batch 11 made the static text itself role-accurate
+//    (a tutor marks attendance manually, a student/parent only views it) instead of
+//    telling every role the student/parent-facing "recorded automatically" text.
 //  'admin_count'           -> getStudentCountReply / getTutorCountReply /
 //    getEnrollmentStatisticsReply (selected by trained intent) — each already checks
 //    `['admin','super_admin'].includes(user.role)` internally and returns the standard
@@ -4390,8 +4450,9 @@ async function tryClassifierShortcut(req, message, history = []) {
       reply = await getTutorContactReply(req.user, message, languageProfile, { skipKeywordCheck: true });
       break;
     case 'tutor_attendance_static':
-      // No account data at all — the same static text every role already gets.
-      reply = getAttendanceReply(languageProfile);
+      // No account data at all — still a static, role-keyed deflection (no new DB-backed
+      // capability), but Batch 11 made the text itself role-accurate (see getAttendanceReply).
+      reply = getAttendanceReply(languageProfile, {}, req.user?.role);
       break;
     case 'admin_count':
       // Three distinct handlers, each already role-gated internally to admin/super_admin
@@ -4800,7 +4861,7 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   }
 
   if (isAttendanceQuestion(normalized)) {
-    return getAttendanceReply(effectiveLanguageProfile, responsePreference);
+    return getAttendanceReply(effectiveLanguageProfile, responsePreference, user?.role);
   }
 
   if (isTutorAccountCreationQuestion(normalized)) {
