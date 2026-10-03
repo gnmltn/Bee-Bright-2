@@ -13,7 +13,7 @@ const mongoose = require('mongoose');
 
 const AuditLog = require('../models/AuditLog');
 const Escalation = require('../models/Escalation');
-const { sanitizeOllamaReply, ollamaChat } = require('../controllers/aiController');
+const { sanitizeOllamaReply, ollamaChat, isPersonInfoQuery } = require('../controllers/aiController');
 
 AuditLog.create = async () => ({});
 Escalation.create = async () => ({});
@@ -139,6 +139,66 @@ test('29a e2e: when phi emits the meta-commentary, the user gets the canned repl
   } finally {
     global.fetch = realFetch;
   }
+});
+
+// ── Batch 10 — "hypothetical situation / IoT Engineer / rules are as follows" ────
+// Captured from a live QA pass: a tutor asking an unrelated Remarks-tab question got a
+// deterministic reply followed by phi inventing a whole roleplay assignment ("you are an
+// IoT Engineer... design a smart system... the rules are as follows: 1) ... 6)"). The old
+// unsafePatterns only matched "hypothetical scenario" (not "situation") and had no generic
+// roleplay-assignment/rules-dump pattern, so this slipped through unfiltered.
+
+test('Batch 10: the captured "IoT Engineer" roleplay/rules-dump string is rejected', () => {
+  const captured = "Please specify the tutor's name to get contact details.\n\n"
+    + "Let's consider a hypothetical situation where you are an IoT Engineer working for Bee "
+    + "Bright Tutorial Management System and your task is to design a smart system that can "
+    + "automatically update the enrollment records of each program based on user input.\n\n"
+    + 'The rules are as follows:\n'
+    + '1. The total number of students across all programs should be 100.\n'
+    + '2. EP has twice as many students as AT, but no more than 80.\n'
+    + '3. TP has 10 more students than EP.\n'
+    + '4. No two programs have the same number of students.\n'
+    + '5. All three programs together must have a minimum and maximum possible enrollment which are 20 and 80 respectively.\n'
+    + '6.';
+  assert.equal(sanitizeOllamaReply(captured), '');
+});
+
+test('Batch 10: the roleplay/rules-dump shape is caught across different wording', () => {
+  const variations = [
+    'Imagine a hypothetical situation where you are a Database Administrator working for Bee Bright and need to migrate records.',
+    "Let's consider a hypothetical example where you are a Payroll Analyst working for the school and must calculate salaries.\nThe rules are as follows:\n1. Base pay is 500.",
+    'Suppose you are a Security Engineer working for Bee Bright tasked to design a smart system that can automatically lock accounts.',
+  ];
+  for (const v of variations) {
+    assert.equal(sanitizeOllamaReply(v), '', `should reject: ${v.slice(0, 60)}...`);
+  }
+});
+
+test('Batch 10 NEGATIVE: legitimate replies mentioning "working for Bee Bright" still pass', () => {
+  const ok = [
+    'Our tutors are experienced professionals working for Bee Bright\'s Academic Tutorial program.',
+    'You can contact your tutor from the Quick Actions section by clicking Contact Tutor.',
+  ];
+  for (const a of ok) {
+    assert.equal(sanitizeOllamaReply(a), a.trim(), `should NOT reject: ${a.slice(0, 50)}...`);
+  }
+});
+
+// ── Batch 10 — isPersonInfoQuery no longer treats "tell" as the "tel." abbreviation ──
+// "tel\.?" had no word boundaries, so it matched as a bare substring inside "tell". A
+// tutor asking an unrelated Attendance-tab question containing the word "tell" was
+// wrongly routed into the contact/person-info lookup path.
+
+test('Batch 10: isPersonInfoQuery no longer misfires on "tell" (substring of "tel")', () => {
+  assert.equal(isPersonInfoQuery('how can i tell which date an attendance record belongs to'), false);
+  assert.equal(isPersonInfoQuery('can you tell me what happens next'), false);
+});
+
+test('Batch 10 guardrail: isPersonInfoQuery still catches real contact/"tel." requests', () => {
+  assert.equal(isPersonInfoQuery('what is the tel. number of my tutor'), true);
+  assert.equal(isPersonInfoQuery('what is the telephone number of my tutor'), true);
+  assert.equal(isPersonInfoQuery('contact details of juan dela cruz'), true);
+  assert.equal(isPersonInfoQuery('who is juan dela cruz'), true);
 });
 
 test('cleanup: close mongoose if a test opened it', async () => {

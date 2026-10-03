@@ -981,10 +981,17 @@ function isPersonInfoQuery(normalized) {
     return false;
   }
 
+  // Batch 10 — "tel\.?" (meant to catch the "Tel:" / "Tel." abbreviation) had no word
+  // boundaries, so it matched as a bare substring inside unrelated words — "tell",
+  // "attendance" (no, but "tell" especially). A tutor asking "how can i tell which date
+  // an attendance record belongs to?" was wrongly classified as a contact/person-info
+  // lookup purely because "tell" contains "tel". Anchored with \b so it only matches the
+  // standalone abbreviation ("Tel:", "tel. 0900...") — "telephone" still matches via its
+  // own separate alternative either way.
   return /(information|info|details?|profile|background|data)\s+(of|about)\s+[a-z]/.test(normalized)
     || /who\s+is\s+[a-z]/.test(normalized)
     || /tell me about\s+[a-z]/.test(normalized)
-    || /(contact\s*(number|info)?|phone\s*(number)?|mobile\s*(number)?|cell\s*(number)?|telephone|tel\.?)/.test(normalized)
+    || /(contact\s*(number|info)?|phone\s*(number)?|mobile\s*(number)?|cell\s*(number)?|telephone|\btel\.?\b)/.test(normalized)
     || /(what\s+is\s+(his|her|their)\s+(contact|phone|mobile|number))/.test(normalized);
 }
 
@@ -2944,7 +2951,9 @@ function isRoleBasedContactDetailsQuery(normalized = '', message = '') {
     return false;
   }
 
-  const asksContactDetails = /(contact\s*details?|contact\s*info(?:rmation)?|phone\s*(number)?|mobile\s*(number)?|telephone|tel\.?|email\s*address|email)/.test(normalized);
+  // Batch 10 — "tel\.?" anchored with \b (see isPersonInfoQuery) so it no longer matches
+  // as a bare substring inside words like "tell".
+  const asksContactDetails = /(contact\s*details?|contact\s*info(?:rmation)?|phone\s*(number)?|mobile\s*(number)?|telephone|\btel\.?\b|email\s*address|email)/.test(normalized);
   if (!asksContactDetails) {
     return false;
   }
@@ -2981,7 +2990,8 @@ function isGenericContactDetailsRequest(normalized = '') {
   if (/\bbee\s*bright\b/.test(normalized)) {
     return false;
   }
-  return /(contact\s*details?|contact\s*info(?:rmation)?|phone\s*(number)?|mobile\s*(number)?|telephone|tel\.?|email\s*address|email)/.test(normalized);
+  // Batch 10 — same \b-anchored "tel\.?" fix as isPersonInfoQuery / isRoleBasedContactDetailsQuery.
+  return /(contact\s*details?|contact\s*info(?:rmation)?|phone\s*(number)?|mobile\s*(number)?|telephone|\btel\.?\b|email\s*address|email)/.test(normalized);
 }
 
 function toDisplayRole(role = '') {
@@ -3524,7 +3534,9 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
 
   const asksStudent = /(student|estudyante|that student|who is that student)/.test(normalized);
   const asksTutor = /(tutor|teacher|that tutor|who is that tutor|he|she|his|her|siya|sya)/.test(normalized);
-  const asksContact = /(contact\s*(number|info)?|phone\s*(number)?|mobile\s*(number)?|cell\s*(number)?|telephone|tel\.?)/.test(normalized);
+  // Batch 10 — same \b-anchored "tel\.?" fix as isPersonInfoQuery, so "tell" no longer
+  // reads as a contact-info request here either.
+  const asksContact = /(contact\s*(number|info)?|phone\s*(number)?|mobile\s*(number)?|cell\s*(number)?|telephone|\btel\.?\b)/.test(normalized);
   const asksAdminTarget = /(admin|super\s*admin|administrator)/.test(normalized);
   const requestedName = extractRequestedName(normalized);
   const historyTutorRef = getTutorReferenceFromHistory(history);
@@ -5113,7 +5125,17 @@ function sanitizeOllamaReply(reply) {
   }
 
   const unsafePatterns = [
-    /hypothetical scenario/i,
+    // Batch 10 — broadened from "hypothetical scenario" only. Live-testing captured phi
+    // emitting "Let's consider a hypothetical situation where you are an IoT Engineer
+    // working for Bee Bright Tutorial Management System..." followed by a numbered list of
+    // made-up enrollment-math "rules" — a roleplay-assignment jailbreak shape that the old
+    // "scenario"-only wording missed entirely (it says "situation"), so the whole fabricated
+    // story (and, in that capture, a leaked-looking contact line ahead of it) reached the
+    // user unfiltered. The three patterns below catch the shape, not the exact wording.
+    /hypothetical (scenario|situation|example|case)/i,
+    /\byou are (?:a|an) [a-z][a-z\s]{0,40}\bworking for\b/i,
+    /\bthe rules are as follows\b/i,
+    /\bdesign (?:a|an) smart system\b/i,
     /let's say that/i,
     /here'?s what we know/i,
     /different team member/i,
@@ -7791,6 +7813,8 @@ module.exports = {
   getRoleSpecificContext,
   isParentChildProgressQuestion,
   resolveParentChild,
+  // Batch 10 — exported for test/task29-sanitizer.test.js (the "tel" word-boundary fix)
+  isPersonInfoQuery,
   childDisplayName,
   handleChildSafetyScreen,
   handleExplicitHandoff,
