@@ -53,6 +53,34 @@ test('detectGroundedTopic routes tutor note requests to student_notes', () => {
   assert.equal(detectGroundedTopic({ _id: 's', role: 'student' }, 'how is Ben doing'), null);
 });
 
+// Batch 12 — chat_intents.json (the 9-intent local classifier detectGroundedTopic falls
+// back to) has no "remarks" category at all, so every Remarks-tab question used to get
+// force-matched to whichever of its 9 intents shared the most keywords — confidently wrong
+// ("Tutors do not manage enrollment records directly...", "Bee Bright is located in
+// Barangay Pantal...") instead of falling through to the real Remarks-tab handling. None of
+// these are caught by detectStudentNotesIntent above (they're not "tell me about a
+// student" digest requests), so without this guard they used to reach the classifier
+// shortcut and come back as 'payments'/'enrollment'/'schedule'.
+test('detectGroundedTopic: remarks-tab questions never get force-matched to payments/enrollment/schedule', () => {
+  const remarksQuestions = [
+    'Para saan ang remarks tab?',
+    'what is the remarks tab for?',
+    'are remarks the same as grades?',
+    'how do i select a student for a new remark?',
+    'how do i filter remark history by student?',
+    'do remarks show a pass or fail result?',
+    'how do i find a remark i already submitted?',
+  ];
+  for (const q of remarksQuestions) {
+    assert.equal(detectGroundedTopic(TUTOR, q), null, q);
+  }
+});
+
+test('detectGroundedTopic guardrail: non-remarks classifier shortcut still fires normally', () => {
+  assert.equal(detectGroundedTopic(TUTOR, 'what is my enrollment status'), 'enrollment');
+  assert.equal(detectGroundedTopic(TUTOR, 'is the payment verified?'), 'payments');
+});
+
 test('buildTutorStudentNotesContext: no assigned students', async () => {
   await withStubs({ scheduleRows: [] }, async () => {
     const ctx = await buildTutorStudentNotesContext('t1', 'how is Ana doing');

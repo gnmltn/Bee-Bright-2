@@ -1916,6 +1916,19 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
   const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
   const responsePreference = detectResponsePreference(message);
 
+  // Batch 12 follow-up (found during this batch's own live verification, same root cause
+  // as the detectGroundedTopic fix above): getIntentReply's 9-intent classifier has no
+  // "remarks" category either, and its guess is trusted directly by several
+  // `classifierResult?.intent === X` checks below, plus by inferRelatedTopic — a SECOND,
+  // independent consumer of the exact same classifier output that detectGroundedTopic's
+  // narrower fix never touches. "how do i find a remark i already submitted?" scored
+  // 'location' (confidence 0.73) from that classifier and got the Bee Bright address as a
+  // reply here, completely bypassing the fix above. Discard the classifier's opinion for a
+  // remarks-flavored message here too, for the same reason.
+  if (/\bremarks?\b/.test(normalized)) {
+    classifierResult = null;
+  }
+
   if (isCredentialDisclosureRequest(normalized)) {
     return getCredentialDisclosureReply(effectiveLanguageProfile);
   }
@@ -5353,6 +5366,22 @@ function detectGroundedTopic(user, message) {
   // this feature, so this intentionally does not fire for them).
   if ((user.role === 'admin' || user.role === 'super_admin') && isRenewProgramQuestion(normalized)) {
     return 'renew_program';
+  }
+
+  // Batch 12 — chat_intents.json (the generic classifier just below) only knows 9 intents
+  // (greeting/location/contact/enrollment/schedule/payments/materials/tutor_help/farewell)
+  // — there is no "remarks" category at all. Live QA testing found EVERY Student-Remarks-tab
+  // question ("what is the remarks tab for?", "are remarks the same as grades?", "how do i
+  // filter remark history by student?", etc.) getting force-matched to whichever of those 9
+  // intents happened to share the most keywords — "payments", "enrollment", "schedule", even
+  // "location" — each confidently wrong and irrelevant ("Tutors do not manage enrollment
+  // records directly...", "Bee Bright is located in Barangay Pantal..."). Since this
+  // classifier structurally cannot represent "remarks" at all, never let its topic-shortcut
+  // fire for a remarks-flavored message — falling through instead reaches the real
+  // Remarks-tab dataset entries and, failing those, the honest "please clarify your topic"
+  // fallback, both strictly better than a confident wrong answer.
+  if (/\bremarks?\b/.test(normalized)) {
+    return null;
   }
 
   const prediction = getIntentReply(message);
