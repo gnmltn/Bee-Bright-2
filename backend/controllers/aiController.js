@@ -847,6 +847,33 @@ function isAnnouncementQuestion(normalized) {
   return /(announcement|announcements|advisory|advisories|notice|notices|updates?)/.test(normalized);
 }
 
+// Batch 14 — "Announcements are in the Announcements section of your dashboard." is the
+// role-agnostic deflection isAnnouncementQuestion's broad keyword match falls back to. That
+// wording is correct for a student/parent (view-only), but a TUTOR actually creates
+// announcements too — targeted to their own assigned students, pending admin approval
+// before it goes out (see announcementController.js's createAnnouncement, tutor branch:
+// targetType must be 'specific_students', never 'all', and status starts 'pending'). Live
+// QA testing found tutor questions like "how do i post an announcement?", "what information
+// should i include?", and "can i send to only one student?" all getting the view-only text,
+// which never even mentions that tutors can post at all. Mirrors the getAttendanceReply
+// role-split from Batch 11 — same "safe deflection", corrected per role.
+function getAnnouncementReply(languageProfile = 'english', role = '') {
+  if (String(role || '').toLowerCase() === 'tutor') {
+    return pickByLanguage(
+      languageProfile,
+      'In the Announcements tab, you can post an announcement for your own assigned students: choose a category, write the title and message, select the specific student(s) it\'s for (one or several — never "all students", that\'s admin-only), then submit. Your announcement needs admin approval before it goes out.',
+      'Sa Announcements tab, pwede kang mag-post ng announcement para sa sarili mong assigned students: pumili ng category, isulat ang title at message, piliin ang specific student(s) na patutungkulan nito (isa o marami — hindi "all students", admin lang ang pwedeng gumawa niyan), tapos i-submit. Kailangang aprubahan muna ng admin ang announcement mo bago ito mapunta sa mga tatanggap.',
+      'Sa Announcements tab, pwede kang mag-post ng announcement para sa sarili mong assigned students: pumili ng category, i-type ang title at message, piliin ang specific student(s) na para dito (isa o marami — hindi "all students", admin lang ang pwede niyan), tapos i-submit. Kailangang i-approve muna ng admin ang announcement mo bago ito ma-send.'
+    );
+  }
+  return pickByLanguage(
+    languageProfile,
+    'Announcements are in the Announcements section of your dashboard.',
+    'Makikita ang mga anunsyo sa Announcements section ng iyong dashboard.',
+    'Makikita mo ang announcements sa Announcements section ng dashboard mo.'
+  );
+}
+
 function isProgramQuestion(normalized) {
   return /(program|programs|programa|programang|service|services|serbisyo|tutorial|playgroup|pre\s*k|prekindergarten|kindergarten|academic tutorial|sped|exam prep|examination preparation|inooffer|iniaalok|offer)/.test(normalized);
 }
@@ -2171,7 +2198,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
   }
 
   if (isAnnouncementQuestion(normalized)) {
-    return localizeKnownReply('Announcements are in the Announcements section of your dashboard.', effectiveLanguageProfile);
+    return getAnnouncementReply(effectiveLanguageProfile, user?.role);
   }
 
   if (isProgramQuestion(normalized)) {
@@ -2271,7 +2298,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
     return getMaterialsReplyByRole(user, effectiveLanguageProfile);
   }
   if (inferredTopic === 'announcements') {
-    return localizeKnownReply('Announcements are in the Announcements section of your dashboard.', effectiveLanguageProfile);
+    return getAnnouncementReply(effectiveLanguageProfile, user?.role);
   }
   if (inferredTopic === 'location') {
     return localizeKnownReply('Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.', effectiveLanguageProfile);
@@ -7935,6 +7962,8 @@ module.exports = {
   resolveGroundedContextForTopic,
   getEnrollmentStatisticsReply,
   getAttendanceReply,
+  // Batch 14 — exported for test/tutor-announcement-reply.test.js
+  getAnnouncementReply,
   getOutOfScopeMetricsReply,
   buildParentTutorContactContext,
   buildTutorAtRiskContext,
