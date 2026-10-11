@@ -55,11 +55,11 @@ function isAccountScopedQuestion(message) {
 
 const LOGIN_PROMPT = {
   english:
-    "That looks like something tied to a Bee Bright account. Please log in first — students and parents sign in on the Login page, and grades, schedules, payments, and enrollment status are all in your dashboard. I can't look up account details here.",
+    "That looks like something tied to a Bee Bright account. Please log in first — students and parents sign in on the Login page, and remarks, schedules, payments, and enrollment status are all in your dashboard. I can't look up account details here.",
   filipino:
-    "Mukhang nakatali iyan sa isang Bee Bright account. Mag-login muna — ang mga estudyante at magulang ay nag-si-sign in sa Login page, at nasa dashboard ang grades, schedule, bayad, at enrollment status. Hindi ko matitingnan ang account details dito.",
+    "Mukhang nakatali iyan sa isang Bee Bright account. Mag-login muna — ang mga estudyante at magulang ay nag-si-sign in sa Login page, at nasa dashboard ang remarks, schedule, bayad, at enrollment status. Hindi ko matitingnan ang account details dito.",
   taglish:
-    "Mukhang naka-tie yan sa Bee Bright account. Mag-login ka muna — ang students at parents ay nag-si-sign in sa Login page, at nasa dashboard ang grades, schedule, payments, at enrollment status. Hindi ko ma-look up ang account details dito.",
+    "Mukhang naka-tie yan sa Bee Bright account. Mag-login ka muna — ang students at parents ay nag-si-sign in sa Login page, at nasa dashboard ang remarks, schedule, payments, at enrollment status. Hindi ko ma-look up ang account details dito.",
 };
 
 function getLoginPromptReply(languageProfile = 'english') {

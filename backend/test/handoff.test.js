@@ -90,7 +90,7 @@ test('getHandoffAcknowledgement: category + language', () => {
 
 test('Task 30b: a fresh trigger starts the guided intake — NO escalation yet', async () => {
   await withStubs(async ({ escalations }) => {
-    const req = { user: { _id: 'u9', id: 'u9', role: 'student' }, body: {}, headers: {} };
+    const req = { user: { _id: 'u9', id: 'u9', role: 'parent' }, body: {}, headers: {} };
     const reply = await handleExplicitHandoff(req, 'I want to talk to a real person please', []);
     assert.match(reply, /Reason:/i);
     assert.match(reply, /Explanation:/i);
@@ -106,8 +106,11 @@ test('handleExplicitHandoff: unauthenticated → null (D5 — public path stays 
   });
 });
 
+// Batch 19 — "raise a concern" is parent/tutor-side only now (see the dedicated role-gate
+// tests near the bottom of this file). concernReq() used to default to role: 'student';
+// changed to 'parent' so the full-flow tests below keep exercising the intended path.
 function concernReq() {
-  return { user: { _id: 'u9', id: 'u9', role: 'student' }, body: {}, headers: {} };
+  return { user: { _id: 'u9', id: 'u9', role: 'parent' }, body: {}, headers: {} };
 }
 
 // Walk the guided flow, appending each turn to `history` like the chat widget does.
@@ -191,24 +194,46 @@ test('Task 30b: explicit "cancel" during collection abandons cleanly', async () 
   });
 });
 
-test('applyRepeatedNoMatchHandoff: two consecutive misses → escalate + append note', async () => {
+// Batch 19 — the implicit "two consecutive misses → auto-flag" handoff was removed
+// entirely per the user's explicit direction (it was landing in admin's own Requests
+// queue with no user intent behind it at all, including for admin's own messages).
+// applyRepeatedNoMatchHandoff is now a no-op: always returns the reply unchanged, for
+// every role, even on two consecutive unhelpful replies, with no Escalation created.
+test('Batch 19: applyRepeatedNoMatchHandoff is a no-op — two consecutive misses create NO escalation and the reply is unchanged, for every role', async () => {
   await withStubs(async ({ escalations }) => {
-    const req = { user: { _id: 'u1', role: 'student' }, body: {}, headers: {} };
     const history = [
       { role: 'user', content: 'foo' },
       { role: 'assistant', content: 'Sorry, this information is not yet available in the system.' },
     ];
-    const out = await applyRepeatedNoMatchHandoff(
-      req,
-      'still confused',
-      history,
-      'I can guide you step by step. Which page are you on right now?',
-      'english',
-    );
-    assert.match(out, /Which page are you on right now\?/);      // original kept
-    assert.match(out, /flagged it for a Bee Bright admin/i);     // note appended
-    assert.equal(escalations.length, 1);
-    assert.equal(escalations[0].category, 'repeated_no_match');
+    const reply = 'I can guide you step by step. Which page are you on right now?';
+    for (const role of ['admin', 'super_admin', 'parent', 'tutor', 'student']) {
+      const req = { user: { _id: 'u1', role }, body: {}, headers: {} };
+      const out = await applyRepeatedNoMatchHandoff(req, 'still confused', history, reply, 'english');
+      assert.equal(out, reply, `role=${role}`);
+    }
+    assert.equal(escalations.length, 0);
+  });
+});
+
+test('Batch 19: handleExplicitHandoff is parent/tutor-only — admin, super_admin, and student get null (fall through to the normal pipeline)', async () => {
+  await withStubs(async ({ escalations }) => {
+    for (const role of ['admin', 'super_admin', 'student']) {
+      const req = { user: { _id: 'u9', id: 'u9', role }, body: {}, headers: {} };
+      const reply = await handleExplicitHandoff(req, 'I want to raise a concern about my payment', []);
+      assert.equal(reply, null, `role=${role}`);
+    }
+    assert.equal(escalations.length, 0);
+  });
+});
+
+test('Batch 19: handleExplicitHandoff still works for parent and tutor', async () => {
+  await withStubs(async ({ escalations }) => {
+    for (const role of ['parent', 'tutor']) {
+      const req = { user: { _id: 'u9', id: 'u9', role }, body: {}, headers: {} };
+      const reply = await handleExplicitHandoff(req, 'I want to raise a concern about my payment', []);
+      assert.match(reply, /Reason:/i, `role=${role}`);
+    }
+    assert.equal(escalations.length, 0);
   });
 });
 

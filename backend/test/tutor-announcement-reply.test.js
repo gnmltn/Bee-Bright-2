@@ -8,6 +8,11 @@
  * role-aware, mirroring the Batch 11 getAttendanceReply fix. The tutor text reflects the
  * real backend rules in announcementController.js: a tutor must target specific students
  * (never "all"), and a tutor-authored announcement starts 'pending' admin approval.
+ *
+ * Batch 18 added a second role-aware branch for admin (see
+ * admin-tab-help-and-student-lookup.test.js for the dedicated coverage) — admin no
+ * longer shares the generic view-only text either, so this file's old combined
+ * "student/parent/admin/no-role" assertion was split in two.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -22,10 +27,18 @@ test('getAnnouncementReply: tutor gets the posting/targeting/approval text', () 
   assert.match(reply, /never.*all students|not.*all students/i);
 });
 
-test('getAnnouncementReply: student/parent/admin/no-role keep the original view-only text', () => {
-  for (const role of ['student', 'parent', 'admin', undefined, '']) {
+test('getAnnouncementReply: student/parent/no-role keep the original view-only text', () => {
+  for (const role of ['student', 'parent', undefined, '']) {
     const reply = getAnnouncementReply('english', role);
     assert.match(reply, /Announcements are in the Announcements section/i, `role=${role}`);
+  }
+});
+
+test('getAnnouncementReply: admin gets the review/approve/post-your-own text (Batch 18), not the generic view-only text', () => {
+  for (const role of ['admin', 'super_admin']) {
+    const reply = getAnnouncementReply('english', role);
+    assert.doesNotMatch(reply, /^Announcements are in the Announcements section/i, `role=${role}`);
+    assert.match(reply, /approve/i, `role=${role}`);
   }
 });
 

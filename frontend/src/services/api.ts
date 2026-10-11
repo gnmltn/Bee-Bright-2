@@ -10,7 +10,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 40000, // Increased for Ollama requests (up to 20s server-side + buffer)
+  timeout: 40000, // Increased for the chatbot's LLM fallback (up to 20s server-side + buffer)
 });
 
 // Add auth token to requests
@@ -869,7 +869,7 @@ export const aiService = {
       }[];
     };
   }>('/ai/metrics'),
-  /** Ollama (phi) chatbot – uses backend proxy to local Ollama. No auth required. */
+  /** Chatbot endpoint (route name kept for compatibility) – backend's LLM fallback now calls Gemini, not Ollama. No auth required. */
   ollamaChat: (message: string, history?: { role: 'user' | 'assistant'; content: string }[]) =>
     api.post<{ success: boolean; reply?: string; message?: string }>('/ai/ollama-chat', { message, history }),
 };

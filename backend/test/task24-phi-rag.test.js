@@ -1,17 +1,16 @@
 /**
- * Task 24 — expand phi's role via RAG (Option A).
+ * Task 24 — expand the chatbot's LLM fallback role via RAG (Option A).
  *
  *   24b  buildPhiReferenceContext() retrieves a small, topic-relevant slice of the
  *        STATIC knowledge base (aiResponseDatasets.js) as plain text.
- *   24b  ollamaChat() injects it into the phi system prompt as a distinctly-labelled
- *        [REFERENCE MATERIAL] block, separate from the [ACCOUNT DATA] block.
+ *   24b  ollamaChat() injects it into the LLM's system instruction as a distinctly-
+ *        labelled [REFERENCE MATERIAL] block, separate from the [ACCOUNT DATA] block.
  *   24c  guardrails — the reference material is static only and can never carry another
  *        user's / another role's data; sanitize + audit logging unchanged.
  *
- * phi itself is stubbed (global.fetch) so these run with no Ollama and no Mongo.
+ * The LLM call itself is stubbed (geminiClient.generateChatbotReply) so these run with
+ * no real Gemini call, no Ollama, and no Mongo.
  */
-process.env.OLLAMA_URL = 'http://127.0.0.1:59581';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
@@ -19,7 +18,8 @@ const mongoose = require('mongoose');
 const AuditLog = require('../models/AuditLog');
 const Escalation = require('../models/Escalation');
 const AIResponseDatasets = require('../ai_training/aiResponseDatasets');
-const { ollamaChat, buildPhiReferenceContext, generatePhiReply } = require('../controllers/aiController');
+const geminiClient = require('../utils/geminiClient');
+const { ollamaChat, buildPhiReferenceContext, generateChatbotLlmReply } = require('../controllers/aiController');
 
 AuditLog.create = async () => ({});
 Escalation.create = async () => ({});
@@ -104,17 +104,13 @@ test('24c: reference material never contains account-data markers', () => {
   assert.doesNotMatch(ref, /\[ACCOUNT DATA\]|Role: parent\n|Linked child enrollments|Enrollment status:/i);
 });
 
-// ── 24b — injection into the phi prompt ─────────────────────────────────
+// ── 24b — injection into the LLM's system instruction ─────────────────────
 
-function stubFetchCapturingPrompt() {
+function stubGeminiCapturingPrompt() {
   const calls = [];
-  global.fetch = async (url, opts) => {
-    calls.push(JSON.parse(opts.body));
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ message: { content: 'Here is a short helpful answer about Bee Bright.' } }),
-    };
+  geminiClient.generateChatbotReply = async ({ systemInstruction, contents }) => {
+    calls.push({ systemInstruction, contents });
+    return 'Here is a short helpful answer about Bee Bright.';
   };
   return calls;
 }
@@ -131,19 +127,19 @@ function invoke(handler, body, user) {
   });
 }
 
-test('24b e2e: when phi is reached, the [REFERENCE MATERIAL] block is in its system prompt', async () => {
-  const realFetch = global.fetch;
-  const calls = stubFetchCapturingPrompt();
+test('24b e2e: when Gemini is reached, the [REFERENCE MATERIAL] block is in its system instruction', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  const calls = stubGeminiCapturingPrompt();
   try {
     // English declarative that mentions an on-topic word ("academic tutorial") but is
-    // not a recognised question shape -> falls through every bypass handler, reaches phi
-    // — and still has enough overlap for RAG retrieval. (English: Task 26 lets it through.)
+    // not a recognised question shape -> falls through every bypass handler, reaches the
+    // LLM — and still has enough overlap for RAG retrieval. (English: Task 26 lets it through.)
     const msg = 'my neighbor keeps talking about your academic tutorial classes';
     const out = await invoke(ollamaChat, { message: msg, history: [] }, null);
     assert.equal(out.success, true);
-    assert.equal(calls.length, 1, 'phi was actually called');
+    assert.equal(calls.length, 1, 'Gemini was actually called');
 
-    const systemMsg = calls[0].messages.find((m) => m.role === 'system').content;
+    const systemMsg = calls[0].systemInstruction;
     const expectedRef = buildPhiReferenceContext(msg, null);
     assert.ok(expectedRef, 'this probe message is expected to yield reference material');
     assert.match(systemMsg, /\[REFERENCE MATERIAL — Bee Bright knowledge base\]/);
@@ -151,13 +147,13 @@ test('24b e2e: when phi is reached, the [REFERENCE MATERIAL] block is in its sys
       assert.ok(systemMsg.includes(answer), 'each retrieved entry is in the prompt');
     }
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
-test('24b e2e: an unreachable phi still yields a deterministic fallback (RAG does not break the path)', async () => {
-  const realFetch = global.fetch;
-  global.fetch = async () => { throw new Error('ECONNREFUSED'); };
+test('24b e2e: an unreachable Gemini still yields a deterministic fallback (RAG does not break the path)', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  geminiClient.generateChatbotReply = async () => null;
   try {
     const out = await invoke(
       ollamaChat,
@@ -167,68 +163,89 @@ test('24b e2e: an unreachable phi still yields a deterministic fallback (RAG doe
     assert.equal(out.success, true);
     assert.ok(typeof out.reply === 'string' && out.reply.length > 0);
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
-// ── 24a — phi is reached when the deterministic matcher genuinely has nothing ──
+// ── 24a — the LLM is reached when the deterministic matcher genuinely has nothing ──
 
-test('24a: an unanswerable question falls through to phi on BOTH routes', async () => {
-  const realFetch = global.fetch;
-  const calls = stubFetchCapturingPrompt();
+test('24a: an unanswerable question falls through to the LLM on BOTH routes', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  const calls = stubGeminiCapturingPrompt();
   try {
     const { chat } = require('../controllers/aiController');
     for (const handler of [chat, ollamaChat]) {
       calls.length = 0;
       const out = await invoke(handler, { message: 'can my child bring a snack to class', history: [] }, null);
       assert.equal(out.success, true);
-      assert.equal(calls.length, 1, 'phi was invoked as a last resort');
+      assert.equal(calls.length, 1, 'Gemini was invoked as a last resort');
       assert.equal(out.reply, 'Here is a short helpful answer about Bee Bright.');
     }
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
-test('24a: a question the matcher CAN answer never reaches phi (determinism wins)', async () => {
-  const realFetch = global.fetch;
-  const calls = stubFetchCapturingPrompt();
+// Gemini-first restructuring (superseding "determinism wins first"): every question,
+// even one the deterministic matcher could answer confidently, now reaches Gemini
+// FIRST — the deterministic/keyword pipeline is only reached as a fallback when Gemini
+// itself can't answer (most commonly a 429 rate-limit). This was a deliberate owner
+// decision (accepting the cost/quota tradeoff) to fix cases where the deterministic
+// matcher was answering confidently but WRONG for some role/topic combinations.
+test('Gemini-first: a question the deterministic matcher COULD answer still reaches Gemini first', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  const calls = stubGeminiCapturingPrompt();
   try {
     const { chat } = require('../controllers/aiController');
     for (const msg of ['how do i enroll', 'where is bee bright located', 'what are your payment methods']) {
       for (const handler of [chat, ollamaChat]) {
         calls.length = 0;
         const out = await invoke(handler, { message: msg, history: [] }, null);
-        assert.equal(calls.length, 0, `"${msg}" must be answered deterministically`);
-        assert.ok(out.reply && out.reply.length > 0);
+        assert.equal(calls.length, 1, `"${msg}" must reach Gemini first`);
+        assert.equal(out.reply, 'Here is a short helpful answer about Bee Bright.');
       }
     }
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
-test('24a: phi prompt for an anonymous user carries NO [ACCOUNT DATA] block', async () => {
-  const realFetch = global.fetch;
-  const calls = stubFetchCapturingPrompt();
+test('Gemini-first: when Gemini fails (e.g. rate-limited), the SAME question falls back to the deterministic pipeline', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  geminiClient.generateChatbotReply = async () => null; // simulates a 429 or any other failure
+  try {
+    const { chat } = require('../controllers/aiController');
+    for (const handler of [chat, ollamaChat]) {
+      const out = await invoke(handler, { message: 'how do i enroll', history: [] }, null);
+      assert.ok(out.reply && out.reply.length > 0, 'the deterministic fallback must still answer');
+      assert.notEqual(out.reply, 'Here is a short helpful answer about Bee Bright.');
+    }
+  } finally {
+    geminiClient.generateChatbotReply = origReply;
+  }
+});
+
+test('24a: LLM prompt for an anonymous user carries NO [ACCOUNT DATA] block', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  const calls = stubGeminiCapturingPrompt();
   try {
     const { chat } = require('../controllers/aiController');
     await invoke(chat, { message: 'can my child bring a snack to class', history: [] }, null);
-    const systemMsg = calls[0].messages.find((m) => m.role === 'system').content;
+    const systemMsg = calls[0].systemInstruction;
     assert.doesNotMatch(systemMsg, /\[ACCOUNT DATA/);
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
-// ── 24c — phi only ever sees the context it was handed (no data-boundary widening) ──
+// ── 24c — the LLM only ever sees the context it was handed (no data-boundary widening) ──
 
-test('24c: generatePhiReply passes through the scoped grounded context verbatim, nothing more', async () => {
-  const realFetch = global.fetch;
+test('24c: generateChatbotLlmReply passes through the scoped grounded context verbatim, nothing more', async () => {
+  const origReply = geminiClient.generateChatbotReply;
   let captured = null;
-  global.fetch = async (url, opts) => {
-    captured = JSON.parse(opts.body);
-    return { ok: true, status: 200, json: async () => ({ message: { content: 'ok' } }) };
+  geminiClient.generateChatbotReply = async ({ systemInstruction, contents }) => {
+    captured = { systemInstruction, contents };
+    return 'ok';
   };
   try {
     // Simulates what getGroundedChatContext already produced for THIS parent — Ana only.
@@ -236,7 +253,7 @@ test('24c: generatePhiReply passes through the scoped grounded context verbatim,
       topic: 'grades',
       contextText: 'Role: parent\nChild: Ana Cruz\nAcademic Tutorial — Phonics: 82/100 (82%), tutor Maria Santos',
     };
-    await generatePhiReply({
+    await generateChatbotLlmReply({
       user: { _id: 'parent-1', role: 'parent' },
       resolvedMessage: 'can you explain how ana is doing',
       rawMessage: 'can you explain how ana is doing',
@@ -244,26 +261,26 @@ test('24c: generatePhiReply passes through the scoped grounded context verbatim,
       effectiveLanguageProfile: 'english',
       history: [],
     });
-    const systemMsg = captured.messages.find((m) => m.role === 'system').content;
+    const systemMsg = captured.systemInstruction;
     // the scoped block is present and labelled distinctly
     assert.match(systemMsg, /\[ACCOUNT DATA — specific to this signed-in user/);
     assert.ok(systemMsg.includes(groundedContext.contextText));
     // nothing about any other family leaked in
     assert.doesNotMatch(systemMsg, /Ben|Cruz Jr|another child|parent-2/i);
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
 test('24c: no grounded context => no [ACCOUNT DATA] block at all', async () => {
-  const realFetch = global.fetch;
+  const origReply = geminiClient.generateChatbotReply;
   let captured = null;
-  global.fetch = async (url, opts) => {
-    captured = JSON.parse(opts.body);
-    return { ok: true, status: 200, json: async () => ({ message: { content: 'ok' } }) };
+  geminiClient.generateChatbotReply = async ({ systemInstruction, contents }) => {
+    captured = { systemInstruction, contents };
+    return 'ok';
   };
   try {
-    await generatePhiReply({
+    await generateChatbotLlmReply({
       user: { _id: 't1', role: 'tutor' },
       resolvedMessage: 'what is your refund policy',
       rawMessage: 'what is your refund policy',
@@ -271,18 +288,18 @@ test('24c: no grounded context => no [ACCOUNT DATA] block at all', async () => {
       effectiveLanguageProfile: 'english',
       history: [],
     });
-    const systemMsg = captured.messages.find((m) => m.role === 'system').content;
+    const systemMsg = captured.systemInstruction;
     assert.doesNotMatch(systemMsg, /\[ACCOUNT DATA/);
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 
-test('24c: an unreachable phi returns null (caller keeps its deterministic reply)', async () => {
-  const realFetch = global.fetch;
-  global.fetch = async () => { throw new Error('ECONNREFUSED'); };
+test('24c: an unreachable Gemini returns null (caller keeps its deterministic reply)', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  geminiClient.generateChatbotReply = async () => null;
   try {
-    const r = await generatePhiReply({
+    const r = await generateChatbotLlmReply({
       user: null,
       resolvedMessage: 'hi',
       rawMessage: 'hi',
@@ -292,7 +309,7 @@ test('24c: an unreachable phi returns null (caller keeps its deterministic reply
     });
     assert.equal(r, null);
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 

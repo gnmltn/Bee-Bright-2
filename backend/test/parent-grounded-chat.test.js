@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
+const Remark = require('../models/Remark');
 
 const {
   detectGroundedTopic,
@@ -110,6 +111,24 @@ test('resolveParentChild groups multi-enrollment children before matching', () =
   assert.equal(resolveParentChild('how is my child doing', multi).matched, null);
 });
 
+// Found via live testing: a parent with 2+ children sharing a last name (siblings) named
+// a child by FULL name ("Alex Soriano") and got the generic "which child?" disambiguation
+// instead of Alex specifically — the shared surname "Soriano" alone matched every one of
+// the siblings under the old "first OR last" test, outvoting the one real full-name hit.
+test('resolveParentChild resolves an exact full-name match even when siblings share a last name', () => {
+  const siblings = [
+    enrollment({ _id: 'alex', studentSnapshot: { firstName: 'Alex', lastName: 'Soriano' } }),
+    enrollment({ _id: 'aviery', studentSnapshot: { firstName: 'Aviery', lastName: 'Soriano' } }),
+    enrollment({ _id: 'jay', studentSnapshot: { firstName: 'Jay', lastName: 'Soriano' } }),
+  ];
+  assert.equal(resolveParentChild('what is the schedule of alex soriano', siblings).matched?._id, 'alex');
+  assert.equal(resolveParentChild('ilan absent ni jay soriano sa klase?', siblings).matched?._id, 'jay');
+  // First-name-only when unambiguous still works (no collision risk from first names here).
+  assert.equal(resolveParentChild('kay alex may natitira pa bang babayaran?', siblings).matched?._id, 'alex');
+  // The bare shared surname alone, with no first name at all, is still correctly ambiguous.
+  assert.equal(resolveParentChild('kumusta ang mga soriano', siblings).matched, null);
+});
+
 test('childDisplayName falls back gracefully', () => {
   assert.equal(childDisplayName(enrollment()), 'Ana Cruz');
   assert.equal(childDisplayName({ studentSnapshot: {} }), 'your child');
@@ -134,20 +153,95 @@ test('grounded grades context: asks which child when none is named', async () =>
 });
 
 // Grades were fully retired in favor of Student Remarks (2026-09-30) — once a named
-// child resolves, buildParentGradesContext now always gives the honest current answer
-// instead of querying a model that's gone.
+// child resolves, buildParentGradesContext gives the honest "no numeric grades" framing,
+// now backed by the real published Remark data when any exists (see the dedicated test
+// below) instead of always just redirecting to a tab with no content.
 test('grounded grades context: honest "does not use numeric grades" answer for the named child', async () => {
   const origEnr = Enrollment.find;
+  const origRemark = Remark.find;
   stubModel(Enrollment, 'find', [
     enrollment({ _id: 'e1', student: 'stu-1', studentId: 'S-20260101-0007', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
   ]);
+  stubModel(Remark, 'find', []);
   try {
     const ctx = await getGroundedChatContext(PARENT, "how is Ana doing in her subjects?");
     assert.match(ctx.contextText, /Ana Cruz/);
     assert.match(ctx.contextText, /does not use numeric grades/i);
     assert.match(ctx.fallbackReply, /does not use numeric grades/i);
     assert.match(ctx.fallbackReply, /Ana Cruz/);
-    assert.match(ctx.fallbackReply, /Progress tab/);
+    assert.match(ctx.fallbackReply, /Student Remarks/);
+  } finally {
+    restore(Enrollment, 'find', origEnr);
+    restore(Remark, 'find', origRemark);
+  }
+});
+
+test('grounded grades context: a published remark for the named child surfaces its real content, not just a redirect', async () => {
+  const origEnr = Enrollment.find;
+  const origRemark = Remark.find;
+  stubModel(Enrollment, 'find', [
+    enrollment({ _id: 'e1', student: 'stu-1', studentId: 'S-20260101-0007', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
+  ]);
+  stubModel(Remark, 'find', [
+    {
+      date: new Date('2026-10-01'),
+      remarkBullets: ['Participated actively in class discussion', 'Completed all worksheets'],
+      nextFocus: 'Practice long division',
+      parentSupportSuggestion: '',
+      status: 'published',
+      isCurrentVersion: true,
+    },
+  ]);
+  try {
+    const ctx = await getGroundedChatContext(PARENT, "how is Ana doing in her subjects?");
+    assert.match(ctx.contextText, /Ana Cruz/);
+    assert.match(ctx.contextText, /Participated actively in class discussion/);
+    assert.match(ctx.fallbackReply, /Participated actively in class discussion/);
+    assert.match(ctx.fallbackReply, /Practice long division/);
+  } finally {
+    restore(Enrollment, 'find', origEnr);
+    restore(Remark, 'find', origRemark);
+  }
+});
+
+// Attendance had no dedicated grounding path for parents at all — a question like "ilan
+// absent ni alex" fell through to a generic "check your dashboard" instruction instead
+// of the real present/absent counts, even for the parent's own verified child.
+test('grounded attendance context: real present/absent counts for the named child, not a generic instruction', async () => {
+  const origEnr = Enrollment.find;
+  const origSched = Schedule.find;
+  stubModel(Enrollment, 'find', [
+    enrollment({ _id: 'e1', student: 'stu-1', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
+  ]);
+  stubModel(Schedule, 'find', [
+    { date: new Date('2026-09-01'), attendanceStatus: 'present' },
+    { date: new Date('2026-09-08'), attendanceStatus: 'absent' },
+    { date: new Date('2026-09-15'), attendanceStatus: 'present' },
+    { date: new Date('2026-09-22'), attendanceStatus: 'unmarked' },
+  ]);
+  try {
+    const ctx = await getGroundedChatContext(PARENT, 'ilan absent ni ana cruz sa klase?');
+    assert.equal(ctx.topic, 'attendance');
+    assert.match(ctx.contextText, /Ana Cruz/);
+    assert.match(ctx.contextText, /Absent: 1/);
+    assert.match(ctx.contextText, /Present: 2/);
+    assert.match(ctx.fallbackReply, /absent 1 time/i);
+    assert.match(ctx.fallbackReply, /out of 4 past sessions/i);
+  } finally {
+    restore(Enrollment, 'find', origEnr);
+    restore(Schedule, 'find', origSched);
+  }
+});
+
+test('grounded attendance context: asks which child when none is named, like payments/schedule already do', async () => {
+  const origEnr = Enrollment.find;
+  stubModel(Enrollment, 'find', [
+    enrollment({ _id: 'e1', student: 'stu-1', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
+    enrollment({ _id: 'e2', student: 'stu-2', studentSnapshot: { firstName: 'Ben', lastName: 'Reyes' } }),
+  ]);
+  try {
+    const ctx = await getGroundedChatContext(PARENT, 'how many absences does my child have');
+    assert.match(ctx.fallbackReply, /whose attendance/i);
   } finally {
     restore(Enrollment, 'find', origEnr);
   }

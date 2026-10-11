@@ -5,6 +5,7 @@ const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const { computeRemainingBalance } = require('../utils/remainingBalance');
 const Schedule = require('../models/Schedule');
+const Remark = require('../models/Remark');
 const User = require('../models/User');
 const Pricing = require('../models/Pricing');
 const Escalation = require('../models/Escalation');
@@ -21,6 +22,10 @@ const {
   MAX_REASON_LEN, MAX_EXPLANATION_LEN,
 } = require('../utils/handoffService');
 const { predictIntent, INTENT_CLASSIFIER_CONFIDENCE_THRESHOLD } = require('../utils/intentClassifierClient');
+// Namespace import (not destructured) so test files can stub geminiClient.generateChatbotReply
+// in place — a destructured reference would keep pointing at the original function after a
+// test reassigns the module's export (the same bug class the digest feature's own test caught).
+const geminiClient = require('../utils/geminiClient');
 const {
   TUTORING_ENABLED,
   detectTutoringIntent,
@@ -57,24 +62,6 @@ const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || '10m';
 const OLLAMA_DEBUG = /^(1|true|yes)$/i.test(String(process.env.OLLAMA_DEBUG || ''));
 const SYSTEM_UNAVAILABLE_REPLY = 'Sorry, this information is not yet available in the system.';
 
-const LANGUAGE_NAMES = {
-  eng: 'English',
-  fil: 'Filipino',
-  tgl: 'Tagalog',
-  spa: 'Spanish',
-  fra: 'French',
-  deu: 'German',
-  ita: 'Italian',
-  jpn: 'Japanese',
-  zho: 'Chinese',
-  kor: 'Korean',
-  rus: 'Russian',
-  ara: 'Arabic',
-  hin: 'Hindi',
-  por: 'Portuguese',
-  vie: 'Vietnamese'
-};
-
 function detectLanguage(text) {
   try {
     if (!text || text.trim().length === 0) return 'eng';
@@ -83,10 +70,6 @@ function detectLanguage(text) {
   } catch (_) {
     return 'eng';
   }
-}
-
-function getLanguageName(langCode) {
-  return LANGUAGE_NAMES[langCode] || 'English';
 }
 
 function detectLanguageProfile(text) {
@@ -232,30 +215,34 @@ function pickByLanguage(profile, english, filipino, taglish) {
   return english;
 }
 
+// The standalone Materials section was removed — soft copies of what a student studied
+// (worksheets, etc.) are now attached to the Remark a tutor writes for that session, and
+// only become visible to the parent/student once admin approves it. These replies used
+// to point to a "Materials section" that no longer exists in the dashboard at all.
 function getMaterialsReplyByRole(user, languageProfile = 'english') {
   if (user?.role === 'student') {
     return pickByLanguage(
       languageProfile,
-      'Learning materials are available in the Materials section. If you have low grades, you may also see recommended materials in the AI area.',
-      'Makikita ang learning materials sa Materials section. Kung mababa ang grades mo, maaari ka ring makakita ng recommended materials sa AI area.',
-      'Makikita ang learning materials sa Materials section. Kapag mababa ang grades mo, may recommended materials ka rin na makikita sa AI area.'
+      'Learning materials from your sessions (like worksheets your tutor shared) are attached to your Remarks — open the Remarks section of your dashboard to view them.',
+      'Ang learning materials mula sa mga session mo (tulad ng worksheets na ibinahagi ng tutor mo) ay naka-attach sa Remarks mo — buksan ang Remarks section ng dashboard mo para makita ito.',
+      'Ang learning materials mula sa mga session mo (tulad ng worksheets na shared ng tutor mo) ay naka-attach sa Remarks mo — buksan ang Remarks section ng dashboard mo para makita.'
     );
   }
 
   if (user?.role === 'tutor') {
     return pickByLanguage(
       languageProfile,
-      'Learning materials are available in the Materials section. You can upload and manage lesson resources for your assigned students there.',
-      'Makikita ang learning materials sa Materials section. Doon ka puwedeng mag-upload at mag-manage ng lesson resources para sa assigned students mo.',
-      'Makikita ang learning materials sa Materials section. Doon ka puwedeng mag-upload at mag-manage ng lesson resources para sa assigned students mo.'
+      'You can attach a worksheet or file when writing a Remark for a student in the Student Remarks tab — it becomes visible to the parent once admin approves that remark.',
+      'Maaari kang mag-attach ng worksheet o file kapag sumusulat ka ng Remark para sa estudyante sa Student Remarks tab — makikita ito ng magulang kapag na-approve na ng admin ang remark.',
+      'Pwede kang mag-attach ng worksheet o file kapag sumusulat ka ng Remark para sa student sa Student Remarks tab — makikita ito ng parent once na-approve na ng admin ang remark.'
     );
   }
 
   return pickByLanguage(
     languageProfile,
-    'Learning materials are available in the Materials section of the dashboard.',
-    'Makikita ang learning materials sa Materials section ng dashboard.',
-    'Makikita ang learning materials sa Materials section ng dashboard.'
+    'Learning materials shared by tutors are attached to Remarks — open the Remarks section of the dashboard to view them.',
+    'Ang learning materials na ibinahagi ng mga tutor ay naka-attach sa Remarks — buksan ang Remarks section ng dashboard para makita ito.',
+    'Ang learning materials na shared ng mga tutor ay naka-attach sa Remarks — buksan ang Remarks section ng dashboard para makita.'
   );
 }
 
@@ -374,7 +361,7 @@ function getRoleSpecificContext(userRole) {
   }
   
   if (userRole === 'student') {
-    return 'You are assisting a Bee Bright student. Focus on their personal enrollment status, payment status, class schedule, grades, learning materials, and announcements. When they ask about their personal data, use the grounded account data provided to give accurate information. Be supportive and helpful about their academic journey.';
+    return 'You are assisting a Bee Bright student. Focus on their personal enrollment status, payment status, class schedule, remarks, learning materials, and announcements. When they ask about their personal data, use the grounded account data provided to give accurate information. Be supportive and helpful about their academic journey.';
   }
   
   if (userRole === 'tutor') {
@@ -382,7 +369,7 @@ function getRoleSpecificContext(userRole) {
   }
 
   if (userRole === 'parent') {
-    return 'You are assisting a Bee Bright parent or guardian. Help them with their own enrolled child or children: enrollment status, payment status, class schedule, and grades or academic progress. A parent may have more than one enrolled child. Before giving schedule or grade details, if the parent has not named which child, ask them which child by name. Only discuss data for children linked to this parent account through the grounded account data provided. Never invent enrollment, payment, schedule, or grade records, and never reveal data about other families.';
+    return 'You are assisting a Bee Bright parent or guardian. Help them with their own enrolled child or children: enrollment status, payment status, class schedule, and remarks or academic progress. A parent may have more than one enrolled child. Before giving schedule or remarks details, if the parent has not named which child, ask them which child by name. Only discuss data for children linked to this parent account through the grounded account data provided — if a named child is not in that data, say you cannot find or access that student, never guess or confirm. Never invent enrollment, payment, schedule, or remarks records, and never reveal data about other families.';
   }
 
   if (userRole === 'admin' || userRole === 'super_admin') {
@@ -635,9 +622,9 @@ function getFollowUpTopicReply(topic, languageProfile = 'english') {
     case 'materials':
       return pickByLanguage(
         languageProfile,
-        'You can find lesson materials in the Materials section of your dashboard.',
-        'Makikita ang lesson materials sa Materials section ng dashboard.',
-        'Makikita ang lesson materials sa Materials section ng dashboard.'
+        'Lesson materials are attached to Remarks — check the Remarks section of your dashboard.',
+        'Ang lesson materials ay naka-attach sa Remarks — tingnan ang Remarks section ng dashboard mo.',
+        'Ang lesson materials ay naka-attach sa Remarks — check mo ang Remarks section ng dashboard mo.'
       );
     case 'login':
       return pickByLanguage(
@@ -797,9 +784,9 @@ function getClarificationReply(languageProfile = 'english', relatedTopic = null)
 
   return pickByLanguage(
     languageProfile,
-    'I want to make sure my answer matches your exact question. Please clarify your topic: programs and pricing, enrollment, payments, login, schedule, grades, materials, announcements, or tutor contact.',
-    'Gusto kong tiyaking tugma ang sagot ko sa eksaktong tanong mo. Pakilinaw ang topic: mga programa at presyo, enrollment, payments, login, schedule, grades, materials, announcements, o tutor contact.',
-    'Gusto kong tiyaking tugma ang sagot ko sa exact na tanong mo. Pakilinaw ang topic: programs at pricing, enrollment, payments, login, schedule, grades, materials, announcements, o tutor contact.'
+    'I want to make sure my answer matches your exact question. Please clarify your topic: programs and pricing, enrollment, payments, login, schedule, remarks, materials, announcements, or tutor contact.',
+    'Gusto kong tiyaking tugma ang sagot ko sa eksaktong tanong mo. Pakilinaw ang topic: mga programa at presyo, enrollment, payments, login, schedule, remarks, materials, announcements, o tutor contact.',
+    'Gusto kong tiyaking tugma ang sagot ko sa exact na tanong mo. Pakilinaw ang topic: programs at pricing, enrollment, payments, login, schedule, remarks, materials, announcements, o tutor contact.'
   );
 }
 
@@ -866,6 +853,20 @@ function getAnnouncementReply(languageProfile = 'english', role = '') {
       'Sa Announcements tab, pwede kang mag-post ng announcement para sa sarili mong assigned students: pumili ng category, i-type ang title at message, piliin ang specific student(s) na para dito (isa o marami — hindi "all students", admin lang ang pwede niyan), tapos i-submit. Kailangang i-approve muna ng admin ang announcement mo bago ito ma-send.'
     );
   }
+
+  // Batch 18 — admin previously got the generic "check your dashboard" text, with no
+  // mention of what the tab actually lets admin DO (the tester's exact complaint: "dapat
+  // may explain din if ano ang nasa announce if ano mgagagawin dito also kung anong
+  // function nito").
+  if (['admin', 'super_admin'].includes(String(role || '').toLowerCase())) {
+    return pickByLanguage(
+      languageProfile,
+      'The Announcements tab shows every announcement in the system, including ones tutors post for their own students. As admin, you can review a tutor\'s submitted announcement and approve it before it is sent out, and you can also post your own announcement to all students or to a specific selection.',
+      'Sa Announcements tab, makikita ang lahat ng announcement sa system, kasama ang mga ipo-post ng mga tutor para sa sarili nilang estudyante. Bilang admin, maaari mong i-review ang isinumite ng tutor at aprubahan ito bago ito maipadala, at maaari ka ring mag-post ng sarili mong announcement para sa lahat ng estudyante o sa piniling grupo lamang.',
+      'Sa Announcements tab, makikita ang lahat ng announcement sa system, kasama ang mga ipo-post ng mga tutor para sa sarili nilang estudyante. Bilang admin, pwede mong i-review ang isinumite ng tutor at i-approve bago ito ma-send, at pwede ka ring mag-post ng sarili mong announcement para sa lahat ng estudyante o sa piniling group lang.'
+    );
+  }
+
   return pickByLanguage(
     languageProfile,
     'Announcements are in the Announcements section of your dashboard.',
@@ -925,9 +926,9 @@ function isSystemEffectivenessQuestion(normalized) {
 function getSystemEffectivenessReply(languageProfile = 'english') {
   return pickByLanguage(
     languageProfile,
-    'Bee Bright is designed to support academic growth through personalized tutoring, structured learning materials, grade tracking, schedule management, and direct tutor communication. Students benefit from one-on-one attention tailored to their learning pace. You can monitor progress through dashboards and receive recommendations based on performance. Enrollment covers three programs: Toddlers Playgroup, Academic Tutorial (core subjects from pre-school to high school, including homework assistance, lesson advancement, and individualized/SPED support), and Examination Preparation for test readiness.',
-    'Ang Bee Bright ay dinisenyo upang suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, grade tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Maaari mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations batay sa performance. Saklaw ng enrollment ang tatlong programa: Toddlers Playgroup, Academic Tutorial (core subjects mula pre-school hanggang high school, kasama ang homework assistance, lesson advancement, at individualized/SPED support), at Examination Preparation para sa test readiness.',
-    'Ang Bee Bright ay dinisenyo para suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, grade tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Pwede mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations based sa performance. Saklaw ng enrollment ang tatlong program: Toddlers Playgroup, Academic Tutorial (core subjects mula pre-school hanggang high school, kasama ang homework assistance, lesson advancement, at individualized/SPED support), at Examination Preparation para sa test readiness.'
+    'Bee Bright is designed to support academic growth through personalized tutoring, structured learning materials, remarks tracking, schedule management, and direct tutor communication. Students benefit from one-on-one attention tailored to their learning pace. You can monitor progress through dashboards and receive recommendations based on performance. Enrollment covers three programs: Toddlers Playgroup, Academic Tutorial (core subjects from pre-school to high school, including homework assistance, lesson advancement, and individualized/SPED support), and Examination Preparation for test readiness.',
+    'Ang Bee Bright ay dinisenyo upang suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, remarks tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Maaari mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations batay sa performance. Saklaw ng enrollment ang tatlong programa: Toddlers Playgroup, Academic Tutorial (core subjects mula pre-school hanggang high school, kasama ang homework assistance, lesson advancement, at individualized/SPED support), at Examination Preparation para sa test readiness.',
+    'Ang Bee Bright ay dinisenyo para suportahan ang academic growth sa pamamagitan ng personalized tutoring, structured learning materials, remarks tracking, schedule management, at direktang komunikasyon sa tutor. Nakikinabang ang mga estudyante sa one-on-one attention na customized sa kanilang learning pace. Pwede mong subaybayan ang progreso sa pamamagitan ng dashboards at makatanggap ng recommendations based sa performance. Saklaw ng enrollment ang tatlong program: Toddlers Playgroup, Academic Tutorial (core subjects mula pre-school hanggang high school, kasama ang homework assistance, lesson advancement, at individualized/SPED support), at Examination Preparation para sa test readiness.'
   );
 }
 
@@ -1030,6 +1031,12 @@ function isPersonInfoQuery(normalized) {
   // own separate alternative either way.
   return /(information|info|details?|profile|background|data)\s+(of|about)\s+[a-z]/.test(normalized)
     || /who\s+is\s+[a-z]/.test(normalized)
+    // Batch 18 — Tagalog equivalent of "who is X". "sino si maria cruz" / "sino ang
+    // tutor na si joshua" never matched anything here, so a specific-name lookup
+    // question in Tagalog fell straight through getRoleAwarePersonInfoReply's gate
+    // (which already has full, working name-lookup logic further down — it just never
+    // got the chance to run) into the generic clarification/escalation fallback.
+    || /\bsino\s+(si|ang)\s+[a-z]/.test(normalized)
     || /tell me about\s+[a-z]/.test(normalized)
     || /(contact\s*(number|info)?|phone\s*(number)?|mobile\s*(number)?|cell\s*(number)?|telephone|\btel\.?\b)/.test(normalized)
     || /(what\s+is\s+(his|her|their)\s+(contact|phone|mobile|number))/.test(normalized);
@@ -1245,7 +1252,7 @@ function getLoginProcessReply(languageProfile = 'english', responsePreference = 
       languageProfile,
       [
         'Forgot Password (Step-by-Step):',
-        '1. Open the Login page (/login) or Admin Login page (/admin-login).',
+        '1. Open the Login page',
         '2. Click the "Forgot Password" option.',
         '3. Enter your account email address.',
         '4. Follow the reset instructions shown by the system.',
@@ -1254,7 +1261,7 @@ function getLoginProcessReply(languageProfile = 'english', responsePreference = 
       ].join('\n'),
       [
         'Forgot Password (Sunod-sunod na Hakbang):',
-        '1. Buksan ang Login page (/login) o Admin Login page (/admin-login).',
+        '1. Buksan ang Login page.',
         '2. I-click ang "Forgot Password" option.',
         '3. Ilagay ang email address ng account mo.',
         '4. Sundan ang reset instructions na ipinapakita ng system.',
@@ -1263,7 +1270,7 @@ function getLoginProcessReply(languageProfile = 'english', responsePreference = 
       ].join('\n'),
       [
         'Forgot Password (Step-by-Step):',
-        '1. Buksan ang Login page (/login) or Admin Login page (/admin-login).',
+        '1. Buksan ang Login page.',
         '2. I-click ang "Forgot Password" option.',
         '3. Ilagay ang email address ng account mo.',
         '4. Sundan ang reset instructions na ipinapakita ng system.',
@@ -1276,9 +1283,9 @@ function getLoginProcessReply(languageProfile = 'english', responsePreference = 
   if (responsePreference.wantsSummary) {
     return pickByLanguage(
       languageProfile,
-      'To log in, open the Login page (student/tutor) or Admin Login page, enter your credentials, complete the CAPTCHA challenge, and continue to your dashboard.',
-      'Para mag-log in, buksan ang Login page (student/tutor) o Admin Login page, ilagay ang credentials, kumpletuhin ang CAPTCHA challenge, at magpatuloy sa dashboard.',
-      'Para mag-log in, buksan ang Login page (student/tutor) o Admin Login page, ilagay ang credentials, kumpletuhin ang CAPTCHA challenge, then magpatuloy sa dashboard.'
+      'To log in, open the Login page (student/tutor) page, enter your credentials, and continue to your dashboard.',
+      'Para mag-log in, buksan ang Login page (student/tutor) page, ilagay ang credentials, at magpatuloy sa dashboard.',
+      'Para mag-log in, buksan ang Login page (student/tutor) page, ilagay ang credentials, then magpatuloy sa dashboard.'
     );
   }
 
@@ -1289,43 +1296,37 @@ function getLoginProcessReply(languageProfile = 'english', responsePreference = 
         'Login Process (Step-by-Step):',
         '1. Open the correct login page:',
         '   - Student/Tutor: /login',
-        '   - Admin/Super Admin: /admin-login',
         '2. Enter your email and password.',
-        '3. Complete the CAPTCHA challenge when prompted.',
-        '4. Submit the form to sign in.',
-        '5. If credentials are valid, you will be redirected to your dashboard.',
-        '6. If you forgot your password, use the Forgot Password option on the login page.'
+        '3. Submit the form to sign in.',
+        '4. If credentials are valid, you will be redirected to your dashboard.',
+        '5. If you forgot your password, use the Forgot Password option on the login page.'
       ].join('\n'),
       [
         'Proseso ng Pag-login (Sunod-sunod na Hakbang):',
         '1. Buksan ang tamang login page:',
         '   - Student/Tutor: /login',
-        '   - Admin/Super Admin: /admin-login',
         '2. Ilagay ang iyong email at password.',
-        '3. Kumpletuhin ang CAPTCHA challenge kapag lumabas.',
-        '4. I-submit ang form para makapag-sign in.',
-        '5. Kapag tama ang credentials, mare-redirect ka sa dashboard.',
-        '6. Kung nakalimutan ang password, gamitin ang Forgot Password option sa login page.'
+        '3. I-submit ang form para makapag-sign in.',
+        '4. Kapag tama ang credentials, mare-redirect ka sa dashboard.',
+        '5. Kung nakalimutan ang password, gamitin ang Forgot Password option sa login page.'
       ].join('\n'),
       [
         'Login Process (Step-by-Step):',
         '1. Buksan ang tamang login page:',
         '   - Student/Tutor: /login',
-        '   - Admin/Super Admin: /admin-login',
         '2. Ilagay ang email at password mo.',
-        '3. Kumpletuhin ang CAPTCHA challenge kapag lumabas.',
-        '4. I-submit ang form para makapag-sign in.',
-        '5. Kapag tama ang credentials, mare-redirect ka sa dashboard.',
-        '6. Kung nakalimutan mo ang password, gamitin ang Forgot Password option sa login page.'
+        '3. I-submit ang form para makapag-sign in.',
+        '4. Kapag tama ang credentials, mare-redirect ka sa dashboard.',
+        '5. Kung nakalimutan mo ang password, gamitin ang Forgot Password option sa login page.'
       ].join('\n')
     );
   }
 
   return pickByLanguage(
     languageProfile,
-    'To log in, open the Login page for students/tutors or the Admin Login page for administrators, enter your email and password, complete the CAPTCHA challenge, then submit to access your dashboard.',
-    'Para mag-log in, buksan ang Login page para sa students/tutors o Admin Login page para sa administrators, ilagay ang email at password, kumpletuhin ang CAPTCHA challenge, at i-submit para makapasok sa dashboard.',
-    'Para mag-log in, buksan ang Login page para sa students/tutors o Admin Login page para sa administrators, ilagay ang email at password, kumpletuhin ang CAPTCHA challenge, at i-submit para makapasok sa dashboard.'
+    'To log in, open the Login page for students/tutors, enter your email and password, complete the CAPTCHA challenge, then submit to access your dashboard.',
+    'Para mag-log in, buksan ang Login page para sa students/tutors, ilagay ang email at password, kumpletuhin ang CAPTCHA challenge, at i-submit para makapasok sa dashboard.',
+    'Para mag-log in, buksan ang Login page para sa students/tutors, ilagay ang email at password, kumpletuhin ang CAPTCHA challenge, at i-submit para makapasok sa dashboard.'
   );
 }
 
@@ -1951,6 +1952,66 @@ function getProgramsReply(normalized, languageProfile = 'english', responsePrefe
   );
 }
 
+// Batch 18 — detects admin "how do I use the ___ tab" questions. Requires either the
+// literal word "tab" alongside the tab name (User/Payments/Schedule/Remarks/Requests),
+// or — since live QA testing showed Remarks/Requests are often asked about without the
+// word "tab" at all ("pwede mo ba akong turoan sa remarks") — a "how do I use this"-style
+// framing (turoan/tulungan/paano/teach me/help me) alongside the bare tab name.
+function isAdminTabHelpQuestion(normalized) {
+  const mentionsTabbedTopic = /\btab\b/.test(normalized)
+    && /\b(user|payments?|schedule|remarks?|requests?)\b/.test(normalized);
+  const asksHowToUse = /(paano|turoan|tulungan|tulongan|teach me|help me (with|understand)|how (do|can) i use|ano (ang )?gagawin)/.test(normalized);
+  const mentionsBareRemarksOrRequests = /\b(remarks?|requests?)\b/.test(normalized);
+
+  return mentionsTabbedTopic || (asksHowToUse && mentionsBareRemarksOrRequests);
+}
+
+function getAdminTabHelpTopic(normalized) {
+  if (/\buser\b/.test(normalized)) return 'user';
+  if (/\bpayments?\b/.test(normalized)) return 'payments';
+  if (/\bschedule\b/.test(normalized)) return 'schedule';
+  if (/\brequests?\b/.test(normalized)) return 'requests';
+  if (/\bremarks?\b/.test(normalized)) return 'remarks';
+  return null;
+}
+
+function getAdminTabHelpReply(normalized, languageProfile = 'english') {
+  const topic = getAdminTabHelpTopic(normalized);
+  if (!topic) {
+    return null;
+  }
+
+  const content = {
+    user: {
+      en: 'In the User tab, you can add new users, view parent profiles, and archive user accounts. Archiving an account requires you to provide a reason/explanation before it can be confirmed.',
+      fil: 'Sa User tab, pwede kang magdagdag ng bagong user, tingnan ang mga parent profile, at i-archive ang user accounts. Kailangan munang maglagay ng reason/explanation bago makumpirma ang pag-archive ng account.'
+    },
+    payments: {
+      en: 'The Payments tab is where you verify a parent’s payments, including their remaining 50% balance for Down Payment enrollments. It separates pending and submitted payments, and has a "Paid Onsite" button for payments made directly at the center.',
+      fil: 'Sa Payments tab, dito mo ive-verify ang mga bayad ng parent, kasama ang natitirang 50% balance para sa Down Payment enrollments. Nahihiwalay dito ang pending at submitted payments, at may "Paid Onsite" button para sa mga bayad na ginawa mismo sa center.'
+    },
+    schedule: {
+      en: 'The Schedule tab is where you manage class schedules for both the 1-on-1 and Toddlers Playgroup programs — you can set a schedule, reschedule a class, and assign a substitute teacher when needed.',
+      fil: 'Sa Schedule tab, dito mo mina-manage ang class schedules para sa 1-on-1 at Toddlers Playgroup programs — pwede kang mag-set ng schedule, mag-reschedule ng klase, at mag-assign ng substitute teacher kung kailangan.'
+    },
+    remarks: {
+      en: 'The Remarks tab shows remarks submitted by tutors about their students. As admin, you review each remark and approve it before it is passed along.',
+      fil: 'Sa Remarks tab, makikita ang mga remarks na isinumite ng mga tutor tungkol sa kanilang mga estudyante. Bilang admin, ire-review mo ang bawat remark at aaprubahan bago ito maipasa.'
+    },
+    requests: {
+      en: 'The Requests tab shows concern requests submitted by parents and tutors — this is where you review and respond to the issues they raise.',
+      fil: 'Sa Requests tab, makikita ang mga concern requests na isinumite ng mga parent at tutor — dito mo ire-review at sasagutin ang mga isyung iniraise nila.'
+    }
+  };
+
+  const entry = content[topic];
+  if (!entry) {
+    return null;
+  }
+
+  return pickByLanguage(languageProfile, entry.en, entry.fil, entry.fil);
+}
+
 function getDirectSystemReply(message, classifierResult, groundedContext, user, languageProfile = 'english') {
   const normalized = normalizeMessage(message);
   const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
@@ -1975,7 +2036,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
 
   if (!normalized) {
     if (user?.role === 'student') {
-      return 'What would you like to know about your enrollment, schedule, grades, or learning materials?';
+      return 'What would you like to know about your enrollment, schedule, remarks, or learning materials?';
     } else if (user?.role === 'tutor') {
       return 'What would you like to know about your sessions, materials, or students?';
     } else if (user?.role === 'admin' || user?.role === 'super_admin') {
@@ -2018,7 +2079,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
         [
           'I can help you navigate Bee Bright features. You can ask questions like:',
           '1. How do I log in to my dashboard?',
-          '2. Where can I see my grades or academic progress?',
+          '2. Where can I see my remarks or academic progress?',
           '3. Where can I check my schedule?',
           '4. Where can I find my lessons or materials?',
           '5. Where can I view my attendance?',
@@ -2029,7 +2090,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
         [
           'Matutulungan kitang i-navigate ang Bee Bright features. Pwede kang magtanong ng:',
           '1. Paano ako mag-login sa dashboard?',
-          '2. Saan ko makikita ang grades o academic progress?',
+          '2. Saan ko makikita ang remarks o academic progress?',
           '3. Saan ko makikita ang schedule?',
           '4. Saan ko makikita ang lessons o materials?',
           '5. Saan ko makikita ang attendance?',
@@ -2040,7 +2101,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
         [
           'Matutulungan kitang i-navigate ang Bee Bright features. Pwede kang magtanong ng:',
           '1. Paano ako mag-login sa dashboard?',
-          '2. Saan ko makikita ang grades or academic progress?',
+          '2. Saan ko makikita ang remarks or academic progress?',
           '3. Saan ko makikita ang schedule?',
           '4. Saan ko makikita ang lessons or materials?',
           '5. Saan ko makikita ang attendance?',
@@ -2056,7 +2117,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
           'I can help you navigate Bee Bright tutor features. You can ask questions like:',
           '1. Where can I see my class schedule?',
           '2. How do I upload lessons or learning materials?',
-          '3. Where can I check student progress or grades?',
+          '3. Where can I check student progress or remarks?',
           '4. Where can I check attendance records?',
           '5. How do I post or view announcements?',
           '6. Where can I update my profile settings?',
@@ -2066,7 +2127,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
           'Matutulungan kitang i-navigate ang Bee Bright tutor features. Pwede kang magtanong ng:',
           '1. Saan ko makikita ang class schedule ko?',
           '2. Paano ako mag-upload ng lessons o learning materials?',
-          '3. Saan ko makikita ang student progress o grades?',
+          '3. Saan ko makikita ang student progress o remarks?',
           '4. Saan ko makikita ang attendance records?',
           '5. Paano ako mag-post o tumingin ng announcements?',
           '6. Saan ko ia-update ang profile settings ko?',
@@ -2076,7 +2137,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
           'Matutulungan kitang i-navigate ang Bee Bright tutor features. Pwede kang magtanong ng:',
           '1. Saan ko makikita ang class schedule ko?',
           '2. Paano ako mag-upload ng lessons or learning materials?',
-          '3. Saan ko makikita ang student progress or grades?',
+          '3. Saan ko makikita ang student progress or remarks?',
           '4. Saan ko makikita ang attendance records?',
           '5. Paano ako mag-post or tumingin ng announcements?',
           '6. Saan ko ia-update ang profile settings ko?',
@@ -2092,7 +2153,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
           '2. Where can I review payment records?',
           '3. Where can I manage schedules?',
           '4. Where can I check announcements and notifications?',
-          '5. Where can I monitor student grades or progress reports?',
+          '5. Where can I monitor student remarks or progress reports?',
           '6. Where can I manage profile settings?',
           '7. How do I logout securely?'
         ].join('\n'),
@@ -2102,7 +2163,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
           '2. Saan ko marereview ang payment records?',
           '3. Saan ko mamanage ang schedules?',
           '4. Saan ko makikita ang announcements at notifications?',
-          '5. Saan ko mamomonitor ang student grades o progress reports?',
+          '5. Saan ko mamomonitor ang student remarks o progress reports?',
           '6. Saan ko mamanage ang profile settings?',
           '7. Paano ako mag-logout nang secure?'
         ].join('\n'),
@@ -2112,7 +2173,7 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
           '2. Saan ko marereview ang payment records?',
           '3. Saan ko mamanage ang schedules?',
           '4. Saan ko makikita ang announcements at notifications?',
-          '5. Saan ko mamomonitor ang student grades or progress reports?',
+          '5. Saan ko mamomonitor ang student remarks or progress reports?',
           '6. Saan ko mamanage ang profile settings?',
           '7. Paano ako mag-logout nang secure?'
         ].join('\n')
@@ -2251,6 +2312,22 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
     return getEnrollmentProcessReply(effectiveLanguageProfile, responsePreference);
   }
 
+  // Batch 18 — admin "how do I use the ___ tab" questions (User/Payments/Schedule/
+  // Remarks/Requests) were being misclassified by the local 9-intent classifier into
+  // 'payments'/'schedule' (it has no trained category for "tab help"), which let
+  // groundedContext's DB-stat fallbackReply below answer with an unrelated number
+  // ("There are N submitted payments waiting for review...") instead of explaining
+  // what the tab is for. Remarks/Requests (no DB-stat fallback exists for them) instead
+  // fell all the way through to the generic clarification/escalation reply. Must run
+  // before the groundedContext check right below, which is what wins for User/Payments/
+  // Schedule otherwise.
+  if (['admin', 'super_admin'].includes(String(user?.role || '').toLowerCase()) && isAdminTabHelpQuestion(normalized)) {
+    const tabHelpReply = getAdminTabHelpReply(normalized, effectiveLanguageProfile);
+    if (tabHelpReply) {
+      return tabHelpReply;
+    }
+  }
+
   if (groundedContext?.fallbackReply) {
     return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
   }
@@ -2317,11 +2394,17 @@ function getDirectSystemReply(message, classifierResult, groundedContext, user, 
     return localizeKnownReply('Bee Bright is located in Room A, 2nd Floor, Teo-Tinay Building, Tapuac, Dagupan City, Pangasinan 2400, Philippines.', effectiveLanguageProfile);
   }
   if (inferredTopic === 'grades') {
+    // Batch (named-student-access-fix) — this stale branch used to say "go to the
+    // Progress or Grades section to see your records", contradicting every other
+    // grades-handler in this file (grades were fully retired 2026-09-30 in favor of
+    // Student Remarks). Reachable via a bare message like "what is a grade?" slipping
+    // past isStudentGradesQuestion's narrower gate. Delegate to the one correct,
+    // already-maintained answer instead of a second copy of the wording.
     return pickByLanguage(
       effectiveLanguageProfile,
-      'You can view your grades in the Student Dashboard. Open your dashboard, then go to the Progress or Grades section to see your records.',
-      'Makikita mo ang grades sa Student Dashboard. Buksan ang dashboard mo, pagkatapos pumunta sa Progress o Grades section para makita ang records mo.',
-      'Makikita mo ang grades sa Student Dashboard. Buksan ang dashboard mo, tapos pumunta sa Progress o Grades section para makita ang records mo.'
+      'Bee Bright does not use numeric grades — check the Progress tab on the Student Dashboard for remarks and updates from your tutor.',
+      'Hindi gumagamit ng numeric grades ang Bee Bright — tingnan ang Progress tab sa Student Dashboard para sa mga remarks at update mula sa tutor.',
+      'Hindi gumagamit ng numeric grades ang Bee Bright — check mo na lang ang Progress tab sa Student Dashboard para sa remarks at updates mula sa tutor mo.'
     );
   }
   if (inferredTopic === 'schedule') {
@@ -3072,6 +3155,19 @@ function formatUserWithContact(u) {
   return `${base} - Contact: ${phone}`;
 }
 
+// Batch 18 — dedicated formatter for a specific-student lookup: name, Student ID, and
+// enrolled programs (not grade level/email, which formatUserShort shows for the generic
+// admin/tutor person-lookup case).
+function formatStudentDetails(u) {
+  const name = u?.fullName || [u?.firstName, u?.lastName].filter(Boolean).join(' ') || u?.email || 'Unknown';
+  const studentId = u?.studentId ? ` - Student ID: ${u.studentId}` : ' - Student ID: N/A';
+  const programNames = Array.isArray(u?.enrolledSubjects)
+    ? u.enrolledSubjects.map((s) => s?.name).filter(Boolean)
+    : [];
+  const programs = ` - Enrolled Programs: ${programNames.length ? programNames.join(', ') : 'None'}`;
+  return `${name}${studentId}${programs}`;
+}
+
 function isRoleBasedContactDetailsQuery(normalized = '', message = '') {
   if (!normalized) {
     return false;
@@ -3750,18 +3846,31 @@ async function getRoleAwarePersonInfoReply(user, message, languageProfile = 'eng
       query.$or = buildUserNameOrEmailMatchers(resolvedName);
     }
 
-    const rows = await User.find(query)
-      .select('firstName lastName fullName email gradeLevel role phone')
+    // Batch 18 — a specific-student lookup ("sino si maria cruz") should surface the
+    // student's name, Student ID, and enrolled programs per the tester's explicit note
+    // ("dapat ... mag pa-pop up yung pangalan nito, student id at enrolled programs"),
+    // not grade level/email. Only fetch the extra fields for a named student lookup —
+    // the list-of-students case below is unaffected.
+    const isNamedStudentLookup = targetRole === 'student' && !!resolvedName;
+    let rowsQuery = User.find(query)
+      .select(isNamedStudentLookup
+        ? 'firstName lastName fullName email gradeLevel role phone studentId enrolledSubjects'
+        : 'firstName lastName fullName email gradeLevel role phone')
       .sort({ lastName: 1, firstName: 1 })
-      .limit(resolvedName ? 1 : 8)
-      .lean();
+      .limit(resolvedName ? 1 : 8);
+    if (isNamedStudentLookup) {
+      rowsQuery = rowsQuery.populate({ path: 'enrolledSubjects', select: 'name' });
+    }
+    const rows = await rowsQuery.lean();
 
     if (!rows.length) {
       return localizeKnownReply(SYSTEM_UNAVAILABLE_REPLY, languageProfile);
     }
 
     if (resolvedName && rows[0]) {
-      const line = asksContact ? formatUserWithContact(rows[0]) : formatUserShort(rows[0]);
+      const line = asksContact
+        ? formatUserWithContact(rows[0])
+        : (isNamedStudentLookup ? formatStudentDetails(rows[0]) : formatUserShort(rows[0]));
       return pickByLanguage(
         languageProfile,
         asksContact ? `Here is the contact information: ${line}` : `Here are the details: ${line}`,
@@ -5457,6 +5566,13 @@ function detectGroundedTopic(user, message) {
     // Task 25a — "may SPED tutorial / homework assistance / lesson advancement ba kayo?"
     // is a program-scope question, not a request about this child's own schedule/grades.
     if (isAcademicSubFeatureQuestion(normalized)) return null;
+    // Checked before isParentChildProgressQuestion: attendance ("ilan absent", "how many
+    // absences") used to have no dedicated topic for parents at all, so it fell through
+    // to a generic "check your dashboard" reply instead of the child's real attendance
+    // count — the same real-data gap payment/schedule questions didn't have.
+    if (/\battendance\b|\babsen(t|ces?|teeism)?\b|\bpresent\b.*(class|today|session|niya|siya)|\blumiban\b|\bdumalo\b|\bdalo\b|\bpumasok\b.*(ba|klase)/.test(normalized)) {
+      return 'attendance';
+    }
     if (isParentChildProgressQuestion(normalized)) return 'grades';
 
     // "klase" added (Batch 5) — the Filipino word for "class", already used elsewhere in
@@ -5472,7 +5588,7 @@ function detectGroundedTopic(user, message) {
       // "bayarin" added (Batch 5) — normalizeTypos() silently fuzzy-corrects "nabayaran"
       // (already paid) to "bayarin" (a bill to be paid, near-opposite meaning) before this
       // regex ever runs, same root cause as the "natitira"->"natira" bug fixed in Batch 3.
-      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|bayarin|natitira|natira\b|matitira|kulang|babayaran|down ?payment.*(status|left|remaining))/.test(normalized)) {
+      && /(payment status|my payment|our payment|balance|amount due|amount paid|reference number|receipt|proof of payment|verif|bayad na ba|nabayaran|bayarin|natitira|natira\b|matitira|kulang|babayaran|fully paid|down ?payment.*(status|left|remaining))/.test(normalized)) {
       return 'payments';
     }
     if (!isEnrollmentStepsQuestion(normalized)
@@ -6093,13 +6209,33 @@ function childDisplayName(enrollment) {
 function resolveParentChild(message, enrollments) {
   const normalized = normalizeMessage(message);
   const groups = groupEnrollmentsByChild(enrollments);
-  const named = groups.filter((records) => {
+
+  const nameHits = (records) => {
     const snap = records[0].studentSnapshot || {};
     const fn = String(snap.firstName || '').toLowerCase().trim();
     const ln = String(snap.lastName || '').toLowerCase().trim();
-    if (fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized)) return true;
-    if (ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized)) return true;
-    return false;
+    return {
+      fn: !!(fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized)),
+      ln: !!(ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized)),
+    };
+  };
+
+  // Prefer an exact FULL NAME match (both first AND last present) first. Siblings with a
+  // parent (or any 2+ of a parent's children) sharing a last name would otherwise all
+  // match the loose "first OR last" pass below purely off the shared surname, making a
+  // perfectly unambiguous full-name reference ("Alex Soriano" when all 6 of this
+  // parent's children are also surnamed Soriano) get wrongly reported as ambiguous.
+  const fullNameMatches = groups.filter((records) => {
+    const hits = nameHits(records);
+    return hits.fn && hits.ln;
+  });
+  if (fullNameMatches.length === 1) {
+    return { matched: fullNameMatches[0][0] };
+  }
+
+  const named = groups.filter((records) => {
+    const hits = nameHits(records);
+    return hits.fn || hits.ln;
   });
   // Groups arrive sorted createdAt desc (enrollments come from getParentChildEnrollments,
   // which sorts that way), so each group's [0] is that child's most recent enrollment
@@ -6587,11 +6723,11 @@ async function buildParentScheduleContext(parentId, message, history = []) {
 }
 
 // Grades were fully retired in favor of Student Remarks (2026-09-30) — the Grade model
-// and its collection no longer exist. Kept only so the still-trained
-// parent_progress/'grounded_grades' intent has somewhere to land; a parent asking about
-// their child's enrollment/name is still resolved (that part is unrelated to grades),
-// but the reply now always gives the honest current answer instead of querying a model
-// that's gone.
+// and its collection no longer exist. Kept so the still-trained parent_progress/
+// 'grounded_grades' intent has somewhere to land, but now surfaces the real thing that
+// replaced grades — the tutor's published Remark entries — instead of just redirecting
+// to a tab with no actual content (the same real-data gap payment/schedule questions
+// didn't have: this used to always say "check the Progress tab", never the data itself).
 async function buildParentGradesContext(parentId, message, history = []) {
   const enrollments = await getParentChildEnrollments(parentId);
   if (!enrollments.length) {
@@ -6604,12 +6740,109 @@ async function buildParentGradesContext(parentId, message, history = []) {
   const { matched } = resolveParentChildWithHistory(message, enrollments, history);
   if (!matched) {
     // Batch 8 live-testing fix: same grouped-list fix as buildParentScheduleContext above.
-    return parentDisambiguationContext(groupEnrollmentsByChild(enrollments).map((records) => records[0]), 'grades');
+    return parentDisambiguationContext(groupEnrollmentsByChild(enrollments).map((records) => records[0]), 'remarks');
   }
 
+  if (!matched.student) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nBee Bright does not use numeric grades. No remarks yet since this child has no linked class account.`,
+      fallbackReply: `Bee Bright does not use numeric grades for ${childDisplayName(matched)}. No remarks have been written yet — tutors write remarks once classes begin.`,
+    };
+  }
+
+  const remarks = await Remark.find({ student: matched.student, status: 'published', isCurrentVersion: true })
+    .sort({ publishedAt: -1 })
+    .limit(3)
+    .lean();
+
+  if (!remarks.length) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nBee Bright does not use numeric grades. No published remarks yet for this child.`,
+      fallbackReply: `Bee Bright does not use numeric grades for ${childDisplayName(matched)} — no remarks have been published by their tutor yet. Check the Student Remarks section once one is posted.`,
+    };
+  }
+
+  const latest = remarks[0];
+  const latestDateLabel = new Date(latest.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const latestLines = [
+    latest.remarkBullets?.length ? `Remarks: ${latest.remarkBullets.join('; ')}` : null,
+    latest.nextFocus ? `Next focus: ${latest.nextFocus}` : null,
+    latest.parentSupportSuggestion ? `Suggestion for parent: ${latest.parentSupportSuggestion}` : null,
+  ].filter(Boolean);
+
   return {
-    contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nBee Bright does not use numeric grades; check the Progress tab for remarks instead.`,
-    fallbackReply: `Bee Bright does not use numeric grades for ${childDisplayName(matched)} — check the Progress tab for remarks and updates from their tutor.`,
+    contextText: [
+      'Role: parent',
+      `Child: ${childDisplayName(matched)}`,
+      "Bee Bright does not use numeric grades — these are the tutor's published session remarks.",
+      `Published remarks on record: ${remarks.length}`,
+      `Most recent remark (${latestDateLabel}):`,
+      ...latestLines,
+    ].join('\n'),
+    fallbackReply: `Bee Bright does not use numeric grades for ${childDisplayName(matched)}, but here is their tutor's latest published remark (${latestDateLabel}): ${latest.remarkBullets?.length ? latest.remarkBullets.join('; ') : 'no written remarks text on this entry'}${latest.nextFocus ? ` Next focus: ${latest.nextFocus}` : ''}`,
+  };
+}
+
+// Attendance had no dedicated grounding path for parents at all (unlike payments/
+// schedule) — a question like "ilan absent ni alex soriano" fell through to a generic
+// "check your dashboard" instruction instead of the real present/absent counts, even for
+// the parent's own verified child. attendanceStatus lives per-session on Schedule
+// (there is no separate Attendance model), same source the tutor's own dashboard reads.
+async function buildParentAttendanceContext(parentId, message, history = []) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) {
+    return {
+      contextText: 'Role: parent\nNo enrollment records are linked to this parent account.',
+      fallbackReply: 'I could not find any enrolled child linked to your account yet, so there is no attendance record to show.',
+    };
+  }
+
+  const { matched } = resolveParentChildWithHistory(message, enrollments, history);
+  if (!matched) {
+    return parentDisambiguationContext(groupEnrollmentsByChild(enrollments).map((records) => records[0]), 'attendance');
+  }
+
+  if (!matched.student) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nNo class schedule assigned yet, so there is no attendance record.`,
+      fallbackReply: `${childDisplayName(matched)} has no classes scheduled yet, so there is no attendance record yet.`,
+    };
+  }
+
+  const sessions = await Schedule.find({
+    $or: [{ student: matched.student }, { students: matched.student }],
+    date: { $lte: new Date() },
+  })
+    .sort({ date: -1 })
+    .limit(200)
+    .lean();
+
+  if (!sessions.length) {
+    return {
+      contextText: `Role: parent\nChild: ${childDisplayName(matched)}\nNo past sessions recorded yet, so there is no attendance history.`,
+      fallbackReply: `${childDisplayName(matched)} has no past sessions yet, so there is no attendance history to show.`,
+    };
+  }
+
+  const present = sessions.filter((s) => s.attendanceStatus === 'present').length;
+  const absent = sessions.filter((s) => s.attendanceStatus === 'absent').length;
+  const unmarked = sessions.filter((s) => s.attendanceStatus === 'unmarked').length;
+  const recentAbsenceDates = sessions
+    .filter((s) => s.attendanceStatus === 'absent')
+    .slice(0, 5)
+    .map((s) => new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
+
+  return {
+    contextText: [
+      'Role: parent',
+      `Child: ${childDisplayName(matched)}`,
+      `Total past sessions: ${sessions.length}`,
+      `Present: ${present}`,
+      `Absent: ${absent}`,
+      `Unmarked (tutor has not recorded attendance for this session yet): ${unmarked}`,
+      recentAbsenceDates.length ? `Most recent absence dates: ${recentAbsenceDates.join(', ')}` : null,
+    ].filter(Boolean).join('\n'),
+    fallbackReply: `${childDisplayName(matched)} has been absent ${absent} time${absent === 1 ? '' : 's'} out of ${sessions.length} past session${sessions.length === 1 ? '' : 's'} (${present} present${unmarked ? `, ${unmarked} not yet marked by the tutor` : ''}).`,
   };
 }
 
@@ -6715,6 +6948,8 @@ async function buildParentTutorContactContext(parentId, message, history = []) {
 const PARENT_DISAMBIGUATION_TOPIC_LABELS = {
   schedule: 'schedule',
   grades: 'grades',
+  remarks: 'grades',
+  attendance: 'attendance',
   "tutor's contact info": 'tutor_contact',
   "program renewal options": 'renew_program',
 };
@@ -6736,11 +6971,39 @@ function getPendingParentDisambiguationTopic(history = []) {
   return PARENT_DISAMBIGUATION_TOPIC_LABELS[label] || null;
 }
 
+// A bare child-name follow-up ("kay jay soriano?") carries no topic keyword of its own,
+// so detectGroundedTopic alone returns null for it — even though it's plainly a
+// continuation of whatever the parent was just asking about ("kay jay kaya meron pa bang
+// babayaran?" then "kay jay soriano?" a turn later). getPendingParentDisambiguationTopic
+// only covers the narrower case where the assistant's last reply was literally a "whose
+// X would you like" disambiguation prompt; this covers the more general case where it
+// wasn't (the prior turn may have answered directly, or declined for an unrelated
+// reason). Only engages when the CURRENT message plainly, unambiguously names ONE of the
+// parent's own real children (resolveParentChild itself refuses to guess when 0 or 2+
+// children match), so this never invents a topic for an unrelated bare message.
+async function getCarriedOverParentTopic(parentId, message, history = []) {
+  const enrollments = await getParentChildEnrollments(parentId);
+  if (!enrollments.length) return null;
+  const { matched } = resolveParentChild(message, enrollments);
+  if (!matched) return null;
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const item of items) {
+    if (!item || item.role !== 'user' || typeof item.content !== 'string') continue;
+    const priorTopic = detectGroundedTopic({ role: 'parent' }, item.content);
+    if (priorTopic) return priorTopic;
+  }
+  return null;
+}
+
 async function getGroundedChatContext(user, message, history = []) {
   let topic = detectGroundedTopic(user, message);
 
   if (!topic && user?.role === 'parent') {
     topic = getPendingParentDisambiguationTopic(history);
+  }
+
+  if (!topic && user?.role === 'parent') {
+    topic = await getCarriedOverParentTopic(user._id, message, history);
   }
 
   if (!topic) {
@@ -6761,6 +7024,7 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
     if (topic === 'payments') return buildParentPaymentContext(user._id, message, history);
     if (topic === 'schedule') return buildParentScheduleContext(user._id, message, history);
     if (topic === 'grades') return buildParentGradesContext(user._id, message, history);
+    if (topic === 'attendance') return buildParentAttendanceContext(user._id, message, history);
     if (topic === 'tutor_contact') return buildParentTutorContactContext(user._id, message, history);
     if (topic === 'renew_program') return buildParentRenewProgramContext(user._id, message, history);
   }
@@ -6825,6 +7089,73 @@ function shouldUseDirectSystemReply(message, classifierResult, groundedContext) 
   return isBeeBrightTopic(message, groundedContext);
 }
 
+// A question about the system's own internals (.env, API keys, database schema, source
+// code, server config, tech stack, ...) must never get a reply that confirms the bot
+// even recognizes the term, let alone categorizes it ("that's a backend/config file") —
+// that confirmation is itself the information a probing user is looking for. The fix is
+// to treat it exactly like any other off-topic question (e.g. "what's the capital of
+// France"): the same flat, generic redirect, with no acknowledgment of what was asked.
+// Deliberately NOT left to the system prompt alone — an LLM's own free-form refusal
+// wording is exactly what was leaking the categorization in the first place, and that
+// wording varies by phrasing/run, which is unacceptable for a security-relevant
+// boundary. This is a single, role-independent, pre-Gemini check so it can't be missed
+// in one entry point while fixed in another: called first in both chat() and
+// ollamaChat(), before even the anonymous-only guards, so it applies identically to
+// public, parent, tutor, and admin sessions alike.
+const TECHNICAL_SCOPE_PATTERNS = [
+  /\.env\b/i,
+  /\benvironment variables?\b/i,
+  /\bapi[\s-]?keys?\b/i,
+  /\bdatabase(s)?\b/i,
+  /\bdb schema\b/i,
+  /\bback-?end\b/i,
+  /\bsource code\b/i,
+  /\brepo(sitory)?\b/i,
+  /\bgithub\b/i,
+  /\bserver config(uration)?\b/i,
+  /\btech stack\b/i,
+  /\bframework\b/i,
+  /\bnode\.?js\b/i,
+  /\bexpress\.js\b/i,
+  /\bmongo(db)?\b/i,
+  /\bsql\b/i,
+  /\bjwt\b/i,
+  /\bsecret key\b/i,
+  /\bencryption key\b/i,
+  /\bserver architecture\b/i,
+  /\bhow (is|was) (this|the) system (built|coded|developed|programmed)\b/i,
+  /\bwhat (framework|language|stack|database) (do|does) (you|this|bee bright) use\b/i,
+  /\bshow me the code\b/i,
+  /\bsource files?\b/i,
+  /\bconfig(uration)? files?\b/i,
+  /\blocalhost\b/i,
+];
+
+function isTechnicalScopeQuestion(message) {
+  const normalized = normalizeMessage(message);
+  if (!normalized) return false;
+  return TECHNICAL_SCOPE_PATTERNS.some((rx) => rx.test(normalized));
+}
+
+function getGenericOffTopicReply(languageProfile = 'english') {
+  return pickByLanguage(
+    languageProfile,
+    "I can only help with Bee Bright topics — things like enrollment, programs, pricing, schedules, payments, remarks, attendance, and how to use the dashboard. Is there something along those lines I can help you with?",
+    'Makakatulong lang ako sa mga tanong tungkol sa Bee Bright — tulad ng enrollment, mga programa, presyo, schedule, bayad, remarks, attendance, at paggamit ng dashboard. May tanong ka ba na ganito?',
+    'Makakatulong lang ako sa Bee Bright topics — tulad ng enrollment, programs, pricing, schedule, payments, remarks, attendance, at paggamit ng dashboard. May tanong ka ba along those lines?'
+  );
+}
+
+async function handleTechnicalScopeGuard(req, message) {
+  if (!isTechnicalScopeQuestion(message)) {
+    return null;
+  }
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+  const reply = getGenericOffTopicReply(languageProfile);
+  await logAiInteraction({ req, message, reply, groundingPath: 'technical-scope-redirect', language: languageProfile });
+  return reply;
+}
+
 /**
  * Guardrails for the anonymous (not-logged-in) chat surface (Task 9). Runs first, only
  * when there is no authenticated user. Two short-circuits:
@@ -6870,6 +7201,264 @@ async function handleAnonymousChatGuards(req, message) {
     const reply = getLoginPromptReply(languageProfile);
     await logAiInteraction({ req, message, reply, groundingPath: 'public-login-required', language: languageProfile });
     return reply;
+  }
+
+  // Absolute, belt-and-suspenders topic gate — deliberately separate from and in
+  // addition to the named-student guard below. That guard depends on correctly
+  // detecting a name reference, which is a cat-and-mouse problem (3 bypasses already
+  // found this way: the original bug, si/kay/ni, "I mean X"). This gate does not depend
+  // on name detection at all: for a public user, ANY message whose topic is schedule/
+  // remarks/attendance/grades unconditionally gets the login-required reply — even a
+  // fully generic question with no name and no "my child" framing ("paano makita ang
+  // remarks"), and even one an existing vetted FAQ could otherwise answer (e.g. the
+  // attendance-policy FAQ). A deliberate choice, confirmed explicitly: these 4 topics
+  // are account-gated for a public user, full stop, not worth a precision/exceptions
+  // game.
+  if (isRestrictedPublicTopicQuestion(message)) {
+    const reply = getLoginPromptReply(languageProfile);
+    await logAiInteraction({ req, message, reply, groundingPath: 'public-login-required', language: languageProfile });
+    return reply;
+  }
+
+  return null;
+}
+
+const RESTRICTED_PUBLIC_TOPIC_PATTERNS = [
+  /\b(schedule|iskedyul|calendar|time\s*slot)\b/i,
+  /\bremarks?\b/i,
+  /\b(attendance|pagdalo|dalo)\b/i,
+  /\b(grades?|grado|marka|report\s*card|gpa)\b/i,
+];
+
+function isRestrictedPublicTopicQuestion(message) {
+  const normalized = normalizeMessage(message);
+  if (!normalized) {
+    return false;
+  }
+  return RESTRICTED_PUBLIC_TOPIC_PATTERNS.some((rx) => rx.test(normalized));
+}
+
+// ── Named-student access guard ──────────────────────────────────────────────
+// A relationship-cued name reference ("my child X", "anak ko X") must never be enough
+// on its own to make the bot engage with a specific student's data — confirmed live
+// that an anonymous user typing "can you assist me with my child alez soriano" got a
+// friendly, confident confirmation from Gemini (which has no database-verification
+// step of its own), for a name that was actually a one-letter typo of a REAL child.
+// This is a hard, code-level boundary (like handleChildSafetyScreen/handleExplicitHandoff
+// below), run BEFORE applyConversationContext/grounding/Gemini are ever reached — never
+// an LLM-judgment call, matching how every other access-sensitive decision in this file
+// is DB-verified rather than left to the model.
+//
+// Topic/filler words that mean no real name was actually given ("my child's schedule",
+// "my son is in grade 5") — isAccountScopedQuestion (publicChatGuard.js) already owns
+// the "no name, just a topic" case; this set also doubles as a conservative stoplist so
+// an all-filler capture (e.g. "in grade") is never mistaken for a name. Biased toward
+// NOT flagging borderline text — a missed name reference repeats the pre-existing gap
+// this guard is closing, but a false positive would newly block a legitimate question.
+const NON_NAME_WORDS = new Set([
+  'schedule', 'grades', 'grade', 'remarks', 'remark', 'attendance', 'payment', 'payments',
+  'enrollment', 'tutor', 'progress', 'records', 'record', 'class', 'session', 'balance',
+  'status', 'account', 'dashboard', 'profile', 'doing', 'ok', 'okay', 'fine', 'well',
+  'good', 'great', 'bad', 'sick', 'today', 'now', 'still', 'really', 'very', 'so',
+  'going', 'is', 'in', 'on', 'at', 'the', 'a', 'an', 'to', 'of', 'for', 'with', 'do',
+  'does', 'did', 'has', 'have', 'had', 'will', 'can', 'about', 'that', 'this', 'my',
+  'our', 'po', 'opo', 'na', 'ba', 'ang', 'ng', 'sa', 'ko', 'mo', 'niya', 'namin', 'natin',
+  'nila', 'siya', 'ito', 'iyan', 'iyon', 'lang', 'din', 'rin', 'pala', 'kasi', 'kung',
+  'anak',
+  'dahil', 'kaya', 'with', 'his', 'her', 'him', 'their', 'and', 'what', 'who', 'when',
+  'where', 'why', 'how', 'if',
+  // "kay" is also a Filipino exclamative intensifier before an adjective ("kay ganda!"
+  // = "how beautiful!"), not only the dative name-marker ("kay Alex" = "to/for Alex").
+  // Without these, "kay ganda ng bee bright" would misread "ganda" as a name.
+  'ganda', 'mahal', 'sarap', 'lungkot', 'saya', 'pangit', 'mura', 'init', 'lamig',
+  'tagal', 'bilis', 'lakas', 'layo', 'lapit',
+  // Role words, not a specific person's name ("si tutor", "kay admin").
+  'tutor', 'admin', 'teacher', 'guro', 'titser', 'magulang', 'parent',
+  // Filipino existential/question words that commonly follow a relationship cue with NO
+  // name at all ("anak ko meron pa ba", "kay alex may natitira pa") — without these, the
+  // greedy capture below would read straight through them as part of a "name".
+  'meron', 'mayroon', 'may', 'wala', 'ilan', 'saan', 'paano', 'bakit', 'gaano', 'ano',
+]);
+
+// A question/statement ABOUT the child ("can my child bring a snack to class", "can my
+// child use the online portal") must never be mistaken for a name introduction just
+// because the text after "my child" doesn't happen to be a recognized topic/filler word.
+// If the first word remaining after stripping trailing filler is a common verb/modal,
+// this is a question, not a name — reject regardless of what follows.
+const CHILD_REFERENCE_VERB_WORDS = new Set([
+  'bring', 'use', 'go', 'attend', 'wear', 'eat', 'come', 'stay', 'visit', 'join',
+  'participate', 'has', 'have', 'need', 'needs', 'want', 'wants', 'like', 'likes',
+  'enroll', 'apply', 'continue', 'miss', 'skip', 'cancel', 'take', 'takes', 'leave',
+  'arrive', 'start', 'stop', 'play', 'ask', 'tell', 'see', 'get', 'make', 'borrow',
+  'request', 'submit', 'change', 'transfer', 'drop', 'add', 'renew', 'book',
+  'reschedule', 'access', 'view', 'check', 'review', 'receive', 'pay', 'settle',
+  'choose', 'pick', 'select', 'be', 'allowed', 'required', 'expected', 'speak',
+  'talk', 'wait', 'sit', 'walk', 'study', 'sleep', 'rest', 'move', 'transfer',
+  'graduate', 'finish', 'complete', 'qualify', 'pass', 'fail', 'repeat', 'bring',
+  // Modal/filler sentence-starters — "I mean can you help me" (a filler phrase, not
+  // naming anyone) must not capture "can you help me" as a candidate name.
+  'can', 'could', 'would', 'should', 'will', 'might', 'must',
+]);
+
+const CHILD_NAME_REFERENCE_PATTERNS = [
+  // "child/kid/son/daughter" (parent phrasing) and "student/learner" (tutor phrasing).
+  /\b(?:my|our)\s+(?:child|kid|son|daughter|student|learner)(?:'s)?\s+(?:name\s+is\s+|is\s+named\s+|is\s+|named\s+|called\s+)?([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,3})/i,
+  /\banak\s*(?:ko|namin)?\b\s*(?:na\s+)?(?:si\s+)?([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,3})/i,
+  // Batch (named-student-access-fix pt.2) — Filipino proper-noun markers si/kay/ni are
+  // used almost exclusively right before a person's name ("si Alex", "kay Alex",
+  // "schedule ni Alex") — the same markers extractRequestedName already treats as a
+  // strong name-cue elsewhere in this file. Live QA testing found a bypass: "gusto ko
+  // kay alex soriano" and "schedule ni alex" named a specific student with NEITHER
+  // "my child" NOR "anak" in that turn, so the guard never even looked. Not anchored to
+  // end-of-string (unlike extractRequestedName) so it matches mid-sentence and before
+  // trailing punctuation ("...ni alex?").
+  /\b(?:si|kay|ni)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,3})/i,
+  // English equivalent of the si/kay/ni fix above — a clarification naming a specific
+  // person ("I mean Alex Soriano", "I meant Alex") with no "my child" framing at all.
+  /\bi\s+mean(?:t)?\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,3})/i,
+];
+
+// Extracts a candidate child/student name from a relationship-cued reference in ONE
+// message. Returns null when no such reference is present, OR when the text after the
+// cue is entirely topic/filler words (no real name given at all). Known limitation
+// (disclosed, not fixed here): only catches relationship-cued phrasing ("my child X") —
+// a fully bare reference ("is Alex Soriano doing ok") is not covered.
+function extractChildNameReference(message) {
+  const normalized = normalizeMessage(message);
+  for (const pattern of CHILD_NAME_REFERENCE_PATTERNS) {
+    const m = pattern.exec(normalized);
+    if (!m) continue;
+    const rawWords = m[1].trim().split(/\s+/).filter(Boolean).map((w) => w.replace(/'s$/, ''));
+    // Keep only the LEADING run of name-like words — stop at the first filler/topic/verb
+    // word rather than only trimming trailing ones. The capture group is greedy (up to 4
+    // words), so a non-name phrase right after the cue ("anak ko meron pa ba", "kay alex
+    // may natitira pa") used to be read whole as a multi-word "name" candidate: besides
+    // being wrong on its own, the extra words inflated nameMatchesAnyPerson's token count
+    // enough to wrongly demand a full first+last name match for what was really just a
+    // first name ("kay alex may natitira..." used to keep "alex may natitira" — 3 tokens
+    // — requiring a last-name match that was never there, so even "kay alex" for the
+    // parent's only child named Alex was wrongly declined).
+    const words = [];
+    for (const w of rawWords) {
+      if (NON_NAME_WORDS.has(w) || CHILD_REFERENCE_VERB_WORDS.has(w)) break;
+      words.push(w);
+    }
+    if (words.length) {
+      return words.join(' ');
+    }
+  }
+  return null;
+}
+
+// Scans the current message, then prior user turns (most recent first), for a
+// relationship-cued name reference — so a name established in one turn is still caught
+// by a bare topic follow-up in a later turn ("my child alez soriano" ... then "what
+// about the schedule?") that carries no name of its own.
+function findChildNameReferenceInConversation(message, history = []) {
+  const direct = extractChildNameReference(message);
+  if (direct) {
+    return direct;
+  }
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const item of items) {
+    if (!item || item.role !== 'user' || typeof item.content !== 'string') {
+      continue;
+    }
+    const found = extractChildNameReference(item.content);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+// Same word-boundary matching technique resolveParentChild/resolveNamedPerson already
+// use elsewhere in this file, generalized to a plain {firstName,lastName} list.
+function nameMatchesAnyPerson(candidateName, people) {
+  const normalized = normalizeMessage(candidateName);
+  const candidateTokenCount = normalized.split(/\s+/).filter(Boolean).length;
+  return people.some((p) => {
+    const fn = String(p?.firstName || '').toLowerCase().trim();
+    const ln = String(p?.lastName || '').toLowerCase().trim();
+    const fnMatch = !!(fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized));
+    const lnMatch = !!(ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized));
+    // A multi-word reference naming a real two-part name must get BOTH parts right — a
+    // typo'd first name with a coincidentally-correct last name (e.g. "alez soriano" vs
+    // the real "Alex Soriano") must not be treated as verified just because the surname
+    // happened to line up. A single-word reference (bare first or last name) is still
+    // accepted on its own, since a 2-part match can't be expected from 1 word.
+    if (candidateTokenCount >= 2 && fn && ln) {
+      return fnMatch && lnMatch;
+    }
+    return fnMatch || lnMatch;
+  });
+}
+
+// One uniform decline regardless of WHY (student doesn't exist vs. exists but isn't
+// linked/assigned to this user) — deliberately not distinguishing the two, both per the
+// request and because that distinction would itself leak information (name
+// enumeration: trying many names and watching the wording change).
+function getNamedStudentAccessDecline(languageProfile, isPublic) {
+  if (isPublic) {
+    return pickByLanguage(
+      languageProfile,
+      "I can't look up or confirm any specific student's information without being logged in. Please log in to your parent or tutor account, or ask me a general question about Bee Bright's programs, enrollment process, or pricing.",
+      'Hindi ko matitingnan o makukumpirma ang impormasyon ng kahit sinong estudyante kung hindi ka naka-login. Mag-login muna bilang parent o tutor, o magtanong ng general na tanong tungkol sa mga programa, proseso ng enrollment, o presyo ng Bee Bright.',
+      'Hindi ko ma-look up o ma-confirm ang info ng kahit anong student kung hindi ka naka-login. Mag-login ka muna as parent or tutor, or magtanong ng general question tungkol sa mga programs, enrollment process, or pricing ng Bee Bright.'
+    );
+  }
+  return pickByLanguage(
+    languageProfile,
+    "I can't find or access that student's information.",
+    'Hindi ko mahanap o ma-access ang impormasyon ng estudyanteng iyon.',
+    'Hindi ko mahanap o ma-access ang info ng student na iyon.'
+  );
+}
+
+/**
+ * Hard access-control gate for a specific named student. MUST run before
+ * applyConversationContext / grounding / generateChatbotLlmReply. Returns a decline
+ * string when a relationship-cued name reference is present and fails verification —
+ * no `user` at all (public), or a logged-in parent/tutor naming someone NOT actually
+ * linked to/assigned to them. Returns null (let the pipeline proceed normally) when no
+ * name reference is found, or when it resolves to a real, verified match.
+ *
+ * Deliberately NOT applied to student/admin/super_admin: students never resolve another
+ * person's data anywhere in this pipeline; admin already has its own real, DB-verified
+ * lookup path (getRoleAwarePersonInfoReply).
+ */
+async function verifyNamedStudentReference(req, message, history = []) {
+  const candidateName = findChildNameReferenceInConversation(message, history);
+  if (!candidateName) {
+    return null;
+  }
+
+  const languageProfile = getEffectiveLanguageProfile(detectLanguageProfile(message));
+  const user = req?.user;
+
+  // Self-contained audit logging (matches handleChildSafetyScreen/handleExplicitHandoff's
+  // convention: every early-return guard logs its own outcome; callers must not log a
+  // reply this function already returned).
+  const decline = async (reason) => {
+    const reply = getNamedStudentAccessDecline(languageProfile, !user);
+    await logAiInteraction({ req, message, reply, groundingPath: 'access-denied', language: languageProfile });
+    console.warn(`Named-student access denied (${reason}):`, { role: user?.role || 'public', candidateName });
+    return reply;
+  };
+
+  if (!user) {
+    return decline('not logged in');
+  }
+
+  if (user.role === 'parent') {
+    const enrollments = await getParentChildEnrollments(user._id);
+    const children = enrollments.map((e) => e.studentSnapshot || {});
+    return nameMatchesAnyPerson(candidateName, children) ? null : decline('not this parent\'s child');
+  }
+
+  if (user.role === 'tutor') {
+    const students = await getTutorStudents(user._id);
+    return nameMatchesAnyPerson(candidateName, students) ? null : decline('not assigned to this tutor');
   }
 
   return null;
@@ -6989,6 +7578,15 @@ async function handleExplicitHandoff(req, message, history = []) {
     return null;
   }
 
+  // Batch 19 — "raise a concern" ends up in admin's own Requests queue for admin to act
+  // on, so it never made sense for admin to trigger it against themselves — live testing
+  // confirmed admin's own account could end up flagged this way too. Per the user's
+  // explicit direction, this flow (like child-safety screening and tutor_wellbeing_check)
+  // is parent/tutor-side only.
+  if (!['parent', 'tutor'].includes(String(req.user.role || '').toLowerCase())) {
+    return null;
+  }
+
   const lang = concernFlowLanguage(message, history);
   const flowState = detectConcernFlowState(history);
   const lastAssistant = getLastAssistantMessage(history);
@@ -7061,36 +7659,18 @@ async function handleExplicitHandoff(req, message, history = []) {
   return out;
 }
 
-/**
- * Implicit handoff (Task 4): two consecutive "couldn't help" replies. Keeps the reply
- * and appends a handoff note, opening a normal-severity 'handoff' escalation once.
- * Returns the (possibly augmented) reply string.
- */
+// Batch 19 — the implicit "two consecutive unhelpful replies → auto-flag" handoff was
+// removed per the user's explicit direction: it was landing in admin's own Requests
+// queue alongside genuine parent/tutor requests (noisy, and nonsensical for admin's own
+// messages, since this fires for any role including admin with no exception), and it
+// looked bad to the user auto-flagging on nothing more than "the bot didn't understand
+// twice in a row." The user asked to keep only the three deliberate, user-initiated
+// flows — child-safety screening (handleChildSafetyScreen), explicit "raise a concern"
+// (handleExplicitHandoff), and tutor_wellbeing_check — all untouched by this change.
+// This function is now a no-op kept only so its call sites don't need touching; it no
+// longer creates an Escalation record or appends a "flagged for admin" note.
 async function applyRepeatedNoMatchHandoff(req, message, history, reply, languageProfile) {
-  if (!req || !req.user || !isUnhelpfulReply(reply)) {
-    return reply;
-  }
-  const priorAssistant = (Array.isArray(history) ? history : [])
-    .slice()
-    .reverse()
-    .find((m) => m && m.role === 'assistant' && typeof m.content === 'string');
-
-  if (!priorAssistant || !isUnhelpfulReply(priorAssistant.content)) {
-    return reply;
-  }
-
-  await createEscalation({
-    req,
-    user: req.user,
-    source: 'handoff',
-    category: 'repeated_no_match',
-    trigger: 'Two consecutive unhelpful assistant replies',
-    severity: 'normal',
-    snippet: String(message || ''),
-  });
-
-  const note = getHandoffAcknowledgement('repeated_no_match', languageProfile);
-  return `${reply}\n\n${note}`;
+  return reply;
 }
 
 /**
@@ -7232,7 +7812,10 @@ async function handleLessonPrepRequest(req, message) {
 }
 
 /**
- * Task 24 — assemble the phi system prompt and call the model once.
+ * Assembles the chatbot's system prompt + conversation contents and calls Gemini once
+ * (via geminiClient.generateChatbotReply). Replaced the old phi/Ollama transport — the
+ * BeeBright-specific prompt assembly below (Task 24's system prompt, role context,
+ * grounded context, RAG reference) is unchanged; only the final transport call differs.
  *
  * `groundedContext` MUST already be the output of getGroundedChatContext (i.e. access-
  * scoped for this exact user + role — parent => own child only, tutor => own students
@@ -7240,10 +7823,10 @@ async function handleLessonPrepRequest(req, message) {
  * it only reads the text that scoped lookup already prepared, plus the Task 24b static
  * RAG reference material, which it keeps in its own distinctly-labelled block.
  *
- * Returns a sanitized reply string, or null when phi is unreachable / declined / empty /
- * not-English — the caller then keeps its deterministic (already localized) reply.
+ * Returns a sanitized reply string, or null when Gemini is unreachable / declined /
+ * empty — the caller then keeps its deterministic (already localized) reply.
  */
-async function generatePhiReply({
+async function generateChatbotLlmReply({
   user,
   resolvedMessage,
   rawMessage,
@@ -7252,28 +7835,34 @@ async function generatePhiReply({
   responsePreference,
   history,
 }) {
-  // Task 26 — phi is a small (~2.7B), English-centric model; its Filipino / Taglish
-  // generation is unreliable and can come out grammatically broken. Only let it generate
-  // for English. For Filipino / Taglish (or anything else) we return null here so the
-  // caller falls back to the existing localized canned reply — the same path already
-  // used when phi times out or errors. This reverts Filipino/Taglish to pre-Task-24a
-  // behavior while leaving English's Task 24a/24b improvements fully in effect.
-  // (Out of scope: generateTutoringReply(), the separate TUTOR_AI_ENABLED-gated call.)
-  if (effectiveLanguageProfile !== 'english') {
-    return null;
-  }
-
-  const detectedLang = detectLanguage(resolvedMessage);
-  const langName = getLanguageName(detectedLang);
+  // Task 26 restricted this to English only, because the old phi model (via Ollama)
+  // produced unreliable, grammatically broken Filipino/Taglish. Gemini handles
+  // Filipino/Taglish well, so that restriction was removed when the chatbot moved to
+  // Gemini — English/Filipino/Taglish all reach this function now. The deterministic
+  // pipeline (including applyConversationContext's follow-up detection, e.g. "ganun
+  // ba?") still runs first for every language and still wins whenever it can actually
+  // answer — this is only reached when that pipeline's reply was unhelpful.
+  // (Out of scope: generateTutoringReply(), the separate TUTOR_AI_ENABLED-gated call —
+  // still phi/Ollama, untouched by this change.)
 
   const systemMessages = [getSystemPrompt()];
-  const profileLanguageLabel = pickByLanguage(effectiveLanguageProfile, 'English', 'Filipino', 'Filipino');
+  // Gemini is told the user's actual language/mix via effectiveLanguageProfile — the
+  // same english/filipino/taglish classification already used to localize every other
+  // deterministic reply in this file, rather than franc's single-language guess (which
+  // has no concept of Taglish code-mixing and would mislabel a mixed message).
+  const languageInstructionText = pickByLanguage(
+    effectiveLanguageProfile,
+    'Respond to the user in English.',
+    'Respond to the user in Filipino (Tagalog).',
+    "Respond to the user in Taglish — naturally mix English and Filipino the way the user's own message does, the same way a bilingual Filipino speaker would. Do not reply in pure English or pure Filipino.",
+  );
+  const profileLanguageLabel = pickByLanguage(effectiveLanguageProfile, 'English', 'Filipino', 'Taglish (mixed English/Filipino)');
   const responseFormatInstruction = getResponseFormatInstruction(
     responsePreference || detectResponsePreference(resolvedMessage),
     effectiveLanguageProfile,
   );
   systemMessages.push(`\n[USER ROLE & CONTEXT]\n${getRoleSpecificContext(user?.role)}`);
-  systemMessages.push(`\n[LANGUAGE INSTRUCTION] Respond to the user in ${langName}. Always use the same language as the user's question. Never switch languages unless the user explicitly requests it.`);
+  systemMessages.push(`\n[LANGUAGE INSTRUCTION] ${languageInstructionText} Always use the same language/mix as the user's question. Never switch languages unless the user explicitly requests it.`);
   systemMessages.push(`\n[STYLE INSTRUCTION] The detected user language style is ${profileLanguageLabel}. Mirror this style exactly in your reply. Use concise, natural, one-on-one conversational tone.`);
   systemMessages.push('\n[RELEVANCE INSTRUCTION] Answer only the user\'s exact Bee Bright question. Do not add hypothetical stories, logic puzzles, role-play scenes, or extra numbered items that were not asked.');
   systemMessages.push(`\n[RESPONSE FORMAT INSTRUCTION] ${responseFormatInstruction}`);
@@ -7303,62 +7892,31 @@ async function generatePhiReply({
     );
   }
 
+  // Gemini uses 'model' for assistant turns, not 'assistant' — a real shape difference
+  // from the old Ollama history format, confirmed directly against the installed
+  // @google/genai type definitions (Content.role: 'user' | 'model').
   const safeHistory = Array.isArray(history)
     ? history
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
       .slice(-20)
-      .map((m) => ({ role: m.role, content: m.content.trim() }))
+      .map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content.trim() }] }))
     : [];
 
-  const messages = [
-    { role: 'system', content: systemMessages.join('\n\n') },
+  // Gemini-first restructuring, point 3 — a confirmation follow-up ("ganun ba?") was
+  // already resolved by applyConversationContext (upstream, in chat()/ollamaChat()) to
+  // the real prior question; send THAT resolved text as the final turn, not the raw
+  // contentless follow-up, so Gemini is answering a real question — on top of (not
+  // instead of) the real conversation history above, which still gives it full context.
+  const contents = [
     ...safeHistory,
-    { role: 'user', content: String(rawMessage || resolvedMessage || '').trim() },
+    { role: 'user', parts: [{ text: String(resolvedMessage || rawMessage || '').trim() }] },
   ];
 
-  const requestBody = {
-    model: OLLAMA_MODEL,
-    messages,
-    stream: false,
-    keep_alive: OLLAMA_KEEP_ALIVE,
-    options: { temperature: 0.2, num_predict: 160, repeat_penalty: 1.15 },
-  };
-
-  if (OLLAMA_DEBUG) {
-    console.debug('[ollama-debug] request payload:', JSON.stringify({ url: `${OLLAMA_URL}/api/chat`, body: requestBody }, null, 2));
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!response.ok) {
-      throw new Error(`Ollama ${response.status}`);
-    }
-    const data = await response.json();
-    const rawContent = data.message?.content?.trim() || '';
-    const sanitized = sanitizeOllamaReply(rawContent);
-    if (OLLAMA_DEBUG) {
-      console.debug('[ollama-debug] raw response (pre-sanitize):', JSON.stringify(rawContent));
-      if (sanitized !== rawContent) {
-        console.debug('[ollama-debug] sanitizer', sanitized ? 'trimmed the reply' : 'REJECTED the reply', '- final:', JSON.stringify(sanitized));
-      }
-    }
-    return sanitized || null;
-  } catch (ollamaErr) {
-    if (ollamaErr.name === 'AbortError') {
-      console.warn('Ollama timed out, using fallback');
-    } else {
-      console.warn('Ollama unavailable, using fallback:', ollamaErr.message);
-    }
-    return null;
-  }
+  const rawContent = await geminiClient.generateChatbotReply({
+    systemInstruction: systemMessages.join('\n\n'),
+    contents,
+  });
+  return sanitizeOllamaReply(rawContent || '') || null;
 }
 
 /**
@@ -7369,6 +7927,12 @@ async function generatePhiReply({
 const chat = async (req, res) => {
   const { message, history = [] } = req.body || {};
   try {
+    // Universal, role-independent — must run before any role branches. See its own docs.
+    const technicalScopeReply = await handleTechnicalScopeGuard(req, message);
+    if (technicalScopeReply) {
+      return res.status(200).json({ success: true, reply: technicalScopeReply });
+    }
+
     // Anonymous surface (this handler also serves /public-chat, which has no `protect`).
     const anonReply = await handleAnonymousChatGuards(req, message);
     if (anonReply) {
@@ -7404,8 +7968,19 @@ const chat = async (req, res) => {
       return res.status(200).json({ success: true, reply: classifierShortcutReply });
     }
 
+    // Hard access-control gate for a specific named student — MUST run before
+    // grounding/Gemini. See verifyNamedStudentReference's own docs above.
+    const namedStudentDecline = await verifyNamedStudentReference(req, message, history);
+    if (namedStudentDecline) {
+      return res.status(200).json({ success: true, reply: namedStudentDecline });
+    }
+
     // Task 21 — a vague follow-up ("uli dyan") is resolved against the last concrete
-    // message in this conversation. Guards above ran on the original text.
+    // message in this conversation. Guards above ran on the original text. Still run
+    // even though Gemini is primary now (below) — Gemini gets the RESOLVED question
+    // (plus full history alongside), so "ganun ba?" reaches it as a real question, not a
+    // contentless "is that so?"; the deterministic fallback also still needs this
+    // resolution since it has no memory of its own.
     const { message: contextMessage } = applyConversationContext(message, history);
     // Task 22a — fix obvious typos / Taglish-affix words ("enrollement" -> "enrollment",
     // "malolocate" -> "locate") so the exact regex handlers downstream still fire.
@@ -7413,29 +7988,30 @@ const chat = async (req, res) => {
 
     const languageProfile = detectLanguageProfile(resolvedMessage);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
-    const classifierResult = getIntentReply(resolvedMessage);
     const groundedContext = await getGroundedChatContext(req.user, resolvedMessage, history);
-    let baseReply = await getResolvedReply(req.user, resolvedMessage, classifierResult, groundedContext, effectiveLanguageProfile, history);
-    let groundingPath = groundedContext ? 'grounded' : 'deterministic';
 
-    // Task 24a — last-resort phi fallback. Only when the whole deterministic pipeline
-    // produced nothing better than the generic "please clarify" / "not available" reply.
-    // phi gets the SAME already-access-scoped grounded context + the static RAG
-    // reference material; it never queries the database. Determinism always wins first.
-    if (isUnhelpfulReply(baseReply)) {
-      const phiReply = await generatePhiReply({
-        user: req.user,
-        resolvedMessage,
-        rawMessage: message,
-        groundedContext,
-        effectiveLanguageProfile,
-        responsePreference: detectResponsePreference(resolvedMessage),
-        history,
-      });
-      if (phiReply) {
-        baseReply = phiReply;
-        groundingPath = groundedContext ? 'grounded-llm' : 'llm';
-      }
+    // Gemini-first (restructured per the owner's explicit direction): try Gemini for
+    // every language before the deterministic/keyword classifier pipeline, not as a
+    // last resort after it. Gemini gets the SAME already-access-scoped grounded context
+    // + the static RAG reference material as before; it never queries the database.
+    // The deterministic pipeline (getResolvedReply) is now the FALLBACK, reached only
+    // when Gemini can't answer — most commonly a 429 rate-limit, since the free-tier
+    // daily quota is small — not a first-pass filter on every message anymore.
+    let baseReply = await generateChatbotLlmReply({
+      user: req.user,
+      resolvedMessage,
+      rawMessage: message,
+      groundedContext,
+      effectiveLanguageProfile,
+      responsePreference: detectResponsePreference(resolvedMessage),
+      history,
+    });
+    let groundingPath = baseReply ? (groundedContext ? 'grounded-llm' : 'llm') : null;
+
+    if (!baseReply) {
+      const classifierResult = getIntentReply(resolvedMessage);
+      baseReply = await getResolvedReply(req.user, resolvedMessage, classifierResult, groundedContext, effectiveLanguageProfile, history);
+      groundingPath = groundedContext ? 'grounded' : 'deterministic';
     }
 
     const reply = await applyRepeatedNoMatchHandoff(req, message, history, baseReply, effectiveLanguageProfile);
@@ -7485,6 +8061,12 @@ const ollamaChat = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Message is required.' });
     }
 
+    // Universal, role-independent — must run before any role branches. See its own docs.
+    const technicalScopeReply = await handleTechnicalScopeGuard(req, message);
+    if (technicalScopeReply) {
+      return res.status(200).json({ success: true, reply: technicalScopeReply });
+    }
+
     // Anonymous surface guards (child-safety + account-question → log in). Logs internally.
     const anonReply = await handleAnonymousChatGuards(req, message);
     if (anonReply) {
@@ -7525,6 +8107,14 @@ const ollamaChat = async (req, res) => {
       return res.status(200).json({ success: true, reply: classifierShortcutReply });
     }
 
+    // Hard access-control gate for a specific named student — MUST run before
+    // grounding/Gemini. See verifyNamedStudentReference's own docs above. Self-contained
+    // (logs internally), like the guards above.
+    const namedStudentDecline = await verifyNamedStudentReference(req, message, history);
+    if (namedStudentDecline) {
+      return res.status(200).json({ success: true, reply: namedStudentDecline });
+    }
+
     const languageOverride = detectLanguageOverrideCommand(message);
     if (languageOverride) {
       const previousTopicMessage = getPreviousUserTopicMessage(history, message);
@@ -7560,12 +8150,13 @@ const ollamaChat = async (req, res) => {
     const languageProfile = detectLanguageProfile(resolvedMessage);
     const effectiveLanguageProfile = getEffectiveLanguageProfile(languageProfile);
     const responsePreference = detectResponsePreference(resolvedMessage);
-    const classifierResult = getIntentReply(resolvedMessage);
     const groundedContext = await getGroundedChatContext(req.user, resolvedMessage, history);
 
-    // Keep Bee Bright system answers deterministic and scoped.
-    const shouldForceDeterministicReply = ['english', 'filipino'].includes(effectiveLanguageProfile);
-    const tryPhiLastResort = async () => generatePhiReply({
+    // Gemini-first (restructured per the owner's explicit direction): try Gemini for
+    // every language, before any deterministic/keyword classifier handling, not as a
+    // last resort after it. Gemini gets the SAME already-access-scoped grounded context
+    // + the static RAG reference material as before; it never queries the database.
+    const phiReply = await generateChatbotLlmReply({
       user: req.user,
       resolvedMessage,
       rawMessage: message,
@@ -7574,17 +8165,17 @@ const ollamaChat = async (req, res) => {
       responsePreference,
       history,
     });
+    if (phiReply) {
+      return respond(phiReply, groundedContext ? 'grounded-llm' : 'llm', groundedContext, effectiveLanguageProfile);
+    }
 
-    if (shouldForceDeterministicReply && shouldUseDirectSystemReply(resolvedMessage, classifierResult, groundedContext)) {
+    // Gemini unavailable (most commonly a 429 rate-limit on the small free-tier daily
+    // quota, but also any other API failure) — fall back to the deterministic/keyword
+    // classifier pipeline exactly as it worked before this restructuring, just reached
+    // here instead of first.
+    const classifierResult = getIntentReply(resolvedMessage);
+    if (shouldUseDirectSystemReply(resolvedMessage, classifierResult, groundedContext)) {
       const directScopedReply = await getResolvedReply(req.user, resolvedMessage, classifierResult, groundedContext, effectiveLanguageProfile, history);
-      // Task 24a — English/Filipino no longer dead-end at the generic clarification
-      // reply: if the deterministic pipeline had nothing real, let phi (with RAG) try.
-      if (isUnhelpfulReply(directScopedReply)) {
-        const phiReply = await tryPhiLastResort();
-        if (phiReply) {
-          return respond(phiReply, groundedContext ? 'grounded-llm' : 'llm', groundedContext, effectiveLanguageProfile);
-        }
-      }
       return respond(directScopedReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
     }
 
@@ -7593,25 +8184,10 @@ const ollamaChat = async (req, res) => {
       return respond(directReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
     }
 
-    // Task 24 — phi (with the Task 24b RAG reference + already-scoped grounded context).
-    // Reached here for English whose deterministic reply was only the generic
-    // clarification. Task 26: phi is skipped for Filipino/Taglish (generatePhiReply
-    // returns null for non-English) and we serve the localized canned reply instead.
-    const phiReply = await tryPhiLastResort();
-    const llmSucceeded = Boolean(phiReply);
-    const finalReply = phiReply
-      || localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile)
+    const finalReply = localizeKnownReply(groundedContext?.fallbackReply || classifierResult.reply, effectiveLanguageProfile)
       || directReply
       || pickByLanguage(effectiveLanguageProfile, 'I can help with our programs and pricing, enrollment, payments, schedules, and learning materials. Try asking about one of these.', 'Matutulungan kita sa mga programa at presyo, enrollment, payments, schedule, at learning materials. Maaari kang magtanong tungkol sa alinman sa mga ito.', 'Matutulungan kita sa programs at pricing, enrollment, payments, schedule, at learning materials. Maaari kang magtanong tungkol sa alinman sa mga ito.');
-    let tailPath;
-    if (llmSucceeded) {
-      tailPath = 'llm';
-    } else if (effectiveLanguageProfile === 'english') {
-      tailPath = 'llm-fallback'; // phi was attempted but unreachable / declined
-    } else {
-      tailPath = groundedContext ? 'grounded' : 'deterministic'; // phi never attempted (Task 26)
-    }
-    return respond(finalReply, tailPath, groundedContext, effectiveLanguageProfile);
+    return respond(finalReply, groundedContext ? 'grounded' : 'deterministic', groundedContext, effectiveLanguageProfile);
   } catch (error) {
     console.error('Ollama chat error:', error);
     const languageProfile = detectLanguageProfile(req.body?.message);
@@ -8046,7 +8622,7 @@ module.exports = {
   // Batch 13 — exported for test/tutor-students-dataset.test.js (the getTutorStudents fix)
   getIntentKeywordDatasetReply,
   buildPhiReferenceContext,
-  generatePhiReply,
+  generateChatbotLlmReply,
   sanitizeOllamaReply,
   getDatasetStatistics,
   getRandomDatasetSample,
@@ -8103,5 +8679,26 @@ module.exports = {
   getTutorScopeDenialReply,
   getAdminAtRiskStudentsReply,
   buildTutorWellbeingCheckContext,
+  // Batch 18 — exported for test/admin-tab-help-and-student-lookup.test.js
+  isAdminTabHelpQuestion,
+  getAdminTabHelpTopic,
+  getAdminTabHelpReply,
+  getRoleAwarePersonInfoReply,
+  formatStudentDetails,
+  // Named-student access guard — exported for test/named-student-access-guard.test.js
+  extractChildNameReference,
+  findChildNameReferenceInConversation,
+  verifyNamedStudentReference,
+  isRestrictedPublicTopicQuestion,
+  // Universal technical-scope guard (.env/API keys/database/backend/etc.) — exported for
+  // test/technical-scope-guard.test.js
+  isTechnicalScopeQuestion,
+  handleTechnicalScopeGuard,
+  getGenericOffTopicReply,
+  // Real attendance/remarks grounding for parents — exported for
+  // test/parent-attendance-remarks-grounding.test.js
+  buildParentAttendanceContext,
+  buildParentGradesContext,
+  getCarriedOverParentTopic,
 };
 

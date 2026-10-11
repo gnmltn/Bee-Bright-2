@@ -1,14 +1,14 @@
 /**
- * scripts/try-phi.js — manual harness for the Task 24 phi RAG fallback.
+ * scripts/try-phi.js — manual harness for the chatbot's Gemini LLM fallback.
  *
  *   node scripts/try-phi.js "what is your refund policy if we cancel"
  *   node scripts/try-phi.js --role parent "how is my child doing"
  *
  * It runs your message through the real chat() handler (same code path as
- * POST /api/ai/chat), tells you whether phi was actually called, what RAG
+ * POST /api/ai/chat), tells you whether Gemini was actually called, what RAG
  * reference material was handed to it, and how long it took. Audit-log and
- * escalation writes are stubbed; everything else is real, so Ollama + MongoDB
- * must be running.
+ * escalation writes are stubbed; everything else is real, so GEMINI_API_KEY
+ * (in .env) must be a real key and MongoDB must be running.
  */
 require('dotenv').config();
 const mongoose = require('mongoose');
@@ -22,9 +22,7 @@ const {
   chat,
   buildPhiReferenceContext,
 } = require('../controllers/aiController');
-
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'phi:latest';
+const geminiClient = require('../utils/geminiClient');
 
 // ── parse args ───────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -40,21 +38,18 @@ if (!message) {
 }
 const user = role ? { _id: new mongoose.Types.ObjectId(), role } : null;
 
-// ── spy on the one fetch() the controller makes to Ollama ─────────────────
-let phiCalled = false;
-let phiPrompt = null;
-let phiMs = 0;
-const realFetch = global.fetch;
-global.fetch = async (url, opts) => {
-  if (String(url).includes('/api/chat')) {
-    phiCalled = true;
-    try { phiPrompt = JSON.parse(opts.body); } catch (_) { /* ignore */ }
-    const t = Date.now();
-    const res = await realFetch(url, opts);
-    phiMs = Date.now() - t;
-    return res;
-  }
-  return realFetch(url, opts);
+// ── spy on the one call the controller makes to Gemini (real network call, not stubbed) ──
+let llmCalled = false;
+let llmPrompt = null;
+let llmMs = 0;
+const realGenerateChatbotReply = geminiClient.generateChatbotReply;
+geminiClient.generateChatbotReply = async ({ systemInstruction, contents }) => {
+  llmCalled = true;
+  llmPrompt = { systemInstruction, contents };
+  const t = Date.now();
+  const res = await realGenerateChatbotReply({ systemInstruction, contents });
+  llmMs = Date.now() - t;
+  return res;
 };
 
 function invoke(body, u) {
@@ -69,17 +64,11 @@ function invoke(body, u) {
 }
 
 (async () => {
-  // reachability check
-  try {
-    const r = await realFetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    const tags = await r.json();
-    const names = (tags.models || []).map((m) => m.name);
-    console.log(`Ollama: up at ${OLLAMA_URL}  · models: ${names.join(', ') || '(none)'}`);
-    if (!names.some((n) => n === OLLAMA_MODEL || n.split(':')[0] === OLLAMA_MODEL.split(':')[0])) {
-      console.log(`  ⚠  OLLAMA_MODEL="${OLLAMA_MODEL}" is not pulled — run:  ollama pull ${OLLAMA_MODEL}`);
-    }
-  } catch (_) {
-    console.log(`Ollama: NOT reachable at ${OLLAMA_URL} — the chatbot will fall back to deterministic replies.`);
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey.startsWith('replace-with')) {
+    console.log('GEMINI_API_KEY is not configured (still a placeholder in .env) — the chatbot will fall back to deterministic replies.');
+  } else {
+    console.log(`Gemini: configured (model ${process.env.GEMINI_CHATBOT_MODEL || 'gemini-2.5-flash'})`);
   }
 
   await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/beebright');
@@ -93,16 +82,16 @@ function invoke(body, u) {
   const out = await invoke({ message, history: [] }, user);
   const totalMs = Date.now() - t0;
 
-  console.log(`\n  phi called: ${phiCalled ? `yes (${phiMs} ms)` : 'no — a deterministic handler answered'}`);
-  if (phiCalled && phiPrompt) {
-    const sys = phiPrompt.messages.find((m) => m.role === 'system')?.content || '';
-    console.log(`  [REFERENCE MATERIAL] in phi's prompt: ${/\[REFERENCE MATERIAL/.test(sys) ? 'yes' : 'no'}`);
-    console.log(`  [ACCOUNT DATA] in phi's prompt:       ${/\[ACCOUNT DATA/.test(sys) ? 'yes' : 'no'}`);
+  console.log(`\n  Gemini called: ${llmCalled ? `yes (${llmMs} ms)` : 'no — a deterministic handler answered'}`);
+  if (llmCalled && llmPrompt) {
+    const sys = llmPrompt.systemInstruction || '';
+    console.log(`  [REFERENCE MATERIAL] in the prompt: ${/\[REFERENCE MATERIAL/.test(sys) ? 'yes' : 'no'}`);
+    console.log(`  [ACCOUNT DATA] in the prompt:       ${/\[ACCOUNT DATA/.test(sys) ? 'yes' : 'no'}`);
   }
   console.log(`  total: ${totalMs} ms\n`);
   console.log('  reply:');
   console.log(String(out.reply || `(HTTP ${out.status}) ${out.message}`).split('\n').map((l) => `    ${l}`).join('\n'));
 
   await mongoose.disconnect();
-  global.fetch = realFetch;
+  geminiClient.generateChatbotReply = realGenerateChatbotReply;
 })().catch((e) => { console.error(e); process.exit(1); });

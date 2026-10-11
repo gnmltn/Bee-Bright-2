@@ -8,11 +8,21 @@ import type { WizardData } from '../wizard-types';
 import { computeTotalFee } from '../wizard-types';
 import DocUploadField from '../DocUploadField';
 
-// Real logo assets from src/assets (bdo_logo.jpg, maribank_logo.png)
-// GCash has no image file in assets — uses brand-colour SVG instead.
+// Real logo assets from src/assets (bdo_logo.jpg, maribank_logo.png) — currently
+// unused, kept for when the tiles below switch back from QR codes to logos.
 // The old seabank_logo.png asset is left in place, unreferenced.
 import bdoLogo from '@/assets/bdo_logo.jpg';
 import maribankLogo from '@/assets/maribank_logo.png';
+
+// Temporary QR-code placeholders (replacing each method's logo in the tile below). Only
+// one real QR image exists so far (QrPAYMENT.jpg), reused for all three methods — each
+// gets its OWN named constant so the real, separate GCash/MariBank/BDO QR codes can be
+// dropped in later one at a time, just by changing each constant's import below. No
+// other code in this file needs to change when that happens.
+import qrPlaceholder from '@/assets/QrPAYMENT.jpg';
+const GCASH_QR = qrPlaceholder;
+const MARIBANK_QR = qrPlaceholder;
+const BDO_QR = qrPlaceholder;
 
 interface Props {
   data: WizardData;
@@ -31,19 +41,14 @@ const METHODS = [
     accountName: 'Bee Bright Tutorial Center',
     accountNumber: '09307517208',
     branch: null,
-    // GCash brand SVG — no image file available in assets
+    // Temporary QR placeholder — swap GCASH_QR's import above once the real GCash QR is ready.
     logo: (
-      <svg viewBox="0 0 88 32" className="h-9 w-auto" aria-label="GCash" role="img">
-        <rect width="88" height="32" rx="7" fill="#0166FF" />
-        <text
-          x="44" y="22"
-          fontSize="17" fontWeight="bold" fill="white"
-          fontFamily="Arial, sans-serif"
-          textAnchor="middle"
-        >
-          GCash
-        </text>
-      </svg>
+      <img
+        src={GCASH_QR}
+        alt="GCash QR code"
+        className="h-20 w-20 sm:h-32 sm:w-32 object-contain"
+        draggable={false}
+      />
     ),
   },
   {
@@ -54,11 +59,12 @@ const METHODS = [
     accountName: 'Bee Bright Tutorial Center',
     accountNumber: '5678-9012-3456',
     branch: 'Main Branch',
+    // Temporary QR placeholder — swap MARIBANK_QR's import above once the real MariBank QR is ready.
     logo: (
       <img
-        src={maribankLogo}
-        alt="MariBank"
-        className="h-9 w-auto object-contain"
+        src={MARIBANK_QR}
+        alt="MariBank QR code"
+        className="h-20 w-20 sm:h-32 sm:w-32 object-contain"
         draggable={false}
       />
     ),
@@ -71,11 +77,12 @@ const METHODS = [
     accountName: 'Bee Bright Tutorial Center',
     accountNumber: '0098-7654-3210',
     branch: 'Main Branch',
+    // Temporary QR placeholder — swap BDO_QR's import above once the real BDO QR is ready.
     logo: (
       <img
-        src={bdoLogo}
-        alt="BDO"
-        className="h-9 w-auto object-contain"
+        src={BDO_QR}
+        alt="BDO QR code"
+        className="h-20 w-20 sm:h-32 sm:w-32 object-contain"
         draggable={false}
       />
     ),
@@ -140,7 +147,7 @@ export default function Step10Billing({ data, update, onNext, onBack, toast }: P
       {/* ── Payment method selection ── */}
       <div>
         <Label className="mb-3 block font-semibold">Select Payment Method</Label>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
           {METHODS.map((m) => {
             const isSelected = data.paymentMethod === m.id;
             return (
@@ -149,14 +156,19 @@ export default function Step10Billing({ data, update, onNext, onBack, toast }: P
                 type="button"
                 onClick={() => update({ paymentMethod: m.id })}
                 aria-pressed={isSelected}
-                className={`relative p-3 rounded-xl border-2 flex flex-col items-center gap-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`relative p-2 sm:p-3 rounded-xl border-2 flex flex-col items-center gap-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isSelected
                     ? 'border-amber-500 shadow-sm'
                     : 'border-border hover:border-amber-300'
                 }`}
                 style={{ background: isSelected ? m.bgSelected : undefined }}
               >
-                <div className="h-10 flex items-center justify-center">
+                {/* QR codes need real pixel size to stay scannable — sized up from the
+                    old h-10 logo slot to roughly 120-150px on normal+ screens, with a
+                    smaller fallback only below the sm breakpoint so 3 tiles still fit
+                    side by side on a narrow phone (checked against PayInvoiceModal's
+                    sm:max-w-lg dialog, the narrowest of the 4 places this renders). */}
+                <div className="h-20 w-20 sm:h-32 sm:w-32 flex items-center justify-center">
                   {m.logo}
                 </div>
                 <span className="text-xs font-semibold text-foreground">{m.label}</span>

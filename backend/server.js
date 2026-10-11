@@ -55,7 +55,6 @@ const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
 const { ensureAssessmentTemplates } = require('./utils/ensureAssessmentTemplates');
 const { backfillPermanentStudentIds } = require('./utils/studentIdentity');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
-const { warmUpOllama } = require('./utils/ollamaWarmup');
 const { isOriginAllowed } = require('./config/corsOrigins');
 const { initRealtime } = require('./utils/realtime');
 
@@ -208,9 +207,6 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API URL: http://localhost:${PORT}/api`);
   console.log('='.repeat(50));
-  // Task 29b — pre-warm phi so the first user needing it doesn't pay the cold-start cost.
-  // Fire-and-forget; never blocks startup or throws.
-  warmUpOllama();
 });
 
 // Real-time push (Socket.io) — Admin, Parent, and Tutor dashboards — attached to this

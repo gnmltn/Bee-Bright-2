@@ -1,18 +1,19 @@
 /**
  * Task 29a — sanitizeOllamaReply() now also rejects self-referential meta-commentary:
- * phi narrating its own system prompt as story content ("The Assistant's system has a
- * bug...", "Here are some clues:", "If the user is from X, then the Assistant will Y").
+ * the LLM narrating its own system prompt as story content ("The Assistant's system has
+ * a bug...", "Here are some clues:", "If the user is from X, then the Assistant will Y").
+ * This generic text filter is unchanged by the phi->Gemini transport swap (Task "replace
+ * phi/Ollama with Gemini") — it still runs on whatever the chatbot's LLM call returns.
  *
  * This is an ADDITION — every existing rejection/trim still holds (guardrail).
  */
-process.env.OLLAMA_URL = 'http://127.0.0.1:59587';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 
 const AuditLog = require('../models/AuditLog');
 const Escalation = require('../models/Escalation');
+const geminiClient = require('../utils/geminiClient');
 const { sanitizeOllamaReply, ollamaChat, isPersonInfoQuery } = require('../controllers/aiController');
 
 AuditLog.create = async () => ({});
@@ -108,21 +109,16 @@ test('29a guardrail: a plain valid reply is returned unchanged', () => {
 
 // ── 29a.3/29a.4 — the rejection feeds the existing fallback (no new path) ─
 
-test('29a e2e: when phi emits the meta-commentary, the user gets the canned reply', async () => {
-  const realFetch = global.fetch;
-  global.fetch = async (url) => {
-    if (String(url).includes('/api/chat')) {
-      return { ok: true, status: 200, json: async () => ({ message: { content: CAPTURED } }) };
-    }
-    return realFetch(url);
-  };
+test('29a e2e: when the LLM emits the meta-commentary, the user gets the canned reply', async () => {
+  const origReply = geminiClient.generateChatbotReply;
+  geminiClient.generateChatbotReply = async () => CAPTURED;
   try {
     const res = {
       statusCode: 200,
       status(c) { this.statusCode = c; return this; },
       json(p) { this.payload = p; return this; },
     };
-    // English, off-menu -> reaches phi (Task 24a/26). phi "returns" the bad string.
+    // English, off-menu -> reaches the LLM (Task 24a/26). The LLM "returns" the bad string.
     await ollamaChat(
       { body: { message: 'my neighbor keeps talking about your academic tutorial classes', history: [] }, headers: {}, ip: '127.0.0.1' },
       res,
@@ -137,7 +133,7 @@ test('29a e2e: when phi emits the meta-commentary, the user gets the canned repl
       /I can help with|programs and pricing|Try asking about|not yet available in the system|clarify your topic/i,
     );
   } finally {
-    global.fetch = realFetch;
+    geminiClient.generateChatbotReply = origReply;
   }
 });
 

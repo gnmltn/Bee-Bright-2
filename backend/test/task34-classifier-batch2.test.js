@@ -15,6 +15,7 @@ const AuditLog = require('../models/AuditLog');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const Schedule = require('../models/Schedule');
+const Remark = require('../models/Remark');
 const User = require('../models/User');
 const {
   tryClassifierShortcut,
@@ -159,6 +160,7 @@ test('route "grounded_grades": parent_progress reaches the parent\'s own child g
   const restoreEnr = stubFind(Enrollment, [
     enrollment({ _id: 'e1', student: 'stu-1', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
   ]);
+  const restoreRemark = stubFind(Remark, []);
   const fetchRestore = stubFetch('parent_progress', 0.9);
   try {
     const message = "how is Ana doing in her subjects?";
@@ -166,7 +168,7 @@ test('route "grounded_grades": parent_progress reaches the parent\'s own child g
     const direct = await resolveGroundedContextForTopic(parent, message, 'grades');
     assert.equal(out, direct.fallbackReply);
     assert.match(out, /Ana Cruz/);
-  } finally { restoreEnr(); fetchRestore(); }
+  } finally { restoreEnr(); restoreRemark(); fetchRestore(); }
 });
 
 test('route "grounded_grades": no children linked -> safe "not found" reply, never a crash', async () => {
