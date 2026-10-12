@@ -492,6 +492,27 @@ async function hasStudentScheduleConflict({ studentId, date, startTime, endTime,
 }
 
 /**
+ * Same query and overlap check as hasStudentScheduleConflict, but returns the actual
+ * conflicting schedule (with its subject populated) instead of a bare boolean — used by
+ * checkPlaygroupWindows below to tell the admin WHICH existing session is in the way
+ * ("Maria already has Academic Tutorial at this time"), not just that one exists. Kept
+ * as its own function rather than changing hasStudentScheduleConflict's return shape,
+ * since that one is called from 7+ existing sites that only ever test its boolean result.
+ */
+async function findStudentScheduleConflictDetail({ studentId, date, startTime, endTime, excludeScheduleId = null }) {
+  const query = { date, $or: [{ student: studentId }, { students: studentId }] };
+  if (excludeScheduleId) {
+    query._id = { $ne: excludeScheduleId };
+  }
+  const existingSchedules = await filterLiveSessions(
+    await Schedule.find(query).select('startTime endTime tutor student subject').populate('subject', 'name code').lean()
+  );
+  const targetStart = normalizeTime(startTime);
+  const targetEnd = normalizeTime(getSessionEndTime(startTime, endTime));
+  return existingSchedules.find((existing) => timeRangesOverlap(targetStart, targetEnd, existing.startTime, existing.endTime || getSessionEndTime(existing.startTime, existing.endTime))) || null;
+}
+
+/**
  * Check if student is already enrolled in a session
  * @param {string} scheduleId - Schedule ID
  * @param {string} studentId - Student ID
@@ -2476,6 +2497,78 @@ const listPlaygroupGroups = async (req, res) => {
   }
 };
 
+// @desc    Preview whether each candidate Playgroup time window would conflict with any
+//          selected child's EXISTING schedule (a 1-on-1 session or a different Playgroup
+//          group) on the selected days, BEFORE the admin fills out the rest of the
+//          wizard. This is a read preview of the exact same overlap-based
+//          hasStudentScheduleConflict check createOrJoinPlaygroupGroup already enforces
+//          at submit time (same date-anchoring via resolveMonthlyWindow, same per-date
+//          loop via datesForWeekday) — so the dropdown and the submit-time error can
+//          never disagree, and fixing one keeps the other in sync automatically.
+//          No side effects: a child enrollment with no linked student yet is simply
+//          skipped (nothing to conflict with) rather than creating one, matching
+//          loadMonthlyContext's own "a preview must not have side effects" rule.
+// @route   POST /api/schedules/playgroup-groups/check-windows
+// @access  Private (Admin)
+const checkPlaygroupWindows = async (req, res) => {
+  try {
+    const { enrollmentIds: enrollmentIdsRaw, daysOfWeek: daysOfWeekRaw, startDate: startDateRaw, windows: windowsRaw } = req.body || {};
+    const enrollmentIds = Array.isArray(enrollmentIdsRaw) ? enrollmentIdsRaw.filter(Boolean) : [];
+    const daysOfWeek = Array.isArray(daysOfWeekRaw)
+      ? [...new Set(daysOfWeekRaw.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))]
+      : [];
+    const windows = Array.isArray(windowsRaw)
+      ? windowsRaw.filter((w) => w && w.startTime && w.endTime)
+      : [];
+    if (enrollmentIds.length === 0 || daysOfWeek.length === 0 || windows.length === 0) {
+      return res.status(400).json({ success: false, message: 'enrollmentIds, daysOfWeek, and windows are all required.' });
+    }
+
+    const enrollments = await Enrollment.find({ _id: { $in: enrollmentIds } }).select('student').lean();
+    if (enrollments.length === 0) {
+      return res.status(400).json({ success: false, message: 'No matching enrollments found.' });
+    }
+
+    const window = resolveMonthlyWindow(enrollments[0], startDateRaw);
+    if (window.error) return res.status(400).json({ success: false, message: window.error });
+    const { generationStart, subscriptionEnd } = window;
+
+    const results = await Promise.all(windows.map(async (w) => {
+      const conflicts = [];
+      for (const enrollment of enrollments) {
+        if (!enrollment.student) continue; // not-yet-linked child — nothing to conflict with
+        let foundForThisChild = null;
+        for (const day of daysOfWeek) {
+          for (const date of datesForWeekday(generationStart, subscriptionEnd, day)) {
+            const conflict = await findStudentScheduleConflictDetail({
+              studentId: enrollment.student,
+              date,
+              startTime: w.startTime,
+              endTime: w.endTime,
+            });
+            if (conflict) { foundForThisChild = { conflict, date }; break; }
+          }
+          if (foundForThisChild) break;
+        }
+        if (foundForThisChild) {
+          conflicts.push({
+            enrollmentId: String(enrollment._id),
+            date: dateKeyOf(foundForThisChild.date),
+            subjectLabel: foundForThisChild.conflict.subject?.name || 'another session',
+            startTime: foundForThisChild.conflict.startTime,
+            endTime: foundForThisChild.conflict.endTime,
+          });
+        }
+      }
+      return { startTime: w.startTime, endTime: w.endTime, ok: conflicts.length === 0, conflicts };
+    }));
+
+    res.status(200).json({ success: true, startDate: dateKeyOf(generationStart), windows: results });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to check time windows.' });
+  }
+};
+
 // @desc    Create a new Toddlers Playgroup group (or join an existing one) and
 //          generate/extend a month of Schedule docs for it, enrolling the student.
 //          Every target date is pre-validated (ratio, capacity, room conflict) before
@@ -4005,6 +4098,7 @@ module.exports = {
   checkMonthlySchedule,
   bulkDeleteSchedules,
   listPlaygroupGroups,
+  checkPlaygroupWindows,
   createOrJoinPlaygroupGroup,
   enrollStudentInSession,
   removeStudentFromSession,

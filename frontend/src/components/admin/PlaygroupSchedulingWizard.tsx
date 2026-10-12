@@ -16,6 +16,7 @@ import {
   type AdminEnrollment,
   type AdminSchedule,
   type PlaygroupGroupOption,
+  type PlaygroupWindowConflict,
   type WeeklyScheduleSubjectOption,
   type WeeklyScheduleTutorOption,
   type PricingPackage,
@@ -168,6 +169,11 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
   const [studentPickerResetKey, setStudentPickerResetKey] = useState(0);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [selectedWindow, setSelectedWindow] = useState(TIME_WINDOWS[0]);
+  // Per-window conflict preview (keyed "startTime-endTime") — which windows would
+  // double-book a selected child against an existing session, checked proactively as
+  // soon as child(ren) + at least one day are chosen, instead of only at submit time.
+  const [windowConflicts, setWindowConflicts] = useState<Map<string, PlaygroupWindowConflict>>(new Map());
+  const [checkingWindows, setCheckingWindows] = useState(false);
   const [groups, setGroups] = useState<PlaygroupGroupOption[] | null>(null);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState("");
@@ -209,6 +215,66 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
     setStartDate(selectedOptions.length === 0 ? "" : preferred && preferred >= todayKey ? preferred : todayKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKeys.join(",")]);
+
+  // Proactive conflict check — as soon as child(ren) + at least one day are chosen, ask
+  // the backend which of the two fixed time windows would double-book any selected child
+  // against an existing session (1-on-1 or another Playgroup group). Same overlap check
+  // the submit-time error already enforces (createOrJoinPlaygroupGroup's
+  // hasStudentScheduleConflict), just previewed here so the dropdown can disable a
+  // conflicting window BEFORE the admin fills out the rest of the form, instead of only
+  // rejecting it after Step 2/3 are already complete.
+  useEffect(() => {
+    if (selectedOptions.length === 0 || selectedDays.length === 0) {
+      setWindowConflicts(new Map());
+      setCheckingWindows(false);
+      return;
+    }
+    let cancelled = false;
+    setCheckingWindows(true);
+    const timer = setTimeout(() => {
+      scheduleService
+        .checkPlaygroupWindows({
+          enrollmentIds: selectedOptions.map((option) => option.enrollment._id),
+          daysOfWeek: selectedDays,
+          startDate: startDate || undefined,
+          windows: TIME_WINDOWS.map((w) => ({ startTime: w.startTime, endTime: w.endTime })),
+        })
+        .then((res) => {
+          if (cancelled) return;
+          const map = new Map<string, PlaygroupWindowConflict>();
+          for (const w of res.data?.windows || []) {
+            if (!w.ok && w.conflicts.length > 0) {
+              map.set(`${w.startTime}-${w.endTime}`, w.conflicts[0]);
+            }
+          }
+          setWindowConflicts(map);
+        })
+        .catch(() => {
+          // A failed preview must never block scheduling outright — the submit-time
+          // check in createOrJoinPlaygroupGroup remains the authoritative safety net
+          // either way, this is only a convenience that disables it earlier.
+          if (!cancelled) setWindowConflicts(new Map());
+        })
+        .finally(() => {
+          if (!cancelled) setCheckingWindows(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOptions.map((option) => option.enrollment._id).join(","), selectedDays.join(","), startDate]);
+
+  // If the currently-selected window just became conflicting (because of a new day or
+  // child selection), switch to the first still-available window automatically rather
+  // than silently leaving a now-blocked window selected.
+  useEffect(() => {
+    const currentKey = `${selectedWindow.startTime}-${selectedWindow.endTime}`;
+    if (!windowConflicts.has(currentKey)) return;
+    const nextOk = TIME_WINDOWS.find((w) => !windowConflicts.has(`${w.startTime}-${w.endTime}`));
+    if (nextOk) setSelectedWindow(nextOk);
+  }, [windowConflicts, selectedWindow]);
 
   // Whenever the day pattern or time window changes, look up matching groups.
   useEffect(() => {
@@ -268,12 +334,16 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
     setError(null);
   };
 
+  const selectedWindowHasConflict = windowConflicts.has(`${selectedWindow.startTime}-${selectedWindow.endTime}`);
+  const allWindowsConflict = selectedOptions.length > 0 && selectedDays.length > 0 && windowConflicts.size >= TIME_WINDOWS.length;
+
   const canGenerate =
     selectedOptions.length > 0 &&
     Boolean(startDate) && startDate >= todayKey &&
     Boolean(playgroupSubject) &&
     selectedDays.length > 0 &&
     dayCountMatchesLock &&
+    !selectedWindowHasConflict &&
     ((Boolean(selectedGroupId)) || (creatingNewGroup && newGroupTutorIds.length > 0));
 
   const handleGenerate = async () => {
@@ -421,17 +491,43 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
             if (match) setSelectedWindow(match);
           }}
         >
-          <SelectTrigger className="mt-2 w-56">
+          <SelectTrigger className="mt-2 w-56" aria-label="Time window">
             <SelectValue placeholder="Select time window" />
           </SelectTrigger>
           <SelectContent>
-            {TIME_WINDOWS.map((window) => (
-              <SelectItem key={`${window.startTime}-${window.endTime}`} value={`${window.startTime}-${window.endTime}`}>
-                {window.label}
-              </SelectItem>
-            ))}
+            {TIME_WINDOWS.map((window) => {
+              const key = `${window.startTime}-${window.endTime}`;
+              const conflict = windowConflicts.get(key);
+              const conflictChildLabel = conflict
+                ? selectedOptions.find((option) => option.enrollment._id === conflict.enrollmentId)?.label || "A selected child"
+                : null;
+              return (
+                <SelectItem key={key} value={key} disabled={Boolean(conflict)}>
+                  {conflict ? (
+                    <span className="flex flex-col">
+                      <span>{window.label}</span>
+                      <span className="text-xs text-destructive">
+                        {conflictChildLabel} already has {conflict.subjectLabel} at this time
+                      </span>
+                    </span>
+                  ) : (
+                    window.label
+                  )}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
+        {checkingWindows && (
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" /> Checking for schedule conflicts…
+          </p>
+        )}
+        {!checkingWindows && allWindowsConflict && (
+          <p className="text-xs text-destructive">
+            Both time windows conflict with at least one selected child&apos;s existing schedule on the selected days. Choose different days, or schedule the conflicting child separately.
+          </p>
+        )}
 
         <div className="mt-3 space-y-1">
           <Label htmlFor="playgroup-start-date">Starting date</Label>

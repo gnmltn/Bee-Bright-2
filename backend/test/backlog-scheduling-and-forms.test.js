@@ -205,6 +205,76 @@ test('H1: checkMonthlySchedule (preview) also reports the same student conflict,
   } finally { restore(); }
 });
 
+// Cross-program-type overlap, reverse direction from the Playgroup dropdown fix: a
+// child already has a Toddlers Playgroup session (students[] array, not the singular
+// `student` field a 1-on-1 session uses) and the admin tries to book them into an
+// overlapping — but not identical — 1-on-1 time window. hasStudentScheduleConflict (used
+// by both createMonthlySchedules and this preview) already does proper interval-overlap
+// matching, not exact-match, so this already works; these tests lock that in explicitly
+// for the scenario the fix request called out by name. Note: 1-on-1 sessions in this
+// system are always exactly 1 hour (PROGRAM_POLICIES[...].durationMinutes === 60,
+// enforced by validateTimeWindow) — the fix request's own "8-11 AM" / "1-4 PM" example
+// windows (3 hours) aren't bookable 1-on-1 slots at all and would be rejected for THAT
+// reason before ever reaching the conflict check, so these use a real 1-hour slot nested
+// inside the existing Playgroup window instead — still overlapping, still not identical.
+test('item 2 (reverse direction): existing Playgroup 8-10 AM blocks a NEW, overlapping-but-not-identical Academic Tutorial 9-10 AM request', async () => {
+  const { restore } = stubOneOnOne({
+    existing: (query) => (query?.$or?.some((c) => 'students' in c)
+      ? [{ startTime: '08:00', endTime: '10:00', tutor: 'tutor-other', students: ['student-1'] }]
+      : []),
+  });
+  try {
+    const res = mockRes();
+    await checkMonthlySchedule(monthlyReq({ daySlots: [{ dayOfWeek: 1, startTime: '09:00', endTime: '10:00' }] }), res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.ok, false, '8-10 AM Playgroup overlaps the requested 9-10 AM window even though the times differ');
+    assert.ok(res._body.conflicts.every((c) => /conflicting session/i.test(c.reason)), JSON.stringify(res._body.conflicts));
+  } finally { restore(); }
+});
+
+test('item 3 (reverse direction): existing Playgroup 1-3 PM blocks a NEW Examination Prep request of 2-3 PM', async () => {
+  const { restore } = stubOneOnOne({
+    existing: (query) => (query?.$or?.some((c) => 'students' in c)
+      ? [{ startTime: '13:00', endTime: '15:00', tutor: 'tutor-other', students: ['student-1'] }]
+      : []),
+  });
+  try {
+    const res = mockRes();
+    await checkMonthlySchedule(monthlyReq({ daySlots: [{ dayOfWeek: 1, startTime: '14:00', endTime: '15:00' }] }), res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.ok, false, '1-3 PM Playgroup overlaps the requested 2-3 PM window');
+    assert.ok(res._body.conflicts.every((c) => /conflicting session/i.test(c.reason)), JSON.stringify(res._body.conflicts));
+  } finally { restore(); }
+});
+
+test('item 5 (reverse direction, no false positive): an existing Academic Tutorial 8-9 AM does NOT block an unrelated 1-3 PM request', async () => {
+  const { restore } = stubOneOnOne({
+    existing: (query) => (query?.$or?.some((c) => 'student' in c)
+      ? [{ startTime: '08:00', endTime: '09:00', tutor: 'tutor-other', student: 'student-1' }]
+      : []),
+  });
+  try {
+    const res = mockRes();
+    await checkMonthlySchedule(monthlyReq({ daySlots: [{ dayOfWeek: 1, startTime: '13:00', endTime: '14:00' }] }), res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.ok, true, 'a genuinely non-overlapping existing session must not block an unrelated time');
+  } finally { restore(); }
+});
+
+test('item 6 (reverse direction, back-to-back): an existing session ending exactly at 08:00 does NOT conflict with a request starting at 08:00', async () => {
+  const { restore } = stubOneOnOne({
+    existing: (query) => (query?.$or?.some((c) => 'student' in c)
+      ? [{ startTime: '06:00', endTime: '08:00', tutor: 'tutor-other', student: 'student-1' }]
+      : []),
+  });
+  try {
+    const res = mockRes();
+    await checkMonthlySchedule(monthlyReq({ daySlots: [{ dayOfWeek: 1, startTime: '08:00', endTime: '09:00' }] }), res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(res._body.ok, true, 'touching, not overlapping — must not be flagged as a conflict');
+  } finally { restore(); }
+});
+
 test('item 11: checkMonthlySchedule suggests open starting dates instead of silently blocking', async () => {
   // The first two Mondays in the window are full; later Mondays are free.
   const blocked = new Set([iso(0), iso(7)]);

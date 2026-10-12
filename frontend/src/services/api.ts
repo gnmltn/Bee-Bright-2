@@ -677,6 +677,22 @@ export interface PlaygroupGroupOption {
   hasRoom: boolean;
 }
 
+/** One existing schedule overlapping a candidate Playgroup window for one child. */
+export interface PlaygroupWindowConflict {
+  enrollmentId: string;
+  date: string;
+  subjectLabel: string;
+  startTime: string;
+  endTime: string;
+}
+
+export interface PlaygroupWindowCheckResult {
+  startTime: string;
+  endTime: string;
+  ok: boolean;
+  conflicts: PlaygroupWindowConflict[];
+}
+
 export interface SuspensionRecord {
   _id: string;
   startDate: string;
@@ -784,6 +800,12 @@ export const scheduleService = {
         ...(params?.endTime ? { endTime: params.endTime } : {}),
       },
     }),
+  /** Preview whether each candidate time window would conflict with any selected child's
+   * existing schedule (1-on-1 or another Playgroup group) on the selected days — used to
+   * proactively disable a conflicting window in the wizard's dropdown before the admin
+   * fills out the rest of the form. Read-only, same overlap check as the submit-time gate. */
+  checkPlaygroupWindows: (data: { enrollmentIds: string[]; daysOfWeek: number[]; startDate?: string; windows: { startTime: string; endTime: string }[] }) =>
+    api.post<{ success: boolean; startDate: string; windows: PlaygroupWindowCheckResult[] }>('/schedules/playgroup-groups/check-windows', data),
   /** Create a new Toddlers Playgroup group (tutorIds/daysOfWeek/startTime/endTime) or join an existing one (groupId) — generates/extends a month of sessions and enrolls the student. */
   createOrJoinPlaygroupGroup: (data: {
     groupId?: string;

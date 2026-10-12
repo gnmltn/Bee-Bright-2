@@ -12,6 +12,7 @@ const {
   checkMonthlySchedule,
   bulkDeleteSchedules,
   listPlaygroupGroups,
+  checkPlaygroupWindows,
   createOrJoinPlaygroupGroup,
   enrollStudentInSession,
   removeStudentFromSession,
@@ -45,6 +46,7 @@ router.post('/monthly', protect, authorize('admin'), createMonthlySchedules);
 router.post('/monthly/check', protect, authorize('admin'), checkMonthlySchedule);
 router.post('/bulk-delete', protect, authorize('admin'), bulkDeleteSchedules);
 router.get('/playgroup-groups', protect, authorize('admin'), listPlaygroupGroups);
+router.post('/playgroup-groups/check-windows', protect, authorize('admin'), checkPlaygroupWindows);
 router.post('/playgroup-groups', protect, authorize('admin'), createOrJoinPlaygroupGroup);
 router.post('/:id/enroll-student', protect, authorize('admin'), enrollStudentInSession);
 router.post('/:id/remove-student', protect, authorize('admin'), removeStudentFromSession);
