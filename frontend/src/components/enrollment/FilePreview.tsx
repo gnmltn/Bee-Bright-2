@@ -19,17 +19,32 @@ function isPdf(src: { dataUrl: string; fileName: string }): boolean {
  *
  * Reused by Step 1 (Requirements), Step 10 (Proof of Payment), the Student Dashboard
  * "Add Child" modal, and the Remarks attachment viewers — do not fork this.
+ *
+ * `open`/`onOpenChange` are optional and only for a caller that already has its own
+ * "View" button elsewhere (e.g. the Certificate feature's History/Progress cards) and
+ * wants to drive this component's modal directly, instead of via its own thumbnail —
+ * pass `hideTrigger` too in that case to skip rendering the thumbnail entirely. Every
+ * existing caller omits all three and keeps today's uncontrolled, click-the-thumbnail
+ * behavior unchanged.
  */
 export default function FilePreview({
   src,
   label,
   className = '',
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger = false,
 }: {
   src: PreviewSource;
   label?: string;
   className?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen !== undefined ? controlledOpen : internalOpen;
+  const setOpen = controlledOpen !== undefined ? (onOpenChange ?? (() => {})) : setInternalOpen;
   const [pdfEmbedUrl, setPdfEmbedUrl] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
   const pdf = src?.dataUrl ? isPdf(src) : false;
@@ -71,55 +86,65 @@ export default function FilePreview({
     };
   }, [open, pdf, src?.dataUrl]);
 
-  if (!src?.dataUrl) return null;
+  // A caller using the controlled `open`/`hideTrigger` mode may open the dialog before
+  // its async src is ready (e.g. still fetching the object URL) — show it with a
+  // spinner rather than rendering nothing, instead of returning null like the
+  // uncontrolled/thumbnail mode does when there's nothing to show yet.
+  if (!src?.dataUrl && !hideTrigger) return null;
 
-  const sizeKb = src.fileSize ? `${(src.fileSize / 1024).toFixed(0)} KB` : '';
+  const sizeKb = src?.fileSize ? `${(src.fileSize / 1024).toFixed(0)} KB` : '';
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className={`group relative block w-full overflow-hidden rounded-lg border border-border bg-muted/40 text-left transition-colors hover:border-amber-400 ${className}`}
-        aria-label={`View ${label || src.fileName} full size`}
-      >
-        {pdf ? (
-          <div className="flex items-center gap-3 p-3">
-            <div className="flex h-14 w-12 flex-shrink-0 items-center justify-center rounded bg-red-50 text-red-500 dark:bg-red-950/30">
-              <FileText className="h-6 w-6" />
+      {!hideTrigger && src?.dataUrl && (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className={`group relative block w-full overflow-hidden rounded-lg border border-border bg-muted/40 text-left transition-colors hover:border-amber-400 ${className}`}
+          aria-label={`View ${label || src.fileName} full size`}
+        >
+          {pdf ? (
+            <div className="flex items-center gap-3 p-3">
+              <div className="flex h-14 w-12 flex-shrink-0 items-center justify-center rounded bg-red-50 text-red-500 dark:bg-red-950/30">
+                <FileText className="h-6 w-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">{src.fileName}</p>
+                <p className="text-xs text-muted-foreground">PDF{sizeKb ? ` · ${sizeKb}` : ''} · click to open</p>
+              </div>
+              <Maximize2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground">{src.fileName}</p>
-              <p className="text-xs text-muted-foreground">PDF{sizeKb ? ` · ${sizeKb}` : ''} · click to open</p>
-            </div>
-            <Maximize2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-          </div>
-        ) : (
-          <>
-            <img
-              src={src.dataUrl}
-              alt={label || src.fileName}
-              className="max-h-48 w-full object-contain bg-white"
-            />
-            <span className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
-              <Maximize2 className="h-3 w-3" /> View full size
-            </span>
-            <span className="block truncate px-2 py-1 text-xs text-muted-foreground">
-              {src.fileName}{sizeKb ? ` · ${sizeKb}` : ''}
-            </span>
-          </>
-        )}
-      </button>
+          ) : (
+            <>
+              <img
+                src={src.dataUrl}
+                alt={label || src.fileName}
+                className="max-h-48 w-full object-contain bg-white"
+              />
+              <span className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+                <Maximize2 className="h-3 w-3" /> View full size
+              </span>
+              <span className="block truncate px-2 py-1 text-xs text-muted-foreground">
+                {src.fileName}{sizeKb ? ` · ${sizeKb}` : ''}
+              </span>
+            </>
+          )}
+        </button>
+      )}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl p-0">
           {/* DialogContent already renders its own close "X" (@/components/ui/dialog) —
               this header only needs the title, not a second close button on top of it. */}
           <DialogTitle className="border-b px-4 py-2 pr-10 text-sm">
-            <span className="truncate">{label || src.fileName}</span>
+            <span className="truncate">{label || src?.fileName || 'Preview'}</span>
           </DialogTitle>
           <div className="max-h-[80vh] overflow-auto bg-muted/30 p-2">
-            {pdf ? (
+            {!src?.dataUrl ? (
+              <div className="flex h-[75vh] items-center justify-center text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : pdf ? (
               pdfEmbedUrl ? (
                 <object data={pdfEmbedUrl} type="application/pdf" className="h-[75vh] w-full rounded">
                   <div className="p-6 text-center text-sm text-muted-foreground">

@@ -41,6 +41,23 @@ function daysForProgram(data: WizardData, programCode: string): string[] {
   return data.preferredDaysByProgram.find((p) => p.programCode === programCode)?.days ?? [];
 }
 
+function getMinutesSinceMidnight(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+// Mirrors backend/controllers/scheduleController.js's timeRangesOverlap exactly (same
+// minutes-since-midnight comparison) — there's no shared code module between this
+// frontend and the backend, so the same proven algorithm is ported here rather than
+// reimplemented differently, instead of literally importing across the runtime boundary.
+function timeRangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
+  const aStart = getMinutesSinceMidnight(startA);
+  const aEnd = getMinutesSinceMidnight(endA);
+  const bStart = getMinutesSinceMidnight(startB);
+  const bEnd = getMinutesSinceMidnight(endB);
+  return aStart < bEnd && bStart < aEnd;
+}
+
 export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   // Which program's Available Days section is the active/editable one, when a parent
@@ -71,7 +88,9 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   const setDaysForProgram = (programCode: string, days: string[]) => {
     const rest = data.preferredDaysByProgram.filter((p) => p.programCode !== programCode);
     update({ preferredDaysByProgram: [...rest, { programCode, days }] });
-    setErrors((prev) => ({ ...prev, [`days:${programCode}`]: '' }));
+    // Changing days can just as easily resolve a slot conflict as cause one — don't
+    // leave a stale conflict message showing once it's actually fixed.
+    setErrors((prev) => ({ ...prev, [`days:${programCode}`]: '', slotConflict: '' }));
   };
 
   const toggleDayForProgram = (programCode: string, requiredDays: number | null, day: string) => {
@@ -130,6 +149,22 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
       // Jump the parent straight to whichever program's Available Days still needs attention.
       setActiveDayStepIndex(firstUnmetIndex);
     }
+
+    // Safety net for a slot that was validly picked at the time but later turned into a
+    // conflict because Available Days changed afterward (the grey-out alone doesn't stop
+    // submission — it just stops NEW picks of a conflicting slot; an already-selected one
+    // stays selected and must be caught here instead). Reuses the exact same
+    // conflictingPick check the slot grid already grays slots out with.
+    const conflictingSelection = (data.preferredSlots ?? []).find(
+      (s) => !!conflictingPick(s.programCode, s.startTime, s.endTime)
+    );
+    if (conflictingSelection) {
+      const conflict = conflictingPick(conflictingSelection.programCode, conflictingSelection.startTime, conflictingSelection.endTime)!;
+      const thisLabel = PROGRAM_LABELS[conflictingSelection.programCode as ActiveProgramCode] ?? conflictingSelection.programCode;
+      const otherLabel = PROGRAM_LABELS[conflict.programCode as ActiveProgramCode] ?? conflict.programCode;
+      errs.slotConflict = `${thisLabel}'s ${conflictingSelection.label} slot now conflicts with ${otherLabel}. Please pick a different time before continuing.`;
+    }
+
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -172,6 +207,9 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
       ? current.filter((s) => s.programCode !== programCode) // clicking the same slot again deselects it
       : [...current.filter((s) => s.programCode !== programCode), { programCode, startTime, endTime, label }];
     update({ preferredSlots: next });
+    // Picking a different (non-conflicting, since a conflicting one is disabled) slot
+    // resolves the conflict this was blocking on — don't leave the message showing.
+    setErrors((prev) => ({ ...prev, slotConflict: '' }));
   };
 
   const slotStatus = (slot: AvailabilitySlot): { text: string; disabled: boolean } => {
@@ -179,6 +217,40 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
     if (slot.available === slot.total) return { text: 'Available', disabled: false };
     return { text: `Available Slots: ${slot.available}`, disabled: false };
   };
+
+  // Two programs only actually conflict if they share at least one selected day — a
+  // time overlap alone isn't a real conflict when e.g. Academic Tutorial only meets
+  // Mon/Tue/Wed and Toddlers Playgroup only meets Thu/Fri/Sat. "Available Days" comes
+  // AFTER "Time Slot Availability" in this wizard though, so at slot-picking time one
+  // or both programs' days may genuinely not be chosen yet — an empty days array is
+  // therefore treated as "not yet known," not as "overlaps everything," so a slot is
+  // never wrongly greyed out before its own and the other program's days exist to
+  // compare. (Examination Preparation's own empty-days state, which deliberately means
+  // "no day preference" rather than "not yet picked," is indistinguishable from that at
+  // this layer — same empty array either way — so it's treated the same, unknown/not-
+  // yet-conflicting, until it or the other program's days are actually set.)
+  const daysOverlap = (codeA: string, codeB: string): boolean => {
+    const daysA = daysForProgram(data, codeA);
+    const daysB = daysForProgram(data, codeB);
+    if (daysA.length === 0 || daysB.length === 0) return false;
+    return daysA.some((d) => daysB.includes(d));
+  };
+
+  // Cross-program conflict check — a slot picked for one program can overlap another
+  // program's slot (e.g. Academic Tutorial 8-9AM vs Toddlers Playgroup 8-10AM), but
+  // only counts as a real conflict when their selected days also overlap (see
+  // daysOverlap above). data.preferredSlots/preferredDaysByProgram already hold every
+  // OTHER program's current picks, so this needs no new state/props — just reads
+  // what's already there. Re-evaluates live on every render since picking a slot OR
+  // changing a program's days updates `data` synchronously, so every program's grid
+  // re-checks itself immediately either way.
+  const conflictingPick = (programCode: string, startTime: string, endTime: string) =>
+    (data.preferredSlots ?? []).find(
+      (s) =>
+        s.programCode !== programCode &&
+        timeRangesOverlap(startTime, endTime, s.startTime, s.endTime) &&
+        daysOverlap(programCode, s.programCode)
+    );
 
   const isMultiProgram = selectedProgramCodes.length > 1;
 
@@ -268,7 +340,12 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
                         .sort(([a], [b]) => a.localeCompare(b))
                         .map(([key, slot]) => {
                           const [startTime, endTime] = key.split('-');
-                          const { text, disabled } = slotStatus(slot);
+                          const { text: bookingText, disabled: bookedOut } = slotStatus(slot);
+                          const conflict = conflictingPick(code, startTime, endTime);
+                          const disabled = bookedOut || !!conflict;
+                          const text = conflict
+                            ? `Conflicts with ${PROGRAM_LABELS[conflict.programCode as ActiveProgramCode] ?? conflict.programCode}`
+                            : bookingText;
                           const selected = pickedForProgram?.startTime === startTime && pickedForProgram?.endTime === endTime;
                           return (
                             <button
@@ -299,6 +376,10 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
             })
           )}
         </div>
+      )}
+
+      {errors.slotConflict && (
+        <p className="text-xs text-destructive -mt-2">{errors.slotConflict}</p>
       )}
 
       {/* ── Available Days — one section per enrolled program ── */}

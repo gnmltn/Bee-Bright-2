@@ -9,6 +9,11 @@ parentOtpExpires: { type: Date, select: false },
 parentOtpAttempts: { type: Number, default: 0, select: false },
 parentOtpLastSentAt: { type: Date, select: false },
 
+// Login brute-force lockout: consecutive wrong-password attempts (resets on a correct
+// password, or once lockedUntil passes and a fresh attempt is made).
+failedLoginAttempts: { type: Number, default: 0, select: false },
+lockedUntil: { type: Date, default: null, select: false },
+
 resetPasswordOtpHash: { type: String, select: false },
 resetPasswordOtpExpires: { type: Date, select: false },
 resetPasswordOtpAttempts: { type: Number, default: 0, select: false },

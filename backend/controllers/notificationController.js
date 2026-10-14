@@ -19,7 +19,9 @@ const Schedule = require('../models/Schedule');
 const Remark = require('../models/Remark');
 const Announcement = require('../models/Announcement');
 const Payment = require('../models/Payment');
+const Certificate = require('../models/Certificate');
 const { listOutstandingBalances } = require('../utils/remainingBalance');
+const { isSessionFullyMarked } = require('../utils/schedulingPolicy');
 
 // Sections whose badge is "new since last seen" (cleared by opening the section).
 const SEEN_SECTIONS = {
@@ -74,10 +76,15 @@ async function childStudentIds(user, childKey) {
 async function parentBadges(user, since, childKey) {
   const ids = await childStudentIds(user, childKey);
   const forChildren = { $or: [{ student: { $in: ids } }, { students: { $in: ids } }] };
-  const [schedule, progress, announcements, owed] = await Promise.all([
+  const [schedule, newRemarks, newCertificates, announcements, owed] = await Promise.all([
     ids.length ? countScheduleChanges(forChildren, since.schedule) : 0,
     ids.length
       ? Remark.countDocuments({ student: { $in: ids }, status: 'published', isCurrentVersion: true, publishedAt: { $gt: since.progress } })
+      : 0,
+    // Certificates share the same Progress badge as Remarks — both are "new things to
+    // see in the Progress tab," and opening that tab clears both at once.
+    ids.length
+      ? Certificate.countDocuments({ students: { $in: ids }, status: 'published', publishedAt: { $gt: since.progress } })
       : 0,
     Announcement.countDocuments({
       status: 'approved',
@@ -86,7 +93,19 @@ async function parentBadges(user, since, childKey) {
     }),
     user.role === 'parent' ? listOutstandingBalances({ parentId: user._id, childKey }) : [],
   ]);
-  return { schedule, progress, announcements, payments: owed.length };
+  return { schedule, progress: newRemarks + newCertificates, announcements, payments: owed.length };
+}
+
+// A Playgroup/group session (students[]) has no single attendanceStatus value — it's
+// only "done" once every enrolled child has an attendanceByStudent entry (see
+// isSessionFullyMarked). Fetch-then-filter in JS, same convention countScheduleChanges
+// already uses just above, rather than a harder-to-read Mongo $expr for the array-size
+// comparison a plain countDocuments filter can't express.
+async function countUnmarkedSessions(filter, since, until) {
+  const rows = await Schedule.find({ ...filter, date: { $gte: since, $lte: until } })
+    .select('attendanceStatus students attendanceByStudent')
+    .lean();
+  return rows.filter((r) => !isSessionFullyMarked(r)).length;
 }
 
 async function tutorBadges(user, since) {
@@ -97,11 +116,7 @@ async function tutorBadges(user, since) {
     Schedule.find({ ...mine, createdAt: { $gt: since.students } }).select('student students').lean(),
     Schedule.find({ ...mine, createdAt: { $lte: since.students } }).select('student students').lean(),
     Schedule.find(mine).select('student students').lean(),
-    Schedule.countDocuments({
-      ...mine,
-      attendanceStatus: 'unmarked',
-      date: { $gte: new Date(Date.now() - ATTENDANCE_LOOKBACK_DAYS * DAY_MS), $lte: new Date() },
-    }),
+    countUnmarkedSessions(mine, new Date(Date.now() - ATTENDANCE_LOOKBACK_DAYS * DAY_MS), new Date()),
     Announcement.countDocuments({
       $or: [
         { authorRole: 'tutor', author: user._id, $or: [{ approvedAt: { $gt: since.announcements } }, { rejectedAt: { $gt: since.announcements } }] },

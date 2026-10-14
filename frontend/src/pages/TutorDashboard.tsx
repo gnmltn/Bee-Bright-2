@@ -217,6 +217,9 @@ export default function TutorDashboard() {
       startTime: string;
       endTime: string;
       attendanceStatus?: 'unmarked' | 'present' | 'absent';
+      /** Per-child attendance for a Playgroup/group session (`students` below) — see
+       *  components/tutor/AttendanceTab.tsx, which is the only reader of this field. */
+      attendanceByStudent?: Array<{ student: string; status: 'present' | 'absent'; markedAt?: string }>;
       sessionType?: 'one-on-one' | 'small-group' | 'playgroup';
       student?: {
         _id: string;
@@ -655,10 +658,15 @@ export default function TutorDashboard() {
   }, [location.hash, user?.role, remarkFilterStudentId]);
 
   // Real-time push (Socket.io) — Overview/Schedule/My Students/Assessments/Announcements/
-  // Remarks refresh live, on top of the existing manual refresh (untouched). Attendance is
-  // deliberately NOT wired here — a tutor is the one marking it, there's nothing another
-  // user could change underneath them to push. The connection itself lives in App.tsx's
-  // RealtimeConnector; this page just listens for the events its own screens care about.
+  // Remarks/Attendance all refresh live, on top of the existing manual refresh
+  // (untouched). Attendance now ALSO pushes: a Toddlers Playgroup session can have
+  // co-tutors, and when one of them marks a child's attendance, the backend's
+  // markAttendance emits the same 'schedule:changed' event this effect already listens
+  // for below (see scheduleController.js), so the generic onScheduleChanged handler
+  // (fetchSessions) picks it up with no extra wiring needed — a co-tutor viewing the
+  // same session sees the update live, with no refresh. The connection itself lives in
+  // App.tsx's RealtimeConnector; this page just listens for the events its own screens
+  // care about.
   // `fetchRemarks` closes over `remarkFilterStudentId` (the Remark History dropdown
   // filter) — listed in this effect's deps so a stale closure doesn't keep refetching with
   // whatever filter was selected when the listener was first registered ("bug (18).pdf"

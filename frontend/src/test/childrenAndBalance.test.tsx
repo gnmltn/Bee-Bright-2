@@ -47,9 +47,28 @@ describe("groupEnrollmentsIntoChildren", () => {
   });
 
   it("a legacy enrollment without a permanent ID still gets its own entry", () => {
-    const children = groupEnrollmentsIntoChildren([{ _id: "x1", enrollmentId: "BB-1", studentSnapshot: { firstName: "Old", lastName: "Record" } }]);
+    const children = groupEnrollmentsIntoChildren([{ _id: "x1", enrollmentId: "BB-1", status: "approved", studentSnapshot: { firstName: "Old", lastName: "Record" } }]);
     expect(children).toHaveLength(1);
     expect(children[0].studentId).toBe("BB-1");
+  });
+
+  it("a child whose only enrollment is still pending admin approval is excluded entirely", () => {
+    const children = groupEnrollmentsIntoChildren([
+      { _id: "x2", enrollmentId: "BB-2", permanentStudentId: "BB-2", status: "pending_approval", studentSnapshot: { firstName: "Rey", lastName: "Soriano" } },
+    ]);
+    expect(children).toHaveLength(0);
+  });
+
+  it("the same child appears the moment admin approves — same list, new status", () => {
+    const pending = [{ _id: "x2", enrollmentId: "BB-2", permanentStudentId: "BB-2", status: "pending_approval", studentSnapshot: { firstName: "Rey", lastName: "Soriano" } }];
+    expect(groupEnrollmentsIntoChildren(pending)).toHaveLength(0);
+    const approved = [{ ...pending[0], status: "approved" }];
+    expect(groupEnrollmentsIntoChildren(approved).map((c) => c.name)).toEqual(["Rey Soriano"]);
+  });
+
+  it("a child already approved stays visible even while a renewal/add-program enrollment is still pending", () => {
+    const children = groupEnrollmentsIntoChildren(ENROLLMENTS); // Leo: e1 approved, e2 submitted
+    expect(children.map((c) => c.name)).toContain("Leo Soriano");
   });
 });
 

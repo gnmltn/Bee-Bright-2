@@ -16,8 +16,8 @@ export interface WeeklyDigestItem {
 }
 
 export const reportService = {
-  generateWeeklyDigest: () =>
-    api.post("/reports/weekly-digest", {}, { responseType: "blob" }),
+  generateWeeklyDigest: (weekStart: string, weekEnd: string) =>
+    api.post("/reports/weekly-digest", { weekStart, weekEnd }, { responseType: "blob" }),
 
   listWeeklyDigests: () =>
     api.get<{ success: boolean; digests: WeeklyDigestItem[]; message?: string }>("/reports/weekly-digest"),

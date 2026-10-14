@@ -842,8 +842,12 @@ export const scheduleService = {
   getMyStudentCards: () => api.get<{ success: boolean; students: TutorStudentCard[] }>('/schedules/my-students'),
   /** studentId is required only for a parent viewing a specific child's classes. */
   getMyClasses: (studentId?: string) => api.get('/schedules/student/my-classes', { params: studentId ? { studentId } : {} }),
-  markAttendance: (scheduleId: string, status: 'present' | 'absent') =>
-    api.patch(`/schedules/${scheduleId}/attendance`, { status }),
+  /** studentId is required only for a Toddlers Playgroup/group session's NEW per-child
+   * marking (Attendance tab) — each enrolled child gets their own independent status.
+   * Omitting it on a group session falls back to the older whole-group toggle (the
+   * Schedule tab / Overview "Today's Schedule" popup), unchanged. */
+  markAttendance: (scheduleId: string, status: 'present' | 'absent', studentId?: string) =>
+    api.patch(`/schedules/${scheduleId}/attendance`, studentId ? { status, studentId } : { status }),
 };
 
 export const weeklyScheduleService = {
@@ -1095,6 +1099,55 @@ export const remarkService = {
   getAttachmentObjectUrl: async (id: string): Promise<string> => {
     const res = await api.get(`/remarks/${id}/attachment`, { responseType: 'blob' });
     return URL.createObjectURL(res.data as Blob);
+  },
+};
+
+export interface CertificateItem {
+  _id: string;
+  students: { _id: string; firstName: string; lastName: string; middleName?: string }[];
+  file: { path: string; fileName: string; mimetype: string; size: number; uploadedAt: string };
+  message: string;
+  publishedBy: { _id: string; firstName: string; lastName: string } | null;
+  publishedAt: string;
+  replacedAt: string | null;
+  status: 'published' | 'retracted';
+  retractedAt: string | null;
+  /** Admin History list only — true while still within the retract/replace window. */
+  canModify?: boolean;
+}
+
+/** The parent/student-facing shape — `students` is stripped server-side since a parent
+ * only ever asks for one child's own certificates. */
+export type MyCertificateItem = Omit<CertificateItem, 'students' | 'canModify'>;
+
+export const certificateService = {
+  upload: (data: { studentIds: string[]; fileDataUrl: string; fileName: string; message?: string }) =>
+    api.post<{ success: boolean; message: string; certificate: CertificateItem }>('/certificates', data),
+  getHistory: () => api.get<{ success: boolean; history: CertificateItem[] }>('/certificates/history'),
+  retract: (id: string) => api.patch<{ success: boolean; message: string }>(`/certificates/${id}/retract`),
+  replace: (id: string, data: { fileDataUrl: string; fileName: string; message?: string }) =>
+    api.patch<{ success: boolean; message: string; certificate: CertificateItem }>(`/certificates/${id}/replace`, data),
+  /** studentId is required only for a parent viewing a specific child's certificates. */
+  getMyProgress: (studentId?: string) =>
+    api.get<{ success: boolean; certificates: MyCertificateItem[] }>('/certificates/my-progress', { params: studentId ? { studentId } : {} }),
+  /** Fetches the original file through the protected, auth-checked route and returns a
+   * local object URL — same pattern as remarkService.getAttachmentObjectUrl. */
+  getFileObjectUrl: async (id: string): Promise<string> => {
+    const res = await api.get(`/certificates/${id}/file`, { responseType: 'blob' });
+    return URL.createObjectURL(res.data as Blob);
+  },
+  /** Downloads the certificate as a .pdf (the server converts an image file on the fly)
+   * and triggers a normal browser file-save via a temporary <a download>. */
+  downloadPdf: async (id: string, suggestedFileName: string): Promise<void> => {
+    const res = await api.get(`/certificates/${id}/download`, { responseType: 'blob' });
+    const url = URL.createObjectURL(res.data as Blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = suggestedFileName.replace(/\.(jpg|jpeg|png|pdf)$/i, '') + '.pdf';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   },
 };
 

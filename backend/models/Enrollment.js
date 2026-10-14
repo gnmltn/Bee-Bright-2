@@ -232,6 +232,12 @@ const enrollmentSchema = new mongoose.Schema({
     assessedBy: { type: String, default: '' },
     completedAt: { type: Date, default: null },
   },
+
+  // Certificate feature — programCodes this enrollment has already triggered the
+  // admin "2 sessions left" reminder email for, so it only ever fires once per
+  // program per enrollment (see utils/sessionReminderScheduler.js). A Renew/Add
+  // Program enrollment is a brand-new document, so this naturally resets per cycle.
+  sessionReminderSentPrograms: [{ type: String }],
 }, {
   timestamps: true
 });

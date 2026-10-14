@@ -41,6 +41,7 @@ const weeklyScheduleRoutes = require('./routes/weeklyScheduleRoutes');
 const sessionEnrollmentRoutes = require('./routes/sessionEnrollmentRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const remarkRoutes = require('./routes/remarkRoutes');
+const certificateRoutes = require('./routes/certificateRoutes');
 const announcementRoutes = require('./routes/announcementRoutes');
 const auditRoutes = require('./routes/auditRoutes');
 const escalationRoutes = require('./routes/escalationRoutes');
@@ -54,6 +55,7 @@ const { migrateScheduleIndexes } = require('./utils/scheduleIndexMigration');
 const { ensureRetiredPricing } = require('./utils/retireLegacyPricing');
 const { ensureAssessmentTemplates } = require('./utils/ensureAssessmentTemplates');
 const { backfillPermanentStudentIds } = require('./utils/studentIdentity');
+const { startSessionReminderScheduler } = require('./utils/sessionReminderScheduler');
 const { getAuthTokenFromCookies } = require('./utils/authCookie');
 const { isOriginAllowed } = require('./config/corsOrigins');
 const { initRealtime } = require('./utils/realtime');
@@ -135,6 +137,7 @@ mongoose.connect(process.env.MONGODB_URI, mongoConnectionOptions)
     await ensureAssessmentTemplates();
     const backfilled = await backfillPermanentStudentIds();
     if (backfilled) console.log(`🆔 Backfilled permanent Student IDs on ${backfilled} enrollment(s)`);
+    startSessionReminderScheduler();
   } catch (err) {
     console.error('❌ Startup initialization task failed:', err);
   }
@@ -155,6 +158,7 @@ app.use('/api/admin/weekly-schedules', weeklyScheduleRoutes);
 app.use('/api/sessions', sessionEnrollmentRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/remarks', remarkRoutes);
+app.use('/api/certificates', certificateRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/audit-logs', auditRoutes);
 app.use('/api/escalations', escalationRoutes);

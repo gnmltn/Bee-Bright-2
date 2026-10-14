@@ -37,6 +37,7 @@ const { parentOwnsStudent, resolveParentIdsForStudents } = require('../utils/par
 const { permanentIdOf } = require('../utils/studentIdentity');
 const { isRoomDoubleBooked, isOneOnOneHourFull, filterLiveSessions } = require('../utils/weeklySchedulingUtils');
 const { emitToAdmins, emitToParents, emitToTutors } = require('../utils/realtime');
+const { attachCycleByStudent } = require('../utils/attendanceCycles');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
 
@@ -2999,11 +3000,12 @@ const getMySessions = async (req, res) => {
       .sort({ date: 1, startTime: 1 })
       .lean();
     const schedules = dedupeSchedulesForResponse(schedulesRaw);
+    const withCycles = await attachCycleByStudent(schedules);
 
     res.status(200).json({
       success: true,
-      count: schedules.length,
-      schedules
+      count: withCycles.length,
+      schedules: withCycles
     });
   } catch (error) {
     res.status(500).json({
@@ -3194,7 +3196,7 @@ const markAttendance = async (req, res) => {
       });
     }
     const { id: scheduleId } = req.params;
-    const { status } = req.body || {};
+    const { status, studentId } = req.body || {};
     if (!['present', 'absent'].includes(status)) {
       return res.status(400).json({
         success: false,
@@ -3222,12 +3224,41 @@ const markAttendance = async (req, res) => {
     }
 
     const markedAt = new Date();
-    schedule.attendanceStatus = status;
+    const groupStudentIds = Array.isArray(schedule.students) ? schedule.students.map(String) : [];
+    const isGroupSession = groupStudentIds.length > 0;
+
+    if (isGroupSession && studentId) {
+      // Per-child marking (Attendance tab) — a Toddlers Playgroup session can have
+      // some children Present and others Absent at once, so only THIS child's entry
+      // changes; the rest of the group's own entries are untouched.
+      if (!groupStudentIds.includes(String(studentId))) {
+        return res.status(400).json({
+          success: false,
+          message: 'That student is not enrolled in this session.'
+        });
+      }
+      schedule.attendanceByStudent = (schedule.attendanceByStudent || [])
+        .filter((a) => String(a.student) !== String(studentId));
+      schedule.attendanceByStudent.push({ student: studentId, status, markedAt });
+    } else if (isGroupSession) {
+      // Legacy whole-group toggle (the Schedule tab / Overview "Today's Schedule"
+      // popup, which predates per-child marking and still only sends `status` with
+      // no studentId) — applies the same status to every enrolled child at once,
+      // exactly as it always has, and keeps the top-level field in sync for that
+      // popup's own "present"/"absent" caption.
+      schedule.attendanceByStudent = groupStudentIds.map((sid) => ({ student: sid, status, markedAt }));
+      schedule.attendanceStatus = status;
+    } else {
+      schedule.attendanceStatus = status;
+    }
     schedule.attendanceMarkedAt = markedAt;
     await schedule.save();
 
     let autoMarkedPastSessions = 0;
-    if (status === 'present' && isToday) {
+    // One-on-one only: a group session has no singular `schedule.student`, so this
+    // would otherwise match (and wrongly bulk-auto-mark) unrelated Playgroup rows
+    // that merely share the same subject.
+    if (status === 'present' && isToday && !isGroupSession) {
       const utcTodayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
       const autoMarkResult = await Schedule.updateMany(
         {
@@ -3256,15 +3287,23 @@ const markAttendance = async (req, res) => {
       status: 'SUCCESS',
       metadata: {
         scheduleId,
-        studentId: schedule.student,
+        studentId: studentId || schedule.student,
         status,
         sessionDate: schedule.date,
         autoMarkedPastSessions
       }
     }).catch(() => {});
 
+    // Realtime: a Playgroup session can have co-tutors — push this update to every
+    // tutor assigned to it (not just the one who marked it) so a co-tutor viewing the
+    // same session's attendance sees it live, with no refresh. Reuses the existing
+    // 'schedule:changed' event the tutor dashboard already listens for everywhere else.
+    const tutorIds = (schedule.tutors && schedule.tutors.length ? schedule.tutors : [schedule.tutor]).filter(Boolean);
+    emitScheduleChanged({ tutorIds });
+
     const populated = await Schedule.findById(schedule._id)
       .populate('student', 'firstName lastName middleName')
+      .populate('students', 'firstName lastName middleName')
       .populate('subject', 'name code')
       .lean();
     res.status(200).json({

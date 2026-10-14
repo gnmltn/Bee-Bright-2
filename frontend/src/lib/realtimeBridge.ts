@@ -25,10 +25,21 @@ export const REALTIME_EVENTS = {
   /** A tutor just submitted a new remark for review — Admin's own Remarks review queue
    *  should refresh live. */
   REMARK_NEW: 'bb:rt:remark-new',
+  CERTIFICATE_PUBLISHED: 'bb:rt:certificate-published',
+  CERTIFICATE_RETRACTED: 'bb:rt:certificate-retracted',
+  CERTIFICATE_REPLACED: 'bb:rt:certificate-replaced',
   PAYMENT_STATUS_CHANGED: 'bb:rt:payment-status-changed',
+  /** A child's own enrollment status just changed (e.g. admin's final Approve step) —
+   *  distinct from PAYMENT_STATUS_CHANGED, which fires on payment verify/reject and can
+   *  land well before the enrollment itself is actually approved. */
+  ENROLLMENT_STATUS_CHANGED: 'bb:rt:enrollment-status-changed',
   ASSESSMENT_COMPLETED: 'bb:rt:assessment-completed',
   USER_CHANGED: 'bb:rt:user-changed',
   REQUEST_NEW: 'bb:rt:request-new',
+  /** A NEW weekly digest was just generated (never fires on a cache-hit, since nothing
+   *  changed then) — lets another admin's open Reports-tab week picker show "Already
+   *  generated" live instead of only after a manual refresh. */
+  DIGEST_NEW: 'bb:rt:digest-new',
   /** Fired after a RECONNECT (never the first connect) — no payload. Listeners should
    *  silently refetch (no toast) so a dropped connection resolves to "caught up." */
   RECONNECT_CATCHUP: 'bb:rt:reconnect-catchup',

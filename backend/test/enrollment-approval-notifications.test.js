@@ -33,6 +33,10 @@ hardDeleteUserModule.hardDeleteUser = async (user, session) => {
 const runTransactionSafeModule = require('../utils/runTransactionSafe');
 runTransactionSafeModule.runTransactionSafe = async (work) => work(null);
 
+const realtimeModule = require('../utils/realtime');
+const emitToParentCalls = [];
+realtimeModule.emitToParent = (parentId, event, payload) => { emitToParentCalls.push({ parentId, event, payload }); };
+
 const Enrollment = require('../models/Enrollment');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
@@ -126,6 +130,40 @@ test('adminApproveEnrollment: emails the parent\'s registered address, naming th
     assert.equal(approvalEmail.opts.to, 'parent1@example.com');
     assert.match(approvalEmail.opts.subject, /approved/i);
     assert.match(approvalEmail.opts.html, /Ana Cruz/);
+  } finally { restore(); }
+});
+
+// Approval previously emitted no realtime event at all — anything gated purely on "is this
+// child's enrollment approved" (Renew/Add Program lock, Viewing-child switcher) had no way
+// to update live; the parent only learned about it on their next full page load.
+test('adminApproveEnrollment: pushes a live enrollment:statusChanged event to the parent', async () => {
+  sentEmails.length = 0;
+  emitToParentCalls.length = 0;
+  const enrollment = makeEnrollment();
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  const { restore } = stubCommon({ enrollment, parentUser });
+  try {
+    const res = mockRes();
+    await adminApproveEnrollment({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' }, body: {} }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    assert.equal(emitToParentCalls.length, 1);
+    assert.equal(emitToParentCalls[0].parentId, 'parent-1');
+    assert.equal(emitToParentCalls[0].event, 'enrollment:statusChanged');
+    assert.equal(emitToParentCalls[0].payload.status, 'approved');
+  } finally { restore(); }
+});
+
+test('adminApproveEnrollment: BLOCKED approval (payment not verified) never emits the live status event', async () => {
+  sentEmails.length = 0;
+  emitToParentCalls.length = 0;
+  const enrollment = makeEnrollment({ status: 'payment_under_verification' });
+  const parentUser = { _id: 'parent-1', email: 'parent1@example.com', firstName: 'Maria', lastName: 'Cruz' };
+  const { restore } = stubCommon({ enrollment, parentUser, payments: [{ status: 'submitted', paymentType: 'down' }] });
+  try {
+    const res = mockRes();
+    await adminApproveEnrollment({ params: { id: 'enr-1' }, user: { _id: 'admin-1', role: 'admin' }, body: {} }, res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.equal(emitToParentCalls.length, 0);
   } finally { restore(); }
 });
 

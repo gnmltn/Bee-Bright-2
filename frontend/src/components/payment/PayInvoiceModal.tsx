@@ -19,17 +19,18 @@ import { enrollmentService } from "@/services/api";
 // legacy path, in case an enrollment's down payment somehow wasn't submitted during
 // the wizard) and the new pay-remaining-balance flow (kind="remaining"). See
 // Parent_Payments_50Percent_Display_and_Payment_Methods.pdf.
-// Real logo assets — currently unused, kept for when the tiles below switch back from
-// QR codes to logos.
+// Real logo assets. GCash has no image file in assets — uses a brand-colour SVG badge
+// instead, same as before the QR detour.
 import bdoLogo from "@/assets/bdo_logo.jpg";
 import maribankLogo from "@/assets/maribank_logo.png";
 
-// Temporary QR-code placeholders (replacing each method's logo in the tile below). Only
-// one real QR image exists so far (QrPAYMENT.jpg), reused for all three methods — each
-// gets its OWN named constant so the real, separate GCash/MariBank/BDO QR codes can be
-// dropped in later one at a time, just by changing each constant's import below. No
-// other code in this file needs to change when that happens. Kept in sync with the same
-// placeholder setup in enrollment/steps/Step10Billing.tsx.
+// QR-code placeholders — shown only AFTER a tile is clicked (see `revealedQr` below),
+// not by default. Only one real QR image exists so far (QrPAYMENT.jpg), reused for all
+// three methods — each gets its OWN named constant so the real, separate GCash/
+// MariBank/BDO QR codes can be dropped in later one at a time, just by changing each
+// constant's import below. No other code in this file needs to change when that
+// happens. Kept in sync with the same placeholder setup in
+// enrollment/steps/Step10Billing.tsx.
 import qrPlaceholder from "@/assets/QrPAYMENT.jpg";
 const GCASH_QR = qrPlaceholder;
 const MARIBANK_QR = qrPlaceholder;
@@ -44,8 +45,22 @@ const METHODS = [
     accountName: "Bee Bright Tutorial Center",
     accountNumber: "09307517208",
     branch: null as string | null,
-    // Temporary QR placeholder — swap GCASH_QR's import above once the real GCash QR is ready.
-    logo: <img src={GCASH_QR} alt="GCash QR code" className="h-20 w-20 sm:h-32 sm:w-32 object-contain" draggable={false} />,
+    // GCash brand SVG badge — no image file available in assets. w-full/h-full (not
+    // max-w/max-h) makes it fill the shared tile image slot, scaling UP to that slot's
+    // full size (SVG's default preserveAspectRatio keeps it undistorted) rather than
+    // floating small inside a bigger box.
+    logo: (
+      <svg viewBox="0 0 88 32" className="w-full h-full" aria-label="GCash" role="img">
+        <rect width="88" height="32" rx="7" fill="#0166FF" />
+        <text x="44" y="22" fontSize="17" fontWeight="bold" fill="white" fontFamily="Arial, sans-serif" textAnchor="middle">
+          GCash
+        </text>
+      </svg>
+    ),
+    // Shown only once this tile has actually been clicked — swap GCASH_QR's import
+    // above once the real GCash QR is ready. Same slot size as the logo, kept at its
+    // full readable/scannable size — nothing shrinks down for this.
+    qr: <img src={GCASH_QR} alt="GCash QR code" className="w-full h-full object-contain" draggable={false} />,
   },
   {
     id: "maribank" as const,
@@ -55,8 +70,11 @@ const METHODS = [
     accountName: "Bee Bright Tutorial Center",
     accountNumber: "5678-9012-3456",
     branch: "Main Branch",
-    // Temporary QR placeholder — swap MARIBANK_QR's import above once the real MariBank QR is ready.
-    logo: <img src={MARIBANK_QR} alt="MariBank QR code" className="h-20 w-20 sm:h-32 sm:w-32 object-contain" draggable={false} />,
+    logo: <img src={maribankLogo} alt="MariBank" className="w-full h-full object-contain" draggable={false} />,
+    // Shown only once this tile has actually been clicked — swap MARIBANK_QR's import
+    // above once the real MariBank QR is ready. Same slot size as the logo, kept at
+    // its full readable/scannable size.
+    qr: <img src={MARIBANK_QR} alt="MariBank QR code" className="w-full h-full object-contain" draggable={false} />,
   },
   {
     id: "bdo" as const,
@@ -66,8 +84,11 @@ const METHODS = [
     accountName: "Bee Bright Tutorial Center",
     accountNumber: "0098-7654-3210",
     branch: "Main Branch",
-    // Temporary QR placeholder — swap BDO_QR's import above once the real BDO QR is ready.
-    logo: <img src={BDO_QR} alt="BDO QR code" className="h-20 w-20 sm:h-32 sm:w-32 object-contain" draggable={false} />,
+    logo: <img src={bdoLogo} alt="BDO" className="w-full h-full object-contain" draggable={false} />,
+    // Shown only once this tile has actually been clicked — swap BDO_QR's import
+    // above once the real BDO QR is ready. Same slot size as the logo, kept at its
+    // full readable/scannable size.
+    qr: <img src={BDO_QR} alt="BDO QR code" className="w-full h-full object-contain" draggable={false} />,
   },
 ];
 
@@ -94,6 +115,12 @@ interface PayInvoiceModalProps {
 
 export default function PayInvoiceModal({ isOpen, onClose, enrollmentId, invoiceLabel, amount, kind, onSubmitted, alreadyPaid }: PayInvoiceModalProps) {
   const [selectedMethodId, setSelectedMethodId] = useState<(typeof METHODS)[number]["id"]>("gcash");
+  // Deliberately separate from selectedMethodId (which already defaults to "gcash" for
+  // the instructions panel below, unrelated to this): a QR only becomes visible once
+  // its OWN tile has actually been clicked, so opening this modal never exposes a
+  // scannable QR with zero interaction — not even GCash's, despite it being the
+  // pre-selected default method.
+  const [revealedQr, setRevealedQr] = useState<(typeof METHODS)[number]["id"] | null>(null);
   const [proof, setProof] = useState<{ dataUrl: string; fileName: string; fileSize: number } | null>(null);
   const [payerReference, setPayerReference] = useState("");
   const [copying, setCopying] = useState<string | null>(null);
@@ -194,18 +221,28 @@ export default function PayInvoiceModal({ isOpen, onClose, enrollmentId, invoice
             <div className="grid grid-cols-3 gap-2 sm:gap-3">
               {METHODS.map((m) => {
                 const isSelected = selectedMethodId === m.id;
+                const qrRevealed = revealedQr === m.id;
                 return (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => setSelectedMethodId(m.id)}
+                    onClick={() => { setSelectedMethodId(m.id); setRevealedQr(m.id); }}
                     aria-pressed={isSelected}
                     className={`relative p-2 sm:p-3 rounded-xl border-2 flex flex-col items-center gap-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                       isSelected ? "border-amber-500 shadow-sm" : "border-border hover:border-amber-300"
                     }`}
                     style={{ background: isSelected ? m.bgSelected : undefined }}
                   >
-                    <div className="h-20 w-20 sm:h-32 sm:w-32 flex items-center justify-center">{m.logo}</div>
+                    {/* ONE fixed size for every tile's image slot, logo or QR, so the
+                        3 tiles always stay uniform next to each other — sized for the
+                        QR code to stay fully readable/scannable. Logos scale UP to
+                        fill this same slot (w-full h-full on each, not max-w/max-h)
+                        rather than floating small inside it. This is the narrowest of
+                        the 4 places the Billing & Payment tiles render (sm:max-w-lg
+                        dialog), so 3 tiles at this size still fit side by side. */}
+                    <div className="h-20 w-20 sm:h-32 sm:w-32 flex items-center justify-center">
+                      {qrRevealed ? m.qr : m.logo}
+                    </div>
                     <span className="text-xs font-semibold text-foreground">{m.label}</span>
                     {isSelected && (
                       <span className="absolute top-1.5 right-1.5 h-4 w-4 rounded-full bg-amber-500 flex items-center justify-center">

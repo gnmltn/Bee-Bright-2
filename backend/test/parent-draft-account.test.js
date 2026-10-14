@@ -340,3 +340,29 @@ test('a token that is not enrollment-scoped is not treated as a pending signup',
     assert.equal(s.log.userSaves.length, 0);
   } finally { s.restore(); }
 });
+
+test('an EXPIRED enrollment token gets a specific "session expired" message, not a generic auth error', async () => {
+  const s = stubSubmit(verifiedPending());
+  try {
+    const res = fakeRes();
+    const req = wizardReq(submitBody());
+    // expiresIn accepts a negative offset, producing a token whose exp is already past.
+    req.headers.authorization = `Bearer ${jwt.sign({ id: PENDING_ID, scope: 'enrollment' }, process.env.JWT_SECRET, { expiresIn: -10 })}`;
+    await submitEnrollment(req, res);
+    assert.equal(res.statusCode, 401, JSON.stringify(res.body));
+    assert.match(res.body.message, /session has expired/i);
+    assert.doesNotMatch(res.body.message, /^Authentication required\.?$/, 'must not collapse into the generic "no token" message');
+    assert.equal(s.log.userSaves.length, 0);
+  } finally { s.restore(); }
+});
+
+test('a valid enrollment token whose pending record is already gone also gets the "session expired" message', async () => {
+  const s = stubSubmit(null);
+  try {
+    const res = fakeRes();
+    await submitEnrollment(wizardReq(submitBody()), res);
+    assert.equal(res.statusCode, 401, JSON.stringify(res.body));
+    assert.match(res.body.message, /session has expired/i);
+    assert.equal(s.log.userSaves.length, 0);
+  } finally { s.restore(); }
+});

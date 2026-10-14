@@ -12,6 +12,7 @@ const User = require('../models/User');
 const Schedule = require('../models/Schedule');
 const Remark = require('../models/Remark');
 const Announcement = require('../models/Announcement');
+const Certificate = require('../models/Certificate');
 const { computeRemainingBalance } = require('../utils/remainingBalance');
 const { getPendingBalances } = require('../controllers/paymentController');
 const { summarizeSchedulePattern } = require('../controllers/scheduleController');
@@ -163,7 +164,7 @@ test('getBadges (admin): action counts are state, "users" is new-since-seen and 
 test('getBadges (parent): schedule / progress / announcements are scoped to the parent\'s children; Payments counts enrollments still owing the remaining 50%', async () => {
   const origs = {
     uFindById: User.findById, uUpdateOne: User.updateOne, eDistinct: Enrollment.distinct, eFind: Enrollment.find,
-    sFind: Schedule.find, rCount: Remark.countDocuments, aCount: Announcement.countDocuments, pFind: Payment.find,
+    sFind: Schedule.find, rCount: Remark.countDocuments, cCount: Certificate.countDocuments, aCount: Announcement.countDocuments, pFind: Payment.find,
   };
   const seen = new Date('2026-09-01T00:00:00Z');
   const captured = {};
@@ -172,6 +173,8 @@ test('getBadges (parent): schedule / progress / announcements are scoped to the 
   Enrollment.distinct = async () => ['kid-1', 'kid-2'];
   Schedule.find = (f) => { captured.schedule = f; return { select: () => ({ lean: async () => [{ createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10') }] }) }; };
   Remark.countDocuments = async (f) => { captured.remarks = f; return 2; };
+  // Progress combines new Remarks and new Certificates into one badge number.
+  Certificate.countDocuments = async (f) => { captured.certificates = f; return 5; };
   Announcement.countDocuments = async (f) => { captured.announcements = f; return 3; };
   Enrollment.find = () => ({ populate: () => ({ select: () => ({ lean: async () => [
     { _id: 'e1', parent: { _id: 'u1' }, status: 'approved', totalFee: 2400 },
@@ -186,25 +189,29 @@ test('getBadges (parent): schedule / progress / announcements are scoped to the 
     const res = mockRes();
     await getBadges({ user: { _id: 'u1' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
-    assert.deepEqual(res._body.badges, { schedule: 1, progress: 2, announcements: 3, payments: 1 });
+    assert.deepEqual(res._body.badges, { schedule: 1, progress: 7, announcements: 3, payments: 1 }, '2 new remarks + 5 new certificates = 7');
     assert.deepEqual(captured.schedule.$or, [{ student: { $in: ['kid-1', 'kid-2'] } }, { students: { $in: ['kid-1', 'kid-2'] } }]);
     assert.equal(captured.remarks.status, 'published');
     assert.equal(captured.remarks.isCurrentVersion, true);
     assert.deepEqual(captured.remarks.student, { $in: ['kid-1', 'kid-2'] });
+    assert.equal(captured.certificates.status, 'published');
+    assert.deepEqual(captured.certificates.students, { $in: ['kid-1', 'kid-2'] });
+    assert.deepEqual(captured.certificates.publishedAt, { $gt: seen });
   } finally {
     User.findById = origs.uFindById; User.updateOne = origs.uUpdateOne; Enrollment.distinct = origs.eDistinct; Enrollment.find = origs.eFind;
-    Schedule.find = origs.sFind; Remark.countDocuments = origs.rCount; Announcement.countDocuments = origs.aCount; Payment.find = origs.pFind;
+    Schedule.find = origs.sFind; Remark.countDocuments = origs.rCount; Certificate.countDocuments = origs.cCount; Announcement.countDocuments = origs.aCount; Payment.find = origs.pFind;
   }
 });
 
 test('getBadges (parent): a schedule that only changed because the tutor marked attendance is not a "new schedule"', async () => {
-  const origs = { uFindById: User.findById, uUpdateOne: User.updateOne, eDistinct: Enrollment.distinct, sFind: Schedule.find, rCount: Remark.countDocuments, aCount: Announcement.countDocuments, eFind: Enrollment.find };
+  const origs = { uFindById: User.findById, uUpdateOne: User.updateOne, eDistinct: Enrollment.distinct, sFind: Schedule.find, rCount: Remark.countDocuments, cCount: Certificate.countDocuments, aCount: Announcement.countDocuments, eFind: Enrollment.find };
   const seen = new Date('2026-09-01T00:00:00Z');
   User.findById = () => ({ select: async () => userDoc('parent', { schedule: seen, progress: seen, announcements: seen }) });
   User.updateOne = async () => {};
   Enrollment.distinct = async () => ['kid-1'];
   Enrollment.find = () => ({ populate: () => ({ select: () => ({ lean: async () => [] }) }) });
   Remark.countDocuments = async () => 0;
+  Certificate.countDocuments = async () => 0;
   Announcement.countDocuments = async () => 0;
   const marked = new Date('2026-09-10T10:00:00Z');
   Schedule.find = () => ({ select: () => ({ lean: async () => [
@@ -219,43 +226,55 @@ test('getBadges (parent): a schedule that only changed because the tutor marked 
     assert.equal(res._body.badges.schedule, 1);
   } finally {
     User.findById = origs.uFindById; User.updateOne = origs.uUpdateOne; Enrollment.distinct = origs.eDistinct; Schedule.find = origs.sFind;
-    Remark.countDocuments = origs.rCount; Announcement.countDocuments = origs.aCount; Enrollment.find = origs.eFind;
+    Remark.countDocuments = origs.rCount; Certificate.countDocuments = origs.cCount; Announcement.countDocuments = origs.aCount; Enrollment.find = origs.eFind;
   }
 });
 
 test('getBadges (tutor): new students, schedule changes, unmarked past sessions; only REAL assessments count', async () => {
   const origs = {
-    uFindById: User.findById, uUpdateOne: User.updateOne, sFind: Schedule.find, sCount: Schedule.countDocuments,
+    uFindById: User.findById, uUpdateOne: User.updateOne, sFind: Schedule.find,
     aCount: Announcement.countDocuments, eCount: Enrollment.countDocuments,
   };
   const seen = new Date('2026-09-01T00:00:00Z');
   const captured = {};
   User.findById = () => ({ select: async () => userDoc('tutor', { students: seen, assessments: seen, schedule: seen, announcements: seen }) });
   User.updateOne = async () => {};
-  // Schedule.find is used for: schedule changes (updatedAt), newly created, earlier, and all assigned.
+  // Schedule.find is used for: schedule changes (updatedAt), newly created, earlier,
+  // all assigned, and (since Certificate feature's attendance work) the "unmarked
+  // sessions" count — distinguished by its `date.$gte` filter, since a Playgroup/group
+  // session can't be counted "unmarked" with a plain attendanceStatus Mongo filter
+  // (isSessionFullyMarked checks attendanceByStudent against students[] in JS instead).
   Schedule.find = (f) => ({
     select: () => ({
       lean: async () => {
         if (f.updatedAt) return [{ createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10') }, { createdAt: new Date('2026-09-11'), updatedAt: new Date('2026-09-11') }];
         if (f.createdAt?.$gt) return [{ student: 'new-kid' }, { student: 'old-kid' }];
         if (f.createdAt?.$lte) return [{ student: 'old-kid' }];
+        if (f.date?.$gte) {
+          captured.unmarked = f;
+          return [
+            { attendanceStatus: 'unmarked', students: [] }, // 1-on-1, not marked — counts
+            { attendanceStatus: 'present', students: [] }, // 1-on-1, marked — does not count
+            { students: ['s1', 's2'], attendanceByStudent: [{ student: 's1', status: 'present' }] }, // 1 of 2 marked — counts
+            { students: ['s3', 's4'], attendanceByStudent: [{ student: 's3', status: 'present' }, { student: 's4', status: 'absent' }] }, // fully marked — does not count
+          ];
+        }
         return [{ student: 'new-kid' }, { student: 'old-kid' }];
       },
     }),
   });
-  Schedule.countDocuments = async (f) => { captured.unmarked = f; return 2; };
   Announcement.countDocuments = async () => 1;
   Enrollment.countDocuments = async (f) => { captured.assessment = f; return 1; };
   try {
     const res = mockRes();
     await getBadges({ user: { _id: 'u1' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
-    assert.deepEqual(res._body.badges, { students: 1, assessments: 1, schedule: 2, attendance: 2, announcements: 1 });
-    assert.equal(captured.unmarked.attendanceStatus, 'unmarked');
+    assert.deepEqual(res._body.badges, { students: 1, assessments: 1, schedule: 2, attendance: 2, announcements: 1 }, '1 unmarked one-on-one + 1 partially-marked Playgroup session = 2');
+    assert.ok(captured.unmarked.date.$gte instanceof Date);
     assert.equal(captured.assessment['preEnrollmentAssessment.applicable'], true, 'skipped assessments must not count');
     assert.deepEqual(captured.assessment.student, { $in: ['new-kid', 'old-kid'] });
   } finally {
-    User.findById = origs.uFindById; User.updateOne = origs.uUpdateOne; Schedule.find = origs.sFind; Schedule.countDocuments = origs.sCount;
+    User.findById = origs.uFindById; User.updateOne = origs.uUpdateOne; Schedule.find = origs.sFind;
     Announcement.countDocuments = origs.aCount; Enrollment.countDocuments = origs.eCount;
   }
 });
@@ -263,7 +282,7 @@ test('getBadges (tutor): new students, schedule changes, unmarked past sessions;
 test('getBadges (parent): counts are scoped to the SELECTED child - switching child never carries over another child balance or seen state', async () => {
   const origs = {
     uFindById: User.findById, uUpdateOne: User.updateOne, eDistinct: Enrollment.distinct, eFind: Enrollment.find,
-    sFind: Schedule.find, rCount: Remark.countDocuments, aCount: Announcement.countDocuments, pFind: Payment.find,
+    sFind: Schedule.find, rCount: Remark.countDocuments, cCount: Certificate.countDocuments, aCount: Announcement.countDocuments, pFind: Payment.find,
   };
   const seenLegacy = new Date('2026-09-01T00:00:00Z');
   const seenLeo = new Date('2026-09-20T00:00:00Z');
@@ -273,6 +292,7 @@ test('getBadges (parent): counts are scoped to the SELECTED child - switching ch
   Enrollment.distinct = async (_field, f) => { cap.distinctFilter = f; return f.$or[0].permanentStudentId === 'BB-LEO' ? ['leo-user'] : ['jake-user']; };
   Schedule.find = (f) => { cap.scheduleFilter = f; return { select: () => ({ lean: async () => [] }) }; };
   Remark.countDocuments = async () => 0;
+  Certificate.countDocuments = async () => 0;
   Announcement.countDocuments = async () => 0;
   // Only Leo has an unpaid balance; the Enrollment.find filter must be limited to the chosen child.
   Enrollment.find = (f) => {
@@ -295,7 +315,7 @@ test('getBadges (parent): counts are scoped to the SELECTED child - switching ch
     assert.equal(cap.baseline, undefined, 'the older per-section seen value is the fallback, so no baseline write is needed');
   } finally {
     User.findById = origs.uFindById; User.updateOne = origs.uUpdateOne; Enrollment.distinct = origs.eDistinct; Enrollment.find = origs.eFind;
-    Schedule.find = origs.sFind; Remark.countDocuments = origs.rCount; Announcement.countDocuments = origs.aCount; Payment.find = origs.pFind;
+    Schedule.find = origs.sFind; Remark.countDocuments = origs.rCount; Certificate.countDocuments = origs.cCount; Announcement.countDocuments = origs.aCount; Payment.find = origs.pFind;
   }
 });
 

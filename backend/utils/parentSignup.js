@@ -13,7 +13,18 @@ function signupError(statusCode, message) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-/** The pending signup the wizard's enrollment token belongs to, or null. */
+/**
+ * The pending signup the wizard's enrollment token belongs to, or null.
+ *
+ * A token that's merely absent/malformed/foreign returns null, same as before — the
+ * caller falls back to the legacy email-verification path for that. But a token that
+ * WAS an enrollment token and has since gone stale (expired, or its pending record was
+ * already reaped/discarded) throws instead of returning null: silently treating it the
+ * same as "no token at all" collapses into a generic "Authentication required." with no
+ * way for the parent to tell a session timeout apart from never having signed up, and
+ * the legacy fallback can never catch it anyway (the current wizard payload never sends
+ * `email`). Throwing here surfaces a message that tells them what actually happened.
+ */
 async function findPendingFromRequest(req) {
   const header = req.headers?.authorization;
   if (!header || !header.startsWith('Bearer')) return null;
@@ -22,11 +33,18 @@ async function findPendingFromRequest(req) {
   let decoded;
   try {
     decoded = jwt.verify(token, process.env.JWT_SECRET);
-  } catch {
+  } catch (err) {
+    if (err?.name === 'TokenExpiredError') {
+      throw signupError(401, 'Your enrollment session has expired. Please verify your email again to continue.');
+    }
     return null;
   }
   if (decoded?.scope !== 'enrollment' || !mongoose.Types.ObjectId.isValid(decoded.id)) return null;
-  return PendingParentSignup.findById(decoded.id).select('+passwordHash');
+  const pending = await PendingParentSignup.findById(decoded.id).select('+passwordHash');
+  if (!pending) {
+    throw signupError(401, 'Your enrollment session has expired. Please verify your email again to continue.');
+  }
+  return pending;
 }
 
 /** Cheap up-front checks so a doomed submit fails before any file or record is written. */

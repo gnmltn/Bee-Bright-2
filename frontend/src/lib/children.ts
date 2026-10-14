@@ -1,4 +1,5 @@
 import { uploadsBaseUrl } from "@/services/api";
+import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
 
 export type EnrollmentForChild = {
   _id: string;
@@ -34,9 +35,19 @@ export type ChildRecord = {
  * same child appear twice. Expects `enrollments` newest-first (as the API returns).
  */
 export function groupEnrollmentsIntoChildren(enrollments: EnrollmentForChild[]): ChildRecord[] {
+  // A child only shows up once admin has actually approved at least one of their
+  // enrollments — same bar used for scheduling (isEnrollmentSchedulable). A brand-new
+  // Add Child whose only enrollment is still pending_approval must stay invisible;
+  // an existing, already-approved child mid-renewal must stay visible.
+  const approvedKeys = new Set(
+    enrollments
+      .filter((e) => isEnrollmentSchedulable({ status: e.status || "" }))
+      .map((e) => e.permanentStudentId || e._id)
+  );
   const byChild = new Map<string, ChildRecord>();
   for (const e of enrollments) {
     const key = e.permanentStudentId || e._id;
+    if (!approvedKeys.has(key)) continue;
     const photoPath = e.studentProfileImage || e.requirementDocuments?.studentPhoto?.path || null;
     const existing = byChild.get(key);
     if (existing) {

@@ -1438,6 +1438,13 @@ const adminApproveEnrollment = async (req, res) => {
     pushStatusHistory(enrollment, 'approved', req.user._id, req.user.role, 'Enrollment approved');
     await enrollment.save();
 
+    // Approval itself was previously silent on the wire — the parent only ever learned
+    // about it via a stale page load or an unrelated payment-verification event that
+    // fired earlier (and at that point the status was still pending_approval, not yet
+    // approved). Anything gated purely on "is this child's enrollment approved" (e.g. the
+    // Renew/Add Program lock, the Viewing-child switcher) needs its own live signal.
+    emitToParent(enrollment.parent, 'enrollment:statusChanged', { enrollmentId: enrollment.enrollmentId, status: enrollment.status });
+
     // ── Activate the Parent account ───────────────────────────────────────
     await User.findByIdAndUpdate(enrollment.parent, {
       $set: { isActive: true, enrollmentStatus: 'active', enrollmentDraft: false },

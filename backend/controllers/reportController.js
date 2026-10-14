@@ -8,20 +8,37 @@ const WeeklyDigest = require('../models/WeeklyDigest');
 // pointing at the original function after the test reassigns the module's export.
 const geminiClient = require('../utils/geminiClient');
 const { logAudit } = require('../utils/auditService');
+const { emitToAdmins } = require('../utils/realtime');
 
 const getSettledValue = (result, fallback) =>
   (result.status === 'fulfilled' ? result.value : fallback);
 
-// Sunday-start week containing `now` — matches aiController.js's parseScheduleDateRange
-// startOfWeek convention, for consistency across the codebase.
-function getWeekRange(now = new Date()) {
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - start.getDay());
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
-  return { weekStart: start, weekEnd: end };
+function normalizeDayStart(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function normalizeDayEnd(d) { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; }
+
+// The admin's Reports-tab week picker (frontend) builds real Monday-Sunday calendar
+// weeks, clipped to partial weeks at a month's start/end, and sends the exact boundary
+// pair it computed — there is no "current week" default any more, since Generate Report
+// always requires an explicit pick. This just validates/normalizes what was sent and
+// rejects a period that hasn't happened yet (there's nothing to report on).
+function resolveRequestedWeek(body) {
+  const { weekStart: rawStart, weekEnd: rawEnd } = body || {};
+  if (!rawStart || !rawEnd) return { error: 'weekStart and weekEnd are required.' };
+  const weekStart = normalizeDayStart(rawStart);
+  const weekEnd = normalizeDayEnd(rawEnd);
+  if (Number.isNaN(weekStart.getTime()) || Number.isNaN(weekEnd.getTime())) {
+    return { error: 'weekStart and weekEnd must be valid dates.' };
+  }
+  if (weekStart > weekEnd) return { error: 'weekStart must be on or before weekEnd.' };
+  // weekStart is already start-of-day and weekEnd end-of-day, so their raw difference
+  // already rounds to the inclusive day count (e.g. Mon 00:00:00.000 to Sun 23:59:59.999
+  // is 6.99998 days -> 7) — adding +1 on top would double-count.
+  const spanDays = Math.round((weekEnd.getTime() - weekStart.getTime()) / (24 * 60 * 60 * 1000));
+  if (spanDays > 7) return { error: 'A digest can cover at most 7 days.' };
+  if (weekEnd > normalizeDayEnd(new Date())) {
+    return { error: 'Cannot generate a digest for a period that has not happened yet.' };
+  }
+  return { weekStart, weekEnd };
 }
 
 // "In-flight" = not yet resolved either way. Mirrors the real Enrollment.status enum
@@ -204,12 +221,31 @@ function renderDigestPdf({ weekStart, weekEnd, reportText, followUps = [] }) {
   });
 }
 
-// @desc    Generate this week's AI digest, save it, and return the PDF
+// @desc    Generate an AI digest for an admin-chosen week, save it, and return the PDF.
+//          Reuses an existing digest for the exact same week instead of calling Gemini
+//          again (its free-tier quota is limited) — the frontend already checks its own
+//          Past Digests list before ever calling this; the check here is the server-side
+//          safety net for a race (two admins at once) or a stale client-side list.
 // @route   POST /api/reports/weekly-digest
 // @access  Private (Admin)
+// Body: { weekStart, weekEnd } — ISO date strings for the exact week to report on.
 const generateWeeklyDigest = async (req, res) => {
   try {
-    const { weekStart, weekEnd } = getWeekRange();
+    const { weekStart, weekEnd, error } = resolveRequestedWeek(req.body);
+    if (error) return res.status(400).json({ success: false, message: error });
+
+    const existing = await WeeklyDigest.findOne({ weekStart, weekEnd }).lean();
+    if (existing) {
+      const pdfBuffer = await renderDigestPdf(existing);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('X-Digest-Cached', 'true');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="beebright_weekly_digest_${weekStart.toISOString().slice(0, 10)}.pdf"`
+      );
+      return res.status(200).send(pdfBuffer);
+    }
+
     const stats = await aggregateWeeklyStats(weekStart, weekEnd);
     const followUps = await resolveFollowUps(weekStart, weekEnd);
 
@@ -241,6 +277,10 @@ const generateWeeklyDigest = async (req, res) => {
       metadata: { digestId: digest._id }
     });
 
+    // Another admin who might have this same week-picker open right now should see the
+    // new digest (and its "Already generated" state) without a manual refresh.
+    emitToAdmins('digest:new', { digestId: String(digest._id), weekStart, weekEnd });
+
     const pdfBuffer = await renderDigestPdf({ weekStart, weekEnd, reportText, followUps });
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -254,13 +294,15 @@ const generateWeeklyDigest = async (req, res) => {
   }
 };
 
-// @desc    List past digests, newest first
+// @desc    List past digests, most recently GENERATED first (not by which week they
+//          cover — an admin can generate a digest for an old week at any time, and that
+//          should still surface at the top as the newest thing in the list).
 // @route   GET /api/reports/weekly-digest
 // @access  Private (Admin)
 const listWeeklyDigests = async (req, res) => {
   try {
     const digests = await WeeklyDigest.find({})
-      .sort({ weekStart: -1 })
+      .sort({ createdAt: -1 })
       .select('weekStart weekEnd reportText followUps createdAt')
       .lean();
     res.status(200).json({ success: true, digests });
@@ -295,7 +337,7 @@ module.exports = {
   listWeeklyDigests,
   downloadWeeklyDigestPdf,
   // Exported for backend/test/weeklyDigest.test.js
-  getWeekRange,
+  resolveRequestedWeek,
   aggregateWeeklyStats,
   resolveFollowUps,
   renderDigestPdf

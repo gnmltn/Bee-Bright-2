@@ -169,6 +169,39 @@ function validatePlaygroupChildCount(childCount) {
   return null;
 }
 
+// ─── Attendance (per-child, for Playgroup/group sessions) ──────────────────────
+// A one-on-one session (`students[]` empty) has exactly one attendance value,
+// `schedule.attendanceStatus`. A Playgroup/group session (`students[]` has the
+// enrolled roster) tracks each child independently in `schedule.attendanceByStudent`
+// instead, since one toggle can't represent "2 present, 1 absent" for the same class.
+// These two helpers are the single place that knows which of the two a given
+// schedule uses, so every reader (the tutor "unmarked sessions" badge, the parent
+// chatbot's attendance answers, markAttendance itself) agrees with each other.
+
+/** Whether every enrolled child's attendance has been recorded for this session. */
+function isSessionFullyMarked(schedule) {
+  const students = Array.isArray(schedule?.students) ? schedule.students : [];
+  if (students.length === 0) {
+    return schedule?.attendanceStatus === 'present' || schedule?.attendanceStatus === 'absent';
+  }
+  const marked = new Set((schedule?.attendanceByStudent || []).map((a) => String(a.student?._id || a.student)));
+  return students.every((s) => marked.has(String(s?._id || s)));
+}
+
+/** The effective present/absent/unmarked status for ONE specific student on a
+ * session — the per-child record for a Playgroup/group session, or the
+ * whole-session field for a one-on-one session. (Display-only concerns like the
+ * tutor dashboard's 3-day grace-period auto-resolve are NOT applied here — see
+ * AttendanceTab.tsx, which never writes that to the database.) */
+function attendanceStatusForStudent(schedule, studentId) {
+  const students = Array.isArray(schedule?.students) ? schedule.students : [];
+  if (students.length === 0) return schedule?.attendanceStatus || 'unmarked';
+  const entry = (schedule?.attendanceByStudent || []).find(
+    (a) => String(a.student?._id || a.student) === String(studentId)
+  );
+  return entry ? entry.status : 'unmarked';
+}
+
 function enrollmentCoversSubject(enrollment, subject) {
   if (!enrollment || !subject) return false;
   const subjectId = String(subject._id || '');
@@ -198,4 +231,6 @@ module.exports = {
   calculatePlaygroupTutorRequirement,
   enrollmentCoversSubject,
   getMinutes,
+  isSessionFullyMarked,
+  attendanceStatusForStudent,
 };

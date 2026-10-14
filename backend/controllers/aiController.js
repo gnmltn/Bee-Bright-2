@@ -4,6 +4,7 @@ const { detect } = require('franc');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const { computeRemainingBalance } = require('../utils/remainingBalance');
+const { attendanceStatusForStudent } = require('../utils/schedulingPolicy');
 const Schedule = require('../models/Schedule');
 const Remark = require('../models/Remark');
 const User = require('../models/User');
@@ -6824,11 +6825,15 @@ async function buildParentAttendanceContext(parentId, message, history = []) {
     };
   }
 
-  const present = sessions.filter((s) => s.attendanceStatus === 'present').length;
-  const absent = sessions.filter((s) => s.attendanceStatus === 'absent').length;
-  const unmarked = sessions.filter((s) => s.attendanceStatus === 'unmarked').length;
+  // A Toddlers Playgroup session's attendance is per-child (attendanceByStudent), not a
+  // single whole-session value — attendanceStatusForStudent resolves the right one for
+  // THIS child on either session shape, one-on-one or group (see schedulingPolicy.js).
+  const statusFor = (s) => attendanceStatusForStudent(s, matched.student);
+  const present = sessions.filter((s) => statusFor(s) === 'present').length;
+  const absent = sessions.filter((s) => statusFor(s) === 'absent').length;
+  const unmarked = sessions.filter((s) => statusFor(s) === 'unmarked').length;
   const recentAbsenceDates = sessions
-    .filter((s) => s.attendanceStatus === 'absent')
+    .filter((s) => statusFor(s) === 'absent')
     .slice(0, 5)
     .map((s) => new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
 

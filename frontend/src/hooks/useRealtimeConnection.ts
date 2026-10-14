@@ -15,10 +15,15 @@ const SERVER_EVENT_TO_BRIDGE = {
   "remark:published": REALTIME_EVENTS.REMARK_PUBLISHED,
   "remark:reviewed": REALTIME_EVENTS.REMARK_REVIEWED,
   "remark:new": REALTIME_EVENTS.REMARK_NEW,
+  "certificate:published": REALTIME_EVENTS.CERTIFICATE_PUBLISHED,
+  "certificate:retracted": REALTIME_EVENTS.CERTIFICATE_RETRACTED,
+  "certificate:replaced": REALTIME_EVENTS.CERTIFICATE_REPLACED,
   "payment:statusChanged": REALTIME_EVENTS.PAYMENT_STATUS_CHANGED,
+  "enrollment:statusChanged": REALTIME_EVENTS.ENROLLMENT_STATUS_CHANGED,
   "assessment:completed": REALTIME_EVENTS.ASSESSMENT_COMPLETED,
   "user:changed": REALTIME_EVENTS.USER_CHANGED,
   "request:new": REALTIME_EVENTS.REQUEST_NEW,
+  "digest:new": REALTIME_EVENTS.DIGEST_NEW,
 } as const;
 
 /**

@@ -40,6 +40,7 @@ import { displayStudentId } from "@/lib/children";
 import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
 import { getEmailError, getEmailCharacterError } from "@/utils/emailRules";
 import { RemarksReviewHistory } from "@/components/admin/RemarksReviewHistory";
+import { CertificatesPanel } from "@/components/admin/CertificatesPanel";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
@@ -204,11 +205,69 @@ function parseDateKeyToDate(value?: string | null): Date | null {
 
 type PaymentForExport = { _id: string; referenceNumber?: string; amount: number; status: string; createdAt?: string; paymentMethod?: string; student?: { firstName?: string; lastName?: string } };
 
-const handleExportAll = (enrollmentsList: AdminEnrollment[], usersList: AdminUser[], paymentsList: PaymentForExport[]) => {
-  let csvContent = "=== Bee Bright Tutorial Center — Full Report ===\nGenerated: " + new Date().toLocaleString() + "\n\n";
+/** One calendar month, used by both the Export and Generate Report month pickers. */
+export type MonthOption = { year: number; month: number; label: string }; // month is 0-indexed
+
+export const monthKey = (year: number, month: number) => `${year}-${String(month + 1).padStart(2, "0")}`;
+export const monthLabel = (year: number, month: number) =>
+  new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+export const dateInMonth = (dateStr: string | undefined, m: MonthOption): boolean => {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  return !Number.isNaN(d.getTime()) && d.getFullYear() === m.year && d.getMonth() === m.month;
+};
+
+/** One real Monday-Sunday calendar week within a month, clipped to the month's actual
+ *  first/last day for a partial week at the start or end. */
+export type WeekOption = { weekStart: Date; weekEnd: Date; label: string };
+
+export function getCalendarWeeksInMonth(year: number, month: number): WeekOption[] {
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0);
+  const weeks: WeekOption[] = [];
+  const cursor = new Date(monthStart);
+  const dow = cursor.getDay(); // 0=Sun..6=Sat
+  cursor.setDate(cursor.getDate() + (dow === 0 ? -6 : 1 - dow)); // Monday of monthStart's week
+  while (cursor <= monthEnd) {
+    const trueWeekEnd = new Date(cursor);
+    trueWeekEnd.setDate(trueWeekEnd.getDate() + 6);
+    const weekStart = cursor < monthStart ? new Date(monthStart) : new Date(cursor);
+    const weekEnd = trueWeekEnd > monthEnd ? new Date(monthEnd) : trueWeekEnd;
+    weeks.push({
+      weekStart,
+      weekEnd,
+      label: `${weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${weekEnd.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
+    });
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return weeks;
+}
+
+export const sameCalendarDay = (a: Date, b: string) => {
+  const bd = new Date(b);
+  return a.getFullYear() === bd.getFullYear() && a.getMonth() === bd.getMonth() && a.getDate() === bd.getDate();
+};
+
+export const handleExportAll = (
+  enrollmentsList: AdminEnrollment[],
+  usersList: AdminUser[],
+  paymentsList: PaymentForExport[],
+  monthFilter?: MonthOption
+) => {
+  const enrollmentsInScope = monthFilter
+    ? enrollmentsList.filter((e) => dateInMonth(e.enrollmentDate || e.createdAt, monthFilter))
+    : enrollmentsList;
+  const paymentsInScope = monthFilter
+    ? paymentsList.filter((p) => dateInMonth(p.createdAt, monthFilter))
+    : paymentsList;
+  const usersInScope = monthFilter
+    ? usersList.filter((u) => dateInMonth(u.createdAt, monthFilter))
+    : usersList;
+
+  let csvContent = "=== Bee Bright Tutorial Center — " + (monthFilter ? `${monthLabel(monthFilter.year, monthFilter.month)} Report` : "Full Report") + " ===\nGenerated: " + new Date().toLocaleString() + "\n\n";
 
   csvContent += "--- ENROLLMENTS ---\nName,Programs,Date,Status\n";
-  (enrollmentsList || []).forEach((e: AdminEnrollment) => {
+  enrollmentsInScope.forEach((e: AdminEnrollment) => {
     const snap = e.studentSnapshot;
     const name = snap ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim() : "—";
     const programs = e.packages?.map((p) => p.displayName).join("; ") || e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
@@ -218,14 +277,14 @@ const handleExportAll = (enrollmentsList: AdminEnrollment[], usersList: AdminUse
   });
 
   csvContent += "\n--- PAYMENTS ---\nReference,Student,Amount,Status,Date,Method\n";
-  (paymentsList || []).forEach((p) => {
+  paymentsInScope.forEach((p) => {
     const studentName = p.student ? [p.student.firstName, p.student.lastName].filter(Boolean).join(" ").trim() : "—";
     const date = p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—";
     csvContent += `${p.referenceNumber ?? p._id},${studentName},₱${p.amount ?? 0},${p.status},${date},${p.paymentMethod ?? "—"}\n`;
   });
 
   csvContent += "\n--- USERS ---\nName,Role,Email,Phone,Status\n";
-  (usersList || []).forEach((u: AdminUser) => {
+  usersInScope.forEach((u: AdminUser) => {
     const name = `${u.firstName || ""} ${u.lastName || ""}`.trim() || "—";
     const status = u.isActive ? "active" : "inactive";
     csvContent += `${name},${u.role},${u.email},${u.phone || "—"},${status}\n`;
@@ -235,12 +294,14 @@ const handleExportAll = (enrollmentsList: AdminEnrollment[], usersList: AdminUse
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `beebright_full_report_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = monthFilter
+    ? `beebright_report_${monthKey(monthFilter.year, monthFilter.month)}.csv`
+    : `beebright_full_report_${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
-  toast.success("Full report exported!");
+  toast.success(monthFilter ? `${monthLabel(monthFilter.year, monthFilter.month)} report exported!` : "Full report exported!");
 };
 
 function formatEnrollmentDate(d: string | undefined): string {
@@ -1811,17 +1872,22 @@ export default function AdminDashboard() {
     const onPaymentNew = () => { fetchAdminPayments(); toast.success("New payment proof submitted"); };
     const onScheduleChanged = () => { fetchSchedules(); };
     const onUserChanged = () => { fetchUsers(); };
-    const onReconnectCatchUp = () => { fetchEnrollments(); fetchAdminPayments(); fetchSchedules(); fetchUsers(); };
+    const onReconnectCatchUp = () => { fetchEnrollments(); fetchAdminPayments(); fetchSchedules(); fetchUsers(); fetchWeeklyDigests(); };
+    // Another admin generating a new digest (never fires on a cache-hit) refreshes THIS
+    // admin's Past Digests list / week-picker "Already generated" state live.
+    const onDigestNew = () => { fetchWeeklyDigests(); };
     window.addEventListener(REALTIME_EVENTS.ENROLLMENT_NEW, onEnrollmentNew);
     window.addEventListener(REALTIME_EVENTS.PAYMENT_NEW, onPaymentNew);
     window.addEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
     window.addEventListener(REALTIME_EVENTS.USER_CHANGED, onUserChanged);
+    window.addEventListener(REALTIME_EVENTS.DIGEST_NEW, onDigestNew);
     window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
     return () => {
       window.removeEventListener(REALTIME_EVENTS.ENROLLMENT_NEW, onEnrollmentNew);
       window.removeEventListener(REALTIME_EVENTS.PAYMENT_NEW, onPaymentNew);
       window.removeEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
       window.removeEventListener(REALTIME_EVENTS.USER_CHANGED, onUserChanged);
+      window.removeEventListener(REALTIME_EVENTS.DIGEST_NEW, onDigestNew);
       window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2706,9 +2772,15 @@ export default function AdminDashboard() {
   const reportTopSubjects = useMemo(() => {
     const counts = new Map<string, number>();
     enrollments.forEach((enrollment) => {
-      const names = (enrollment.selectedSubjects || [])
-        .map((subject) => (subject?.name || "").trim())
-        .filter(Boolean);
+      // packages[] is the current/authoritative field — every modern enrollment uses
+      // it. selectedSubjects is explicitly a legacy fallback (see its comment on
+      // AdminEnrollment in services/api.ts) for pre-packages records only, and reading
+      // it alone left this table always empty since real current enrollments don't
+      // populate it. Same packages-first/selectedSubjects-fallback precedent already
+      // used by handleExportAll's CSV builder just above.
+      const names = enrollment.packages?.length
+        ? enrollment.packages.map((p) => (p.displayName || p.programCode || "").trim()).filter(Boolean)
+        : (enrollment.selectedSubjects || []).map((subject) => (subject?.name || "").trim()).filter(Boolean);
       names.forEach((name) => {
         counts.set(name, (counts.get(name) || 0) + 1);
       });
@@ -2743,6 +2815,29 @@ export default function AdminDashboard() {
   const [weeklyDigestsLoading, setWeeklyDigestsLoading] = useState(false);
   const [viewDigest, setViewDigest] = useState<WeeklyDigestItem | null>(null);
   const [downloadingDigestId, setDownloadingDigestId] = useState<string | null>(null);
+  // Both Export and Generate Report pick from the same month range — every past month
+  // plus the current one, regardless of whether a given month has data yet (a quiet
+  // month is still worth exporting/reporting on — an empty CSV section or digest is a
+  // valid, honest result); never a future month, since there's nothing there yet.
+  const reportAvailableMonths = useMemo<MonthOption[]>(() => {
+    const now = new Date();
+    return Array.from({ length: 12 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      return { year: d.getFullYear(), month: d.getMonth(), label: monthLabel(d.getFullYear(), d.getMonth()) };
+    });
+  }, []);
+
+  // Export's single-step month picker.
+  const [exportPickerOpen, setExportPickerOpen] = useState(false);
+  // Generate Report's 2-step picker: null month = showing the month list, a picked
+  // month = showing that month's real calendar weeks.
+  const [digestPickerOpen, setDigestPickerOpen] = useState(false);
+  const [digestPickerMonth, setDigestPickerMonth] = useState<MonthOption | null>(null);
+
+  // Matches purely by calendar day (not exact millisecond), since the frontend always
+  // sends a clipped week boundary and the backend normalizes to full-day bounds anyway.
+  const findExistingDigest = (weekStart: Date, weekEnd: Date) =>
+    weeklyDigests.find((d) => sameCalendarDay(weekStart, d.weekStart) && sameCalendarDay(weekEnd, d.weekEnd));
 
   const downloadBlobAsFile = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -2789,12 +2884,30 @@ export default function AdminDashboard() {
     if (currentHash === "#reports") fetchWeeklyDigests();
   }, [currentHash]);
 
-  const handleGenerateWeeklyDigest = async () => {
+  // Clicking "Generate Report" opens the month picker first; it never generates directly
+  // any more, since a specific week must always be chosen now.
+  const openDigestPicker = () => {
+    setDigestPickerMonth(null);
+    setDigestPickerOpen(true);
+  };
+
+  const handlePickDigestWeek = async (week: WeekOption) => {
+    // Check the already-fetched Past Digests list FIRST — if this exact week was already
+    // generated, just show it; never spend a Gemini call re-generating something that
+    // already exists (the free tier's quota is limited to 20 requests/day).
+    const existing = findExistingDigest(week.weekStart, week.weekEnd);
+    setDigestPickerOpen(false);
+    if (existing) {
+      setViewDigest(existing);
+      toast.success("Already generated — showing the saved digest.");
+      return;
+    }
     setIsGeneratingReport(true);
     try {
-      const res = await reportService.generateWeeklyDigest();
-      downloadBlobAsFile(res.data as Blob, digestFilename(new Date().toISOString()));
-      toast.success("Weekly digest generated!");
+      const res = await reportService.generateWeeklyDigest(week.weekStart.toISOString(), week.weekEnd.toISOString());
+      const wasCached = res.headers?.["x-digest-cached"] === "true";
+      downloadBlobAsFile(res.data as Blob, digestFilename(week.weekStart.toISOString()));
+      toast.success(wasCached ? "Already generated — downloaded the saved digest." : "Weekly digest generated!");
       fetchWeeklyDigests();
     } catch (err) {
       toast.error(await readBlobErrorMessage(err, "Failed to generate weekly digest."));
@@ -2838,10 +2951,6 @@ export default function AdminDashboard() {
               <p className="text-muted-foreground">{dashboardSubtitle}</p>
             </div>
             <div className="flex items-center gap-3">
-              <Button variant="outline" onClick={() => handleExportAll(enrollments, users, allPaymentsList)}>
-                <Download className="h-4 w-4 mr-2" />
-                Export Report
-              </Button>
               <Button className="btn-glow" onClick={() => handleTabChange("schedule")}>
                 <Calendar className="h-4 w-4 mr-2" />
                 Schedule
@@ -3514,11 +3623,11 @@ export default function AdminDashboard() {
                 <div className="p-4 border-b border-border flex items-center justify-between">
                   <h3 className="font-display font-bold text-lg text-foreground">Reports</h3>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => handleExportAll(enrollments, users, allPaymentsList)}>
+                    <Button variant="outline" size="sm" onClick={() => setExportPickerOpen(true)}>
                       <Download className="h-4 w-4 mr-2" />
-                      Export CSV
+                      Export
                     </Button>
-                    <Button variant="default" size="sm" onClick={handleGenerateWeeklyDigest} disabled={isGeneratingReport}>
+                    <Button variant="default" size="sm" onClick={openDigestPicker} disabled={isGeneratingReport}>
                       {isGeneratingReport ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -3593,7 +3702,7 @@ export default function AdminDashboard() {
                         <table className="w-full text-sm">
                           <thead className="bg-muted">
                             <tr>
-                              <th className="text-left p-3 font-semibold text-foreground">Program / Subject</th>
+                              <th className="text-left p-3 font-semibold text-foreground">Program / Package</th>
                               <th className="text-left p-3 font-semibold text-foreground">Enrollments</th>
                             </tr>
                           </thead>
@@ -3617,7 +3726,7 @@ export default function AdminDashboard() {
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    Report data is computed live from current database-backed dashboard sources (users, enrollments, and payments). Export downloads the same data snapshot as CSV.
+                    Report data is computed live from current database-backed dashboard sources (users, enrollments, and payments). Export lets you pick a month, then downloads that month's data snapshot as CSV.
                   </p>
 
                   <div className="rounded-lg border border-border overflow-hidden">
@@ -3678,6 +3787,81 @@ export default function AdminDashboard() {
                 </div>
               </div>
             </TabsContent>
+
+            <Dialog open={exportPickerOpen} onOpenChange={setExportPickerOpen}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Export Report</DialogTitle>
+                  <DialogDescription>Pick a month to export as CSV.</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                  {reportAvailableMonths.map((m) => (
+                    <Button
+                      key={monthKey(m.year, m.month)}
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => {
+                        setExportPickerOpen(false);
+                        handleExportAll(enrollments, users, allPaymentsList, m);
+                      }}
+                    >
+                      {m.label}
+                    </Button>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setExportPickerOpen(false)}>Cancel</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={digestPickerOpen} onOpenChange={setDigestPickerOpen}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>{digestPickerMonth ? digestPickerMonth.label : "Generate Report"}</DialogTitle>
+                  <DialogDescription>
+                    {digestPickerMonth
+                      ? "Pick the week to generate a digest for."
+                      : "Pick a month, then a specific week within it."}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                  {!digestPickerMonth ? (
+                    reportAvailableMonths.map((m) => (
+                      <Button
+                        key={monthKey(m.year, m.month)}
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => setDigestPickerMonth(m)}
+                      >
+                        {m.label}
+                      </Button>
+                    ))
+                  ) : (
+                    getCalendarWeeksInMonth(digestPickerMonth.year, digestPickerMonth.month).map((w) => {
+                      const existing = findExistingDigest(w.weekStart, w.weekEnd);
+                      return (
+                        <Button
+                          key={w.label}
+                          variant="outline"
+                          className="w-full justify-between"
+                          onClick={() => handlePickDigestWeek(w)}
+                        >
+                          <span>{w.label}</span>
+                          {existing && <span className="text-xs text-muted-foreground">Already generated</span>}
+                        </Button>
+                      );
+                    })
+                  )}
+                </div>
+                <DialogFooter>
+                  {digestPickerMonth && (
+                    <Button variant="ghost" onClick={() => setDigestPickerMonth(null)}>Back</Button>
+                  )}
+                  <Button variant="outline" onClick={() => setDigestPickerOpen(false)}>Cancel</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             <Dialog open={!!viewDigest} onOpenChange={(open) => !open && setViewDigest(null)}>
               <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
@@ -4526,17 +4710,26 @@ export default function AdminDashboard() {
               </div>
             </TabsContent>
 
-            {/* Remarks Tab — BeeBright Student Remarks Spec v2, Section D */}
+            {/* Remarks Tab — BeeBright Student Remarks Spec v2, Section D. Two columns:
+                left is the existing Student Remarks review flow (unchanged); right is
+                the Certificate feature. */}
             <TabsContent value="remarks" className="space-y-6">
-              <div className="bg-card rounded-xl border border-border p-4">
-                <h3 className="font-display font-bold text-lg text-foreground">Student Remarks</h3>
-                <p className="text-sm text-muted-foreground">Review remarks that include an attachment before they become visible to parents.</p>
-              </div>
-              <div className="bg-card rounded-xl border border-border p-4">
-                <RemarksReviewQueue />
-              </div>
-              <div className="bg-card rounded-xl border border-border p-4">
-                <RemarksReviewHistory />
+              <div className="grid lg:grid-cols-2 gap-6 items-start">
+                <div className="space-y-6">
+                  <div className="bg-card rounded-xl border border-border p-4">
+                    <h3 className="font-display font-bold text-lg text-foreground">Student Remarks</h3>
+                    <p className="text-sm text-muted-foreground">Review remarks that include an attachment before they become visible to parents.</p>
+                  </div>
+                  <div className="bg-card rounded-xl border border-border p-4">
+                    <RemarksReviewQueue />
+                  </div>
+                  <div className="bg-card rounded-xl border border-border p-4">
+                    <RemarksReviewHistory />
+                  </div>
+                </div>
+                <div className="bg-card rounded-xl border border-border p-4">
+                  <CertificatesPanel enrollments={enrollments} />
+                </div>
               </div>
             </TabsContent>
 

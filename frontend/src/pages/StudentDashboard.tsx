@@ -17,6 +17,8 @@ import {
   Download,
   Link as LinkIcon,
   Image as ImageIcon,
+  Eye,
+  MessageSquare,
 } from "lucide-react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MyRequestsBell } from "@/components/notifications/MyRequestsBell";
@@ -32,12 +34,13 @@ import FilePreview from "@/components/enrollment/FilePreview";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserAvatar } from "@/components/UserAvatar";
-import { scheduleService, remarkService, announcementService, auditLogService, uploadsBaseUrl, type RemarkItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
+import { scheduleService, remarkService, certificateService, announcementService, auditLogService, uploadsBaseUrl, type RemarkItem, type MyCertificateItem, type AnnouncementItem, type AuditLogItem } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
 import AddChildModal, { type AddChildPrefill } from "@/components/enrollment/AddChildModal";
 import { ContactTutorPanel } from "@/components/dashboard/ContactTutorPanel";
+import { AttendanceCard } from "@/components/dashboard/AttendanceCard";
 import { useSelectedChild } from "@/hooks/useSelectedChild";
 import { resolveUploadUrl, displayStudentId } from "@/lib/children";
 import { remainingBalanceOf, isReminderDue, formatDueDate, peso, type BalanceEnrollment } from "@/lib/balance";
@@ -183,6 +186,10 @@ export default function StudentDashboard() {
   const [schedulesLoading, setSchedulesLoading] = useState(true);
   const [progressRemarks, setProgressRemarks] = useState<RemarkItem[]>([]);
   const [progressRemarksLoading, setProgressRemarksLoading] = useState(false);
+  const [progressCertificates, setProgressCertificates] = useState<MyCertificateItem[]>([]);
+  const [progressCertificatesLoading, setProgressCertificatesLoading] = useState(false);
+  const [previewCertificate, setPreviewCertificate] = useState<MyCertificateItem | null>(null);
+  const [previewCertificateUrl, setPreviewCertificateUrl] = useState<string | null>(null);
   const [remarkAttachmentUrls, setRemarkAttachmentUrls] = useState<Record<string, string>>({});
   const [remarkProgramFilter, setRemarkProgramFilter] = useState("all");
   const [remarkTutorFilter, setRemarkTutorFilter] = useState("all");
@@ -267,6 +274,47 @@ export default function StudentDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isParent, activeChildUserId, readyToFetchChildData]);
 
+  const fetchProgressCertificates = () => {
+    if (!readyToFetchChildData) return;
+    if (isParent && !activeChildUserId) {
+      setProgressCertificates([]);
+      setProgressCertificatesLoading(false);
+      return;
+    }
+    setProgressCertificatesLoading(true);
+    certificateService
+      .getMyProgress(isParent ? activeChildUserId ?? undefined : undefined)
+      .then((res) => {
+        if (res.data?.success && Array.isArray(res.data.certificates)) {
+          setProgressCertificates(res.data.certificates);
+        } else {
+          setProgressCertificates([]);
+        }
+      })
+      .catch(() => setProgressCertificates([]))
+      .finally(() => setProgressCertificatesLoading(false));
+  };
+
+  useEffect(() => {
+    fetchProgressCertificates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isParent, activeChildUserId, readyToFetchChildData]);
+
+  // Certificate "View" opens an in-page preview Dialog instead of window.open(), which
+  // used to navigate the current tab away with no way back — same fix and pattern as
+  // the admin side's CertificatesPanel.tsx.
+  useEffect(() => {
+    setPreviewCertificateUrl(null);
+    if (!previewCertificate) return;
+    let cancelled = false;
+    certificateService.getFileObjectUrl(previewCertificate._id).then((url) => {
+      if (!cancelled) setPreviewCertificateUrl(url);
+    }).catch(() => {
+      if (!cancelled) { toast.error("Could not open this certificate."); setPreviewCertificate(null); }
+    });
+    return () => { cancelled = true; };
+  }, [previewCertificate]);
+
   useEffect(() => {
     const withAttachments = progressRemarks.filter((r) => r.attachment?.path);
     if (withAttachments.length === 0) { setRemarkAttachmentUrls({}); return; }
@@ -285,6 +333,25 @@ export default function StudentDashboard() {
       setRemarkAttachmentUrls(map);
     });
     return () => { cancelled = true; };
+  }, [progressRemarks]);
+
+  // "Remarks" stat card — count of THIS child's remarks published within the current
+  // CALENDAR month (1st to last day, not a rolling 30-day window), same comparison
+  // AdminDashboard.tsx's derivedMonthlyRevenue already uses (getFullYear/getMonth
+  // equality against "now", not a date-range check). Uses the raw progressRemarks —
+  // never filteredProgressRemarks below, which is scoped to whatever the Progress
+  // tab's own program/tutor/activity filters happen to be set to right now. Already
+  // per-child for free: progressRemarks itself is fetched with activeChildUserId, so
+  // switching the viewed child already replaces the whole array before this re-runs.
+  const remarksThisMonthCount = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    return progressRemarks.filter((r) => {
+      if (!r.publishedAt) return false;
+      const d = new Date(r.publishedAt);
+      return d.getFullYear() === year && d.getMonth() === month;
+    }).length;
   }, [progressRemarks]);
 
   const filteredProgressRemarks = useMemo(() => {
@@ -397,21 +464,61 @@ export default function StudentDashboard() {
   // both "Reject/Approve don't update the parent's Progress tab" and "Schedule tab stays
   // empty until a manual refresh").
   useEffect(() => {
-    const onScheduleChanged = () => { fetchSchedules(); };
+    const onScheduleChanged = () => {
+      // A brand-new child's real User._id (activeChildUserId) is only created at their
+      // FIRST-ever schedule (backend's ensureStudentUserForEnrollment, run inline with
+      // schedule creation) — see the comment at activeChildUserId's definition above. If
+      // that's THIS event, the enrollment this closure already has is stale (still no
+      // student id), so fetchSchedules() below would short-circuit to an empty list. Also
+      // refreshing enrollments picks up the new link; activeChildUserId then changes and
+      // the fetchSchedules effect (deps include it) re-fires on its own with the real id.
+      // An existing child's id never changes, so this is a harmless no-op refetch there —
+      // the direct fetchSchedules() call below is what already keeps THAT case live.
+      if (isParent) fetchEnrollments();
+      fetchSchedules();
+    };
     const onAnnouncementNew = () => { fetchAnnouncements(); toast.success("New announcement", { description: "Check the Announcements tab." }); };
     const onRemarkPublished = () => { fetchProgressRemarks(); toast.success("New remark posted", { description: "Check the Progress tab." }); };
     const onPaymentStatusChanged = () => { fetchEnrollments(); };
-    const onReconnectCatchUp = () => { fetchSchedules(); fetchAnnouncements(); fetchProgressRemarks(); fetchEnrollments(); };
+    // Admin's final Approve step (distinct from payment verification, which can land
+    // earlier while the enrollment is still pending_approval) — refetching enrollments
+    // is enough: childEntries/badge/activeChild all derive from it, so the "Viewing
+    // child" dropdown gaining a newly-approved child and the Renew/Add Program lock
+    // lifting both follow with no other wiring.
+    const onEnrollmentStatusChanged = () => { fetchEnrollments(); };
+    // The server only scopes certificate real-time events to the relevant parent
+    // ROOM, not to the specific child — a parent with several children still gets the
+    // event even when it's for a sibling. fetchProgressCertificates() re-queries
+    // ?studentId=activeChildUserId, which the server already scopes per-student, so a
+    // refetch alone naturally shows nothing when the event was actually for another
+    // child — no extra client-side filtering needed.
+    // notifyBadgesChanged() makes the sidebar Progress badge update instantly instead of
+    // waiting for its own 60s poll — same trigger already used elsewhere in this file for
+    // self-initiated actions (handleRenewEnrolled/handleAddChildEnrolled), just reused here
+    // for a push event instead. Included on retract/replace too so the unread count can't
+    // go stale if a certificate is pulled back before the parent ever saw it.
+    const onCertificatePublished = () => { fetchProgressCertificates(); notifyBadgesChanged(); toast.success("New certificate", { description: "Check the Progress tab." }); };
+    const onCertificateRetracted = () => { fetchProgressCertificates(); notifyBadgesChanged(); };
+    const onCertificateReplaced = () => { fetchProgressCertificates(); notifyBadgesChanged(); };
+    const onReconnectCatchUp = () => { fetchSchedules(); fetchAnnouncements(); fetchProgressRemarks(); fetchProgressCertificates(); fetchEnrollments(); };
     window.addEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
     window.addEventListener(REALTIME_EVENTS.ANNOUNCEMENT_NEW, onAnnouncementNew);
     window.addEventListener(REALTIME_EVENTS.REMARK_PUBLISHED, onRemarkPublished);
+    window.addEventListener(REALTIME_EVENTS.CERTIFICATE_PUBLISHED, onCertificatePublished);
+    window.addEventListener(REALTIME_EVENTS.CERTIFICATE_RETRACTED, onCertificateRetracted);
+    window.addEventListener(REALTIME_EVENTS.CERTIFICATE_REPLACED, onCertificateReplaced);
     window.addEventListener(REALTIME_EVENTS.PAYMENT_STATUS_CHANGED, onPaymentStatusChanged);
+    window.addEventListener(REALTIME_EVENTS.ENROLLMENT_STATUS_CHANGED, onEnrollmentStatusChanged);
     window.addEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
     return () => {
       window.removeEventListener(REALTIME_EVENTS.SCHEDULE_CHANGED, onScheduleChanged);
       window.removeEventListener(REALTIME_EVENTS.ANNOUNCEMENT_NEW, onAnnouncementNew);
       window.removeEventListener(REALTIME_EVENTS.REMARK_PUBLISHED, onRemarkPublished);
+      window.removeEventListener(REALTIME_EVENTS.CERTIFICATE_PUBLISHED, onCertificatePublished);
+      window.removeEventListener(REALTIME_EVENTS.CERTIFICATE_RETRACTED, onCertificateRetracted);
+      window.removeEventListener(REALTIME_EVENTS.CERTIFICATE_REPLACED, onCertificateReplaced);
       window.removeEventListener(REALTIME_EVENTS.PAYMENT_STATUS_CHANGED, onPaymentStatusChanged);
+      window.removeEventListener(REALTIME_EVENTS.ENROLLMENT_STATUS_CHANGED, onEnrollmentStatusChanged);
       window.removeEventListener(REALTIME_EVENTS.RECONNECT_CATCHUP, onReconnectCatchUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -739,6 +846,48 @@ export default function StudentDashboard() {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [uniqueSchedules]);
 
+  // Attendance card's back face ("Program History") — every program the child has ever
+  // had a session scheduled for, completed or still active, with its date range. Kept
+  // separate from attendanceByProgram above (same grouping, plus start/end dates) rather
+  // than extending that memo, so the already-working front-face computation is untouched.
+  const programHistory = useMemo(() => {
+    const now = new Date();
+    const todayKey = toDateKey(now);
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const byProgram = new Map<string, { label: string; dates: string[]; total: number; present: number }>();
+
+    uniqueSchedules.forEach((s) => {
+      const label = (s.subject?.name || "Unassigned Program").trim();
+      if (!byProgram.has(label)) byProgram.set(label, { label, dates: [], total: 0, present: 0 });
+      const rec = byProgram.get(label)!;
+      const dayKey = toStableDateKey(s.date);
+      if (dayKey) rec.dates.push(dayKey);
+      rec.total += 1;
+
+      if (s.attendanceStatus === "present") {
+        const isCompleted = dayKey < todayKey || (dayKey === todayKey && nowMinutes >= toMinutes(s.endTime || "00:00"));
+        if (isCompleted) rec.present += 1;
+      }
+    });
+
+    return Array.from(byProgram.values())
+      .map((rec) => {
+        const sortedDates = rec.dates.slice().sort();
+        const startDate = sortedDates[0] || "";
+        const endDate = sortedDates[sortedDates.length - 1] || "";
+        return {
+          label: rec.label,
+          startDate,
+          endDate,
+          ongoing: Boolean(endDate) && endDate >= todayKey,
+          total: rec.total,
+          present: rec.present,
+          percent: rec.total > 0 ? Math.round((rec.present / rec.total) * 100) : 0,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [uniqueSchedules]);
+
   const hashToTab: Record<string, string> = {
     "#subjects": "subjects",
     "#schedule": "schedule",
@@ -1008,7 +1157,7 @@ export default function StudentDashboard() {
                   return d >= weekStart.getTime() && d < weekEnd;
                 }).length} icon={Calendar} variant="info" />
                 <StatCard title="Total Sessions" value={schedulesLoading ? "—" : uniqueSchedules.length} icon={CheckCircle} variant="success" />
-                <StatCard title="Upcoming" value={upcomingClasses.length} icon={Award} variant="warning" />
+                <StatCard title="Remarks" value={remarksThisMonthCount} icon={MessageSquare} variant="warning" />
               </div>
 
               <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
@@ -1118,7 +1267,9 @@ export default function StudentDashboard() {
                           </Button>
                         </div>
                       ) : (
-                        childEntries.map((child) => (
+                        childEntries.map((child) => {
+                          const { badge, notes } = childStatusSummary(child.statuses);
+                          return (
                           <div key={child.childName} className="rounded-2xl border border-border bg-muted/20 p-4 shadow-sm">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                               <div>
@@ -1128,20 +1279,20 @@ export default function StudentDashboard() {
                                 )}
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                {(() => {
-                                  const { badge, notes } = childStatusSummary(child.statuses);
-                                  return (
-                                    <div className="flex flex-col items-start gap-1 sm:items-end">
-                                      <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(badge.value)}`}>
-                                        {badge.label}
-                                      </span>
-                                      {notes.map((note) => (
-                                        <span key={note} className="text-[10px] leading-tight text-muted-foreground">{note}</span>
-                                      ))}
-                                    </div>
-                                  );
-                                })()}
-                                <Button type="button" size="sm" variant="outline" onClick={() => handleRenewChild(child)}>
+                                <div className="flex flex-col items-start gap-1 sm:items-end">
+                                  <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusBadgeClass(badge.value)}`}>
+                                    {badge.label}
+                                  </span>
+                                  {notes.map((note) => (
+                                    <span key={note} className="text-[10px] leading-tight text-muted-foreground">{note}</span>
+                                  ))}
+                                </div>
+                                {/* Blocked only while the child's own enrollment is still pending admin
+                                    approval — a client-side-only lock (no data touched), so it can stay
+                                    this plain: just disabled, no accompanying note. Lifts on its own the
+                                    moment `badge` recomputes "Active" (status arrives via the same live
+                                    enrollments refetch everything else on this page already uses). */}
+                                <Button type="button" size="sm" variant="outline" disabled={badge.value === "pending"} onClick={() => handleRenewChild(child)}>
                                   Renew / Add Program
                                 </Button>
                               </div>
@@ -1167,7 +1318,7 @@ export default function StudentDashboard() {
                                   <div className="rounded-lg border border-dashed border-border bg-muted/30 p-2" data-testid="enrollment-record-row">
                                     <div className="flex items-center justify-between gap-2">
                                       <p className="text-sm font-medium text-foreground">{displayStudentId(child.enrollments[child.enrollments.length - 1]) || "Enrollment"}</p>
-                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusBadgeClass(childStatusSummary(child.statuses).badge.value)}`}>{childStatusSummary(child.statuses).badge.label}</span>
+                                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusBadgeClass(badge.value)}`}>{badge.label}</span>
                                     </div>
                                   </div>
                                   {child.enrollments.filter((enrollment) => enrollment.status === "rejected").map((enrollment) => (
@@ -1189,7 +1340,8 @@ export default function StudentDashboard() {
                               </div>
                             </div>
                           </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>
@@ -1459,52 +1611,13 @@ export default function StudentDashboard() {
                     </div>
                   </motion.div>
 
-                  {attendanceStats.percent != null && (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="rounded-2xl border border-border bg-card p-6"
-                    >
-                      <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Attendance</h4>
-
-                      <div className="flex items-center gap-4 mb-5">
-                        <div className="relative h-24 w-24 rounded-full bg-muted flex items-center justify-center">
-                          <svg className="h-24 w-24 -rotate-90" viewBox="0 0 36 36">
-                            <path className="text-muted stroke-current" strokeWidth="3" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-                            <path
-                              className="text-primary stroke-current transition-all duration-700"
-                              strokeWidth="3"
-                              strokeDasharray={`${attendanceStats.percent}, 100`}
-                              fill="none"
-                              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                            />
-                          </svg>
-                          <span className="absolute text-2xl font-bold text-foreground">{attendanceStats.percent}%</span>
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground">Overall: present at {attendanceStats.present} of {attendanceStats.total} sessions</p>
-                          <p className="text-xs text-muted-foreground mt-1">Attendance is also separated by program below.</p>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        {attendanceByProgram.map((program) => (
-                          <div key={program.label} className="rounded-lg border border-border p-3 bg-muted/20">
-                            <div className="flex items-center justify-between gap-3 mb-2">
-                              <p className="text-sm font-semibold text-foreground">{program.label}</p>
-                              <p className="text-xs text-muted-foreground">{program.present} / {program.total} present</p>
-                            </div>
-                            <div className="h-2 rounded-full bg-muted overflow-hidden">
-                              <div
-                                className="h-full rounded-full bg-primary transition-all duration-500"
-                                style={{ width: `${Math.max(0, Math.min(100, program.percent))}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
+                  <AttendanceCard
+                    key={activeChildUserId ?? user?.id ?? "self"}
+                    stats={attendanceStats}
+                    byProgram={attendanceByProgram}
+                    history={programHistory}
+                    childLabel={isParent ? (activeChild?.name || "child") : [user?.firstName, user?.lastName].filter(Boolean).join(" ")}
+                  />
 
                   {/* Student Remarks — replaces the old grading display (BeeBright Student Remarks Spec v2) */}
                   <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
@@ -1620,6 +1733,87 @@ export default function StudentDashboard() {
                       })}
                     </div>
                   )}
+
+                  {/* Certificates — always at the very bottom of the Progress feed.
+                      Mirrors the Student Remarks card above: an always-visible section
+                      with its own empty state, instead of rendering nothing at all
+                      when there's nothing to show yet (same disappearing-card class of
+                      bug already fixed once for the Attendance card). */}
+                  <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+                    <h4 className="font-display font-bold text-foreground">Certificates</h4>
+
+                    {progressCertificatesLoading ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      </div>
+                    ) : progressCertificates.length === 0 ? (
+                      <div className="rounded-2xl border border-border bg-card p-12 text-center">
+                        <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
+                          <Award className="h-8 w-8 text-muted-foreground" />
+                        </div>
+                        <p className="font-medium text-foreground">No certificate yet</p>
+                        <p className="text-sm text-muted-foreground mt-1">Your admin will upload a certificate here.</p>
+                      </div>
+                    ) : (
+                    <div className="space-y-4">
+                      {progressCertificates.map((c, idx) => (
+                        <motion.div
+                          key={c._id}
+                          initial={{ opacity: 0, y: 12 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: Math.min(idx, 8) * 0.04 }}
+                          className="rounded-2xl border border-border bg-card overflow-hidden"
+                        >
+                          <div className="p-4 border-b border-border bg-primary/5 flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <h4 className="font-display font-bold text-foreground flex items-center gap-1.5">
+                                <Award className="h-4 w-4 text-primary" /> Certificate
+                              </h4>
+                              <p className="text-sm text-muted-foreground mt-0.5">
+                                {new Date(c.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="p-4 space-y-3">
+                            {c.message && <p className="text-sm text-foreground">{c.message}</p>}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setPreviewCertificate(c)}
+                              >
+                                <Eye className="h-3.5 w-3.5 mr-1" /> View
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={async () => {
+                                  try {
+                                    await certificateService.downloadPdf(c._id, c.file.fileName || "certificate");
+                                  } catch {
+                                    toast.error("Could not download this certificate.");
+                                  }
+                                }}
+                              >
+                                <Download className="h-3.5 w-3.5 mr-1" /> Download
+                              </Button>
+                            </div>
+                          </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                    )}
+                  </div>
+
+                  <FilePreview
+                    open={!!previewCertificate}
+                    onOpenChange={(open) => { if (!open) setPreviewCertificate(null); }}
+                    hideTrigger
+                    label="Certificate"
+                    src={previewCertificateUrl && previewCertificate ? { dataUrl: previewCertificateUrl, fileName: previewCertificate.file.fileName, fileSize: previewCertificate.file.size } : undefined}
+                  />
                 </TabsContent>
 
                 <TabsContent value="announcements" className="space-y-6">

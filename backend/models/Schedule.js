@@ -107,6 +107,20 @@ const scheduleSchema = new mongoose.Schema({
   },
   attendanceMarkedAt: { type: Date, default: null },
 
+  /** Per-child attendance for a Toddlers Playgroup/group session (`students[]` has more
+   * than the usual single enrollee) — `attendanceStatus` above is a single value for the
+   * WHOLE session and cannot represent "2 present, 1 absent" for the same Playgroup
+   * class, so each enrolled child gets their own entry here instead. One-on-one sessions
+   * (no `students[]`) never use this; `attendanceStatus`/`attendanceMarkedAt` remain their
+   * single source of truth, unchanged. See utils/schedulingPolicy.js's
+   * isSessionFullyMarked/attendanceStatusForStudent for how callers read this correctly
+   * for both session shapes. */
+  attendanceByStudent: [{
+    student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    status: { type: String, enum: ['present', 'absent'], required: true },
+    markedAt: { type: Date, required: true },
+  }],
+
   // WEEKLY SCHEDULING ENHANCEMENT
   // Reference to tutoring area/room
   tutoringAreaId: {

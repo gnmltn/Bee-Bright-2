@@ -23,9 +23,14 @@ const { validateFullName, validatePhMobile, normalizeMobile, checkMobileNumberUn
 const OTP_TTL_MINUTES = 10;
 const OTP_RESEND_COOLDOWN_SECONDS = 120;
 const OTP_MAX_ATTEMPTS = 5;
-const ENROLLMENT_TOKEN_TTL = '2h'; // short-lived token scoped to enrollment wizard
 // How long an abandoned Step-2 draft account survives before the TTL index removes it.
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+// Token scoped to the enrollment wizard. Matches DRAFT_TTL_MS: the token must outlive
+// the PendingParentSignup record it points at, never die sooner — a long wizard
+// (document uploads, assessment, billing) can easily run past a couple of hours, and
+// there's no refresh path, so a shorter TTL here just means a slower parent silently
+// loses their in-progress enrollment at Submit with no way to recover.
+const ENROLLMENT_TOKEN_TTL = '24h';
 const OTP_SELECT = '+passwordHash +otpHash +otpExpires +otpAttempts +otpLastSentAt';
 
 const draftExpiry = () => new Date(Date.now() + DRAFT_TTL_MS);

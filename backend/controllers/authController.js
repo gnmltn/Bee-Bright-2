@@ -38,6 +38,12 @@ const LOGIN_OTP_MAX_VERIFY_ATTEMPTS = 5;
 const USER_LOGIN_OTP_PURPOSE = 'user_login';
 const ADMIN_LOGIN_OTP_PURPOSE = 'admin_login';
 
+// Account lockout after repeated wrong-password attempts (student/tutor/parent login only —
+// separate from the per-IP userLoginLimiter in middleware/rateLimit.js, this tracks a single
+// account regardless of which IP is guessing it).
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
 function detectImageMime(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 12) {
     return null;
@@ -156,6 +162,41 @@ function formatDurationFromSeconds(totalSeconds) {
 
   const minutes = Math.ceil(totalSeconds / 60);
   return `${minutes} minute(s)`;
+}
+
+function getActiveLockout(user, now = new Date()) {
+  if (!user.lockedUntil) return null;
+  const lockedUntil = new Date(user.lockedUntil);
+  if (Number.isNaN(lockedUntil.getTime()) || lockedUntil.getTime() <= now.getTime()) return null;
+  return lockedUntil;
+}
+
+function buildAccountLockedPayload(lockedUntil, now = new Date()) {
+  const retryAfterSeconds = Math.max(1, Math.ceil((lockedUntil.getTime() - now.getTime()) / 1000));
+  return {
+    success: false,
+    code: 'ACCOUNT_LOCKED',
+    lockedUntil: lockedUntil.toISOString(),
+    retryAfterSeconds,
+    message: `Too many failed login attempts. Please try again in ${formatDurationFromSeconds(retryAfterSeconds)}.`
+  };
+}
+
+// Records one wrong-password attempt and locks the account once it reaches the max.
+// Returns the new lockedUntil Date if this attempt triggered a lock, otherwise null.
+async function registerFailedLoginAttempt(userId, currentAttempts) {
+  const attempts = (currentAttempts || 0) + 1;
+  if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+    const lockedUntil = new Date(Date.now() + LOGIN_LOCKOUT_MS);
+    await User.findByIdAndUpdate(userId, { failedLoginAttempts: 0, lockedUntil });
+    return lockedUntil;
+  }
+  await User.findByIdAndUpdate(userId, { failedLoginAttempts: attempts, lockedUntil: null });
+  return null;
+}
+
+async function clearFailedLoginAttempts(userId) {
+  await User.findByIdAndUpdate(userId, { failedLoginAttempts: 0, lockedUntil: null });
 }
 
 // Generate JWT Token
@@ -676,7 +717,7 @@ const loginStart = async (req, res) => {
       });
     }
 
-    const user = await User.findOne(buildEmailLookupFilter(email)).select('+password');
+    const user = await User.findOne(buildEmailLookupFilter(email)).select('+password +failedLoginAttempts +lockedUntil');
 
     if (!user) {
       // Same generic message as every other failure branch below (wrong password,
@@ -731,18 +772,30 @@ const loginStart = async (req, res) => {
       }
     }
 
+    const activeLockout = getActiveLockout(user);
+    if (activeLockout) {
+      return res.status(423).json(buildAccountLockedPayload(activeLockout));
+    }
+
     const isPasswordMatch = await user.comparePassword(password);
     if (!isPasswordMatch) {
+      const lockedUntil = await registerFailedLoginAttempt(user._id, user.failedLoginAttempts);
       logAudit({
         req,
         userIdentifier: user.email,
         action: 'Login',
         module: 'Authentication',
-        description: 'Failed - Wrong password',
+        description: lockedUntil ? 'Failed - Wrong password (account locked)' : 'Failed - Wrong password',
         status: 'FAILED'
       }).catch(() => {});
+
+      if (lockedUntil) {
+        return res.status(423).json(buildAccountLockedPayload(lockedUntil));
+      }
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
+
+    await clearFailedLoginAttempts(user._id);
 
     if (isPasswordExpired(user)) {
       return res.status(403).json({
