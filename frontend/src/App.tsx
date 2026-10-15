@@ -27,7 +27,6 @@ import SuperAdminDashboard from "./pages/SuperAdminDashboard";
 import EnrollmentWizard from "./pages/EnrollmentWizard";
 import EnrollmentTracking from "./pages/EnrollmentTracking";
 import EnrollmentSuccess from "./pages/EnrollmentSuccess";
-import AdminEscalations from "./pages/AdminEscalations";
 import ProfileSettings from "./pages/ProfileSettings";
 import Maintenance from "./pages/Maintenance";
 import NotFound from "./pages/NotFound";
@@ -191,22 +190,6 @@ const App = () => (
                 element={
                   <ProtectedRoute allowedRole="admin">
                     <ProfileSettings />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/admin-dashboard/escalations"
-                element={
-                  <ProtectedRoute allowedRole="admin">
-                    <AdminEscalations />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/super-admin-dashboard/escalations"
-                element={
-                  <ProtectedRoute allowedRole="super_admin">
-                    <AdminEscalations />
                   </ProtectedRoute>
                 }
               />

@@ -10,7 +10,6 @@ const { logAudit } = require('../utils/auditService');
 const { normalizeEmailAddress, buildEmailLookupFilter, getEmailLookupCandidates } = require('../utils/email');
 const { PASSWORD_EXPIRY_DAYS, getPasswordSecurityState, isPasswordExpired } = require('../utils/passwordPolicy');
 const { getMaintenanceEnabled } = require('./settingsController');
-const { createCaptchaChallenge, verifyCaptchaAnswer } = require('../utils/captchaService');
 const { sendEmail, getEmailErrorMessage, logEmailError, buildOtpEmailHtml } = require('../utils/emailService');
 const { setAuthCookie, clearAuthCookie, getAuthTokenFromCookies } = require('../utils/authCookie');
 const {
@@ -210,14 +209,6 @@ function attachLoginSession(res, token) {
   setAuthCookie(res, token);
 }
 
-async function createPostCredentialCaptcha(req, user, flow) {
-  const challenge = createCaptchaChallenge({
-    userId: String(user._id),
-    flow
-  });
-  return challenge;
-}
-
 function buildLoginUserResponse(req, loginUser) {
   const passwordSecurity = getPasswordSecurityState(loginUser);
   return {
@@ -292,36 +283,6 @@ async function issueLoginSuccessResponse(req, res, userId, options = {}) {
     token,
     user: buildLoginUserResponse(req, loginUser),
     ...extraPayload,
-  });
-}
-
-function sendCaptchaFailure(res, captchaVerification) {
-  if (captchaVerification.reason === 'max_attempts') {
-    return res.status(400).json({
-      success: false,
-      code: 'CAPTCHA_EXPIRED',
-      requireNewCaptcha: true,
-      attemptsRemaining: 0,
-      message: 'Maximum attempts reached. Please request a new captcha.'
-    });
-  }
-
-  if (captchaVerification.reason === 'expired') {
-    return res.status(400).json({
-      success: false,
-      code: 'CAPTCHA_EXPIRED',
-      requireNewCaptcha: true,
-      attemptsRemaining: 0,
-      message: 'Captcha expired. Please request a new captcha.'
-    });
-  }
-
-  return res.status(400).json({
-    success: false,
-    code: 'CAPTCHA_FAILED',
-    requireNewCaptcha: false,
-    attemptsRemaining: captchaVerification.attemptsRemaining ?? 0,
-    message: `Captcha verification failed. ${captchaVerification.attemptsRemaining ?? 0} attempt(s) remaining.`
   });
 }
 
@@ -1157,17 +1118,6 @@ const verifyLoginOtp = async (req, res) => {
   }
 };
 
-// @desc    Complete login after captcha verification
-// @route   POST /api/auth/login-complete
-// @access  Public
-const completeLogin = async (req, res) => {
-  return res.status(410).json({
-    success: false,
-    code: 'LOGIN_METHOD_UPDATED',
-    message: 'Captcha login has been replaced with email OTP verification. Please request a new login code.'
-  });
-};
-
 // @desc    Logout current user
 // @route   POST /api/auth/logout
 // @access  Public
@@ -1209,25 +1159,6 @@ const logout = async (req, res) => {
     success: true,
     message: 'Logged out successfully'
   });
-};
-
-// @desc    Get captcha challenge for login
-// @route   GET /api/auth/captcha-challenge
-// @access  Public
-const getCaptchaChallenge = async (req, res) => {
-  try {
-    const challenge = createCaptchaChallenge();
-    res.status(200).json({
-      success: true,
-      challenge
-    });
-  } catch (error) {
-    console.error('Get captcha challenge error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate captcha challenge'
-    });
-  }
 };
 
 // @desc    Get current user
@@ -1592,9 +1523,7 @@ module.exports = {
   loginStart,
   adminLoginStart,
   verifyLoginOtp,
-  completeLogin,
   logout,
-  getCaptchaChallenge,
   getMe,
   updateProfile,
   uploadProfileImage,

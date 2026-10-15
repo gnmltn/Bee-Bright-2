@@ -20,7 +20,10 @@ const Payment = require('../models/Payment');
 const User = require('../models/User');
 const { submitPaymentProof } = require('../controllers/enrollmentController');
 
-const TINY_PNG_DATA_URL = 'data:image/png;base64,' + Buffer.from('fake-image-bytes').toString('base64');
+// A real, minimal valid 1x1 PNG — enrollmentController now verifies the actual bytes
+// via magic-byte sniffing, not just the declared data: URL prefix, so a fake payload
+// would be rejected.
+const TINY_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 function mockRes() {
   const res = { _status: 200, _body: null };
@@ -72,7 +75,7 @@ test('submitPaymentProof: an already-paid enrollment with no Payment record retu
   const restore = stubFsAndUser();
   try {
     const res = mockRes();
-    await submitPaymentProof({ params: { enrollmentId: 'BB-20260904-0001' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
+    await submitPaymentProof({ params: { enrollmentId: 'BB-20260904-0001' }, user: { _id: 'parent-1', role: 'parent' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
     assert.equal(res._status, 409, JSON.stringify(res._body));
     assert.equal(res._body.alreadyPaid, true);
     assert.match(res._body.message, /already fully paid/i);
@@ -95,7 +98,7 @@ test('submitPaymentProof: a not-yet-paid enrollment with a missing Payment recor
   const restore = stubFsAndUser();
   try {
     const res = mockRes();
-    await submitPaymentProof({ params: { enrollmentId: 'BB-20260904-0001' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
+    await submitPaymentProof({ params: { enrollmentId: 'BB-20260904-0001' }, user: { _id: 'parent-1', role: 'parent' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.ok(savedPayment, 'a Payment document should have been created and saved');
     assert.equal(savedPayment.paymentType, 'down');

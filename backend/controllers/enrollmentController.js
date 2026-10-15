@@ -60,6 +60,17 @@ const ensureProofDir = () => {
   if (!fs.existsSync(PROOF_DIR)) fs.mkdirSync(PROOF_DIR, { recursive: true });
 };
 
+// Verifies the decoded bytes genuinely match the declared data: URL type (magic-byte
+// sniffing), not just the client-supplied prefix — reuses detectChildPhotoMime (below)
+// for images, since this app has no multipart upload here to spoof a Content-Type
+// header on, only a declared prefix string anyone can type. PDF has no equivalent
+// detector elsewhere in the codebase, so its signature is checked inline.
+function verifyUploadContentMatchesType(buf, declaredMime) {
+  const mime = declaredMime.toLowerCase() === 'image/jpg' ? 'image/jpeg' : declaredMime.toLowerCase();
+  if (mime === 'application/pdf') return buf.slice(0, 4).toString('ascii') === '%PDF';
+  return detectChildPhotoMime(buf) === mime;
+}
+
 function saveProofFromDataUrl(dataUrl, enrollmentId) {
   if (!dataUrl || typeof dataUrl !== 'string') return null;
   if (dataUrl.startsWith('/uploads/payments/')) return dataUrl;
@@ -68,6 +79,9 @@ function saveProofFromDataUrl(dataUrl, enrollmentId) {
   const buf = Buffer.from(match[2], 'base64');
   if (!buf.length) throw Object.assign(new Error('Proof file is empty.'), { statusCode: 400 });
   if (buf.length > MAX_PROOF_BYTES) throw Object.assign(new Error('Proof file must be 8 MB or less.'), { statusCode: 400 });
+  if (!verifyUploadContentMatchesType(buf, match[1])) {
+    throw Object.assign(new Error('Proof file content does not match its declared file type.'), { statusCode: 400 });
+  }
   ensureProofDir();
   const ext = match[1].includes('pdf') ? 'pdf' : (match[1].includes('png') ? 'png' : 'jpg');
   const filename = `proof-${String(enrollmentId)}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
@@ -84,6 +98,9 @@ function saveRequirementFromDataUrl(dataUrl, enrollmentId, kind) {
   const buf = Buffer.from(match[2], 'base64');
   if (!buf.length) throw Object.assign(new Error(`${kind} file is empty.`), { statusCode: 400 });
   if (buf.length > MAX_REQUIREMENT_BYTES) throw Object.assign(new Error(`${kind} file must be 5 MB or less.`), { statusCode: 400 });
+  if (!verifyUploadContentMatchesType(buf, match[1])) {
+    throw Object.assign(new Error(`${kind} file content does not match its declared file type.`), { statusCode: 400 });
+  }
   if (!fs.existsSync(REQUIREMENTS_DIR)) fs.mkdirSync(REQUIREMENTS_DIR, { recursive: true });
   const ext = match[1].includes('pdf') ? 'pdf' : (match[1].includes('png') ? 'png' : 'jpg');
   const filename = `${kind}-${String(enrollmentId)}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
@@ -898,6 +915,15 @@ const submitPaymentProof = async (req, res) => {
     const enrollment = await Enrollment.findOne({ enrollmentId });
     if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
 
+    // Ownership check — enrollmentId is a sequential, guessable value, so without this
+    // any logged-in account could submit a proof against a DIFFERENT family's
+    // enrollment. Same pattern as setChildProfilePhoto/updateChildName in this file.
+    const isOwner = String(enrollment.parent) === String(req.user?._id);
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to submit a payment proof for this enrollment.' });
+    }
+
     // Explicitly excludes 'remaining' — this is the DOWN payment's proof-submission
     // path only, kept separate from submitRemainingPaymentProof below even if a
     // 'remaining' Payment already exists and would otherwise be the most recent one.
@@ -983,6 +1009,13 @@ const submitRemainingPaymentProof = async (req, res) => {
 
     const enrollment = await Enrollment.findOne({ enrollmentId });
     if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
+
+    // Ownership check — same reasoning as submitPaymentProof above.
+    const isOwner = String(enrollment.parent) === String(req.user?._id);
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to submit a payment proof for this enrollment.' });
+    }
 
     const downPayment = await Payment.findOne({ enrollment: enrollment._id, paymentType: { $ne: 'remaining' } }).sort({ createdAt: -1 });
     if (!downPayment || downPayment.status !== 'verified') {

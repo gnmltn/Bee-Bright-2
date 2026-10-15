@@ -19,9 +19,7 @@ const {
   loginStart,
   adminLoginStart,
   verifyLoginOtp,
-  completeLogin,
   logout,
-  getCaptchaChallenge,
   getMe,
   updateProfile,
   uploadProfileImage,
@@ -53,9 +51,6 @@ const normalizeFields = (req, res, next) => {
 
   next();
 };
-
-// Public routes
-router.get('/captcha-challenge', getCaptchaChallenge);
 
 // ── Parent/Guardian enrollment registration ──────────────────────────────
 router.post(
@@ -151,7 +146,6 @@ router.post(
   verifyLoginOtp
 );
 
-router.post('/login-complete', completeLogin);
 router.post('/logout', logout);
 
 router.post(

@@ -36,7 +36,7 @@ const { matchesParentPreference, resolvePreferredDays } = require('../utils/sche
 const { parentOwnsStudent, resolveParentIdsForStudents } = require('../utils/parentChildAccess');
 const { permanentIdOf } = require('../utils/studentIdentity');
 const { isRoomDoubleBooked, isOneOnOneHourFull, filterLiveSessions } = require('../utils/weeklySchedulingUtils');
-const { emitToAdmins, emitToParents, emitToTutors } = require('../utils/realtime');
+const { emitToAdmins, emitToParents, emitToTutors, disconnectUserSockets } = require('../utils/realtime');
 const { attachCycleByStudent } = require('../utils/attendanceCycles');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
@@ -1105,6 +1105,10 @@ async function cleanupDuplicateRecords() {
     if (toArchive.length > 0) {
       await User.updateMany({ _id: { $in: toArchive } }, { $set: { isArchived: true, isActive: false, archivedAt: new Date() } });
       report.archivedUsers += toArchive.length;
+      // Security audit fix #11 — same reasoning as userController.js's deleteUser:
+      // cut off any live realtime connection these now-archived duplicate accounts
+      // have open immediately, instead of waiting for a natural reconnect.
+      for (const id of toArchive) disconnectUserSockets(id);
     }
   }
 

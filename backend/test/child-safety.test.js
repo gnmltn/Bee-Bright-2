@@ -87,7 +87,10 @@ test('safety message: self_harm includes the crisis hotline, others do not', () 
   assert.match(getChildSafetyMessage('bullying', 'english'), /trusted adult|parent, guardian, teacher/i);
 });
 
-test('handleChildSafetyScreen: student hit → fixed reply + urgent open escalation + audit', async () => {
+// 2026-10-15, owner decision: the admin Requests ticket this used to open is retired
+// (createEscalation is now a no-op) — the safety-reply WORDING itself is explicitly
+// untouched, only the ticket behind it is gone.
+test('handleChildSafetyScreen: student hit → SAME fixed safety reply, but NO escalation ticket any more', async () => {
   await withStubs(async ({ escalations, audits }) => {
     const req = {
       user: { _id: 'stu-1', id: 'stu-1', role: 'student' },
@@ -100,21 +103,13 @@ test('handleChildSafetyScreen: student hit → fixed reply + urgent open escalat
     assert.match(reply, /Thank you for telling me/);
     assert.match(reply, /1553/);
 
-    assert.equal(escalations.length, 1);
-    const esc = escalations[0];
-    assert.equal(esc.source, 'child_safety');
-    assert.equal(esc.category, 'self_harm');
-    assert.equal(esc.severity, 'urgent');
-    assert.equal(esc.status, 'open');
-    assert.equal(esc.user, 'stu-1');
-    assert.equal(esc.conversationSnippet, 'i want to kill myself');
+    assert.equal(escalations.length, 0, 'no ticket is created any more');
 
-    // one audit for the escalation, one for the AI interaction
     const aiAudit = audits.find((a) => a.action === 'AI Chat');
     assert.ok(aiAudit, 'AI Chat audit written');
     assert.equal(aiAudit.metadata.groundingPath, 'safety');
     assert.equal(aiAudit.metadata.safetyCategory, 'self_harm');
-    assert.ok(audits.some((a) => a.action === 'AI Escalation Created'));
+    assert.ok(!audits.some((a) => a.action === 'AI Escalation Created'), 'no escalation audit entry either');
   });
 });
 

@@ -39,7 +39,10 @@ function mockRes() {
   return res;
 }
 
-const TINY_PNG_DATA_URL = 'data:image/png;base64,' + Buffer.from('fake-image-bytes').toString('base64');
+// A real, minimal valid 1x1 PNG — enrollmentController now verifies the actual bytes
+// via magic-byte sniffing, not just the declared data: URL prefix, so a fake payload
+// would be rejected.
+const TINY_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 // ─── submitEnrollment ──────────────────────────────────────────────────────────────
 
@@ -134,7 +137,7 @@ test('submitPaymentProof: fires emitNewPayment (paymentType: down)', async () =>
   const restoreFs = stubFsAndUser();
   try {
     const res = mockRes();
-    await submitPaymentProof({ params: { enrollmentId: 'BB-20260904-0001' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
+    await submitPaymentProof({ params: { enrollmentId: 'BB-20260904-0001' }, user: { _id: 'parent-1', role: 'parent' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(emitted.payments.length, 1);
     assert.equal(emitted.payments[0].paymentType, 'down');
@@ -168,7 +171,7 @@ test('submitRemainingPaymentProof: fires emitNewPayment (paymentType: remaining)
   const restoreFs = stubFsAndUser();
   try {
     const res = mockRes();
-    await submitRemainingPaymentProof({ params: { enrollmentId: 'BB-20260904-0002' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
+    await submitRemainingPaymentProof({ params: { enrollmentId: 'BB-20260904-0002' }, user: { _id: 'parent-1', role: 'parent' }, body: { proofDataUrl: TINY_PNG_DATA_URL, paymentMethod: 'gcash' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(emitted.payments.length, 1);
     assert.equal(emitted.payments[0].paymentType, 'remaining');

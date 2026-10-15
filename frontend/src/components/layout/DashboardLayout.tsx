@@ -18,7 +18,6 @@ import {
   CreditCard,
   Activity,
   ClipboardList,
-  Inbox,
   MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,7 +25,6 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { UserRole } from "@/contexts/AuthContext";
 import { useAuth } from "@/hooks/useAuth";
 import { LogoutConfirmDialog } from "@/components/layout/LogoutConfirmDialog";
-import { useOpenRequestsCount } from "@/lib/escalations";
 import { useNavBadges, NAV_BADGE_KEYS, SEEN_BADGE_KEYS } from "@/lib/navBadges";
 import { useSelectedChild } from "@/hooks/useSelectedChild";
 import beeMascot from "@/assets/bee-mascot.png";
@@ -78,7 +76,6 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Reports", href: "/admin-dashboard#reports", icon: FileText },
     { name: "Schedule", href: "/admin-dashboard#schedule", icon: Calendar },
     { name: "Remarks", href: "/admin-dashboard#remarks", icon: MessageSquare },
-    { name: "Requests", href: "/admin-dashboard/escalations", icon: Inbox },
     { name: "Announcements", href: "/admin-dashboard#announcements", icon: Bell },
     { name: "Audit Logs", href: "/admin-dashboard#audit-logs", icon: ClipboardList },
     { name: "Activity", href: "/admin-dashboard#activity", icon: Activity },
@@ -92,7 +89,6 @@ const navigationByRole: Record<string, { name: string; href: string; icon: typeo
     { name: "Reports", href: "/super-admin-dashboard#reports", icon: FileText },
     { name: "Schedule", href: "/super-admin-dashboard#schedule", icon: Calendar },
     { name: "Remarks", href: "/super-admin-dashboard#remarks", icon: MessageSquare },
-    { name: "Requests", href: "/super-admin-dashboard/escalations", icon: Inbox },
     { name: "Announcements", href: "/super-admin-dashboard#announcements", icon: Bell },
     { name: "Audit Logs", href: "/super-admin-dashboard#audit-logs", icon: ClipboardList },
     { name: "Activity", href: "/super-admin-dashboard#activity", icon: Activity },
@@ -115,10 +111,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isAdminRole = user?.role === "admin" || user?.role === "super_admin";
-  // Pending support-request count — shown as a badge on the "Requests" nav item
-  // (replaces the old top-of-dashboard notification bell). Hook must run before any early return.
-  const requestsCount = useOpenRequestsCount(isAdminRole);
   // Red count badges on specific sidebar items (parent / tutor / admin). Hook must run before any early return.
   // Parent badges are scoped to the ONE shared selected child (see SelectedChildContext).
   const { activeChildId, loading: childrenLoading } = useSelectedChild();
@@ -166,9 +158,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       </span>
     ) : null;
 
-  // Requests keeps its own count (open support requests); every other badge comes from /notifications/badges.
-  const requestsBadge = (item: { name: string; href: string }) => {
-    if (isAdminRole && item.href.endsWith("/escalations")) return countBadge(requestsCount, "nav-badge-requests");
+  const navBadge = (item: { name: string; href: string }) => {
     const key = badgeKeyFor(item.name);
     return key ? countBadge(badges[key] || 0, `nav-badge-${key}`) : null;
   };
@@ -216,7 +206,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
-              {requestsBadge(item)}
+              {navBadge(item)}
             </Link>
           ))}
         </nav>
@@ -325,7 +315,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
-              {requestsBadge(item)}
+              {navBadge(item)}
             </Link>
           ))}
         </nav>

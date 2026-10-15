@@ -6,9 +6,9 @@
  * than inventing a new cross-component signaling mechanism.
  *
  * Why a bridge instead of each page holding its own socket: several of these pages are
- * SEPARATE ROUTES from the dashboard they're logically part of (AdminEscalations.tsx at
- * /admin-dashboard/escalations, StudentPayments.tsx at /student-dashboard/payments) — a
- * per-page connection would disconnect and reconnect on every navigation between them.
+ * SEPARATE ROUTES from the dashboard they're logically part of (StudentPayments.tsx at
+ * /student-dashboard/payments is one example) — a per-page connection would disconnect
+ * and reconnect on every navigation between them.
  * One connection, mounted above the router, outlives navigation; pages just listen for
  * the events they care about.
  */
@@ -35,7 +35,6 @@ export const REALTIME_EVENTS = {
   ENROLLMENT_STATUS_CHANGED: 'bb:rt:enrollment-status-changed',
   ASSESSMENT_COMPLETED: 'bb:rt:assessment-completed',
   USER_CHANGED: 'bb:rt:user-changed',
-  REQUEST_NEW: 'bb:rt:request-new',
   /** A NEW weekly digest was just generated (never fires on a cache-hit, since nothing
    *  changed then) — lets another admin's open Reports-tab week picker show "Already
    *  generated" live instead of only after a manual refresh. */

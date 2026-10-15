@@ -13,7 +13,7 @@ function tutorFullName(t: TutorLike) {
 }
 
 /**
- * "Contact Tutor" Quick Action — same Popover-panel template as MyRequestsBell.tsx
+ * "Contact Tutor" Quick Action — a Popover-panel quick action
  * (NewProgram_Modal_AgeCheck_PaymentBug_ContactTutor.pdf Section D). Lists every
  * tutor currently assigned to the active child's schedules with name/phone/email,
  * rather than the previous silent mailto-or-nothing behavior.

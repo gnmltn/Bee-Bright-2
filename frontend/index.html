@@ -5,6 +5,58 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
+    <!--
+      Content-Security-Policy, delivered via <meta> because this is where the real
+      page lands: this SPA is served by Vite (dev) / a static host (prod), never by
+      the Express backend, so a CSP set there (backend/server.js) never reaches this
+      document. A <meta> CSP is the one delivery method that works regardless of
+      which static host ends up serving this build. Known limitation: `frame-ancestors`,
+      `report-to`, and `sandbox` are silently ignored when set via <meta> (browsers
+      only honor those as a real HTTP header) — if/when a production static host is
+      chosen, set an equivalent CSP there as a response header too so those also apply.
+
+      Each source below reflects actual, verified usage (grepped across frontend/src),
+      not a guess:
+        - style-src 'unsafe-inline': Radix UI / Framer Motion / Embla Carousel all set
+          inline `style` attributes at runtime for positioning/animation (not optional
+          — there is no nonce/hash that can cover dynamically-computed values), and
+          components/ui/chart.tsx injects a <style> element via dangerouslySetInnerHTML
+          for per-chart theme colors.
+        - style-src/font-src https://fonts.*: index.css @imports Google Fonts.
+        - img-src/object-src data:: enrollment/remark file pickers read locally-chosen
+          files via FileReader.readAsDataURL for an instant preview before upload.
+        - img-src/object-src blob:: payment-proof/remark/certificate PDF and image
+          previews are fetched and rendered via URL.createObjectURL (see FilePreview.tsx).
+        - object-src AND frame-src (neither 'none'): FilePreview.tsx (payment proofs,
+          enrollment docs, remarks, certificates) and AdminDashboard.tsx's own payment-
+          proof viewer both render PDF previews with <object type="application/pdf">
+          around a blob: URL. Chromium treats a PDF-rendering <object> as creating an
+          internal browsing context — i.e. it enforces frame-src on it too, not just
+          object-src, even though there is no literal <iframe> anywhere in this app
+          (confirmed live: frame-src 'none' silently broke every one of these PDF
+          previews, console: "Framing '' violates ... 'frame-src none'"). Both
+          directives need to allow 'self'/blob:/data: together, or PDF previews break.
+        - img-src/connect-src http://localhost:5001: the backend's own origin (profile
+          photos etc. are plain cross-origin <img> tags to this host; REST calls and the
+          Socket.io handshake also target it directly). This is backend/.env's current
+          PORT — update this origin (and add its https/wss equivalent) before deploying
+          anywhere other than local dev.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' https://fonts.gstatic.com;
+      img-src 'self' data: blob: http://localhost:5001;
+      connect-src 'self' http://localhost:5001 ws://localhost:5001;
+      object-src 'self' blob: data:;
+      frame-src 'self' blob: data:;
+      base-uri 'self';
+      form-action 'self';
+      media-src 'none';
+      worker-src 'self' blob:;
+      manifest-src 'self';
+    " />
     <title>Bee Bright Tutorial Center</title>
     <meta name="description" content="Empowering students with personalized tutoring, expert guidance, and innovative learning solutions." />
     <meta name="author" content="Bee Bright Tutorial Center" />

@@ -281,22 +281,23 @@ test('updateDraftRemark (publish): fires emitToAdmins(\'remark:new\', ...) — t
 
 // ─── Payments: only the specific enrollment's own parent. ──────────────────────────────
 
-// ─── Escalations (Admin Requests tab): admin-only, no parent/tutor scoping needed. ──────
+// ─── Escalations (Admin Requests tab): retired 2026-10-15 — createEscalation is now a
+// no-op (see escalationService.js), so it never writes a record or emits anything. ─────
 
-test('createEscalation: fires emitToAdmins(\'request:new\', ...) on every successful escalation, admin-scoped only', async () => {
+test('createEscalation: retired — always resolves null, never touches the DB or emits anything', async () => {
   resetEmitted();
   const Escalation = require('../models/Escalation');
   const { createEscalation } = require('../utils/escalationService');
   const origCreate = Escalation.create;
-  Escalation.create = async (doc) => ({ _id: 'esc-1', ...doc });
+  let createCalled = false;
+  Escalation.create = async (doc) => { createCalled = true; return { _id: 'esc-1', ...doc }; };
   try {
     const doc = await createEscalation({ source: 'handoff', category: 'human_requested', trigger: 'QA test' });
-    assert.ok(doc, 'escalation was created');
-    assert.equal(emitted.admin.length, 1);
-    assert.equal(emitted.admin[0].event, 'request:new');
-    assert.equal(emitted.admin[0].payload.escalationId, 'esc-1');
-    assert.equal(Object.keys(emitted.parent).length, 0, 'never scoped to any parent');
-    assert.equal(Object.keys(emitted.tutor).length, 0, 'never scoped to any tutor');
+    assert.equal(doc, null);
+    assert.equal(createCalled, false, 'must never write an Escalation document any more');
+    assert.equal(emitted.admin.length, 0, 'no admin emit either');
+    assert.equal(Object.keys(emitted.parent).length, 0);
+    assert.equal(Object.keys(emitted.tutor).length, 0);
   } finally {
     Escalation.create = origCreate;
   }

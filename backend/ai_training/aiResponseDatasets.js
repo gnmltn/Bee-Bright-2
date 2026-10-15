@@ -639,7 +639,7 @@ const AIResponseDatasets = {
         tgl: 'Ang dashboard ay may sections para sa Progress, Schedule, Payments, Materials, at Announcements. Bawat section ay nagpapakita ng different information relevant sa learning mo.'
       }
     },
-    // Login email verification code (OTP) — sent after the CAPTCHA.
+    // Login email verification code (OTP) — sent after your password is checked.
     {
       id: 'S041',
       role: 'student',
@@ -650,9 +650,9 @@ const AIResponseDatasets = {
         tgl: 'Bakit may verification code pa bago maka-login?'
       },
       expectedReply: {
-        en: 'For account security, Bee Bright emails you a 6-digit verification code each time you log in, after the CAPTCHA. Enter that code to finish signing in. If it does not arrive, check your spam folder, wait a minute, then use the resend option. Codes expire after a short time.',
-        fil: 'Para sa seguridad ng account, nagpapadala ang Bee Bright ng 6-digit na verification code sa email mo tuwing maglo-login ka, pagkatapos ng CAPTCHA. Ilagay ang code na iyon para makumpleto ang pag-sign in. Kung hindi ito dumating, tingnan ang spam folder, maghintay ng isang minuto, tapos gamitin ang resend option. Nag-e-expire ang code pagkatapos ng maikling panahon.',
-        tgl: 'Para sa security ng account, nag-e-email ang Bee Bright ng 6-digit verification code tuwing maglo-login ka, after ng CAPTCHA. I-enter ang code para matapos ang sign in. Kung hindi dumating, i-check ang spam folder, maghintay ng isang minuto, tapos i-resend. Nag-e-expire ang code after ng ilang minuto.'
+        en: 'For account security, Bee Bright emails you a 6-digit verification code each time you log in, right after your password is checked. Enter that code to finish signing in. If it does not arrive, check your spam folder, wait a minute, then use the resend option. Codes expire after a short time. If you choose to trust the device you are logging in from, you will not be asked for a code again on that same device next time.',
+        fil: 'Para sa seguridad ng account, nagpapadala ang Bee Bright ng 6-digit na verification code sa email mo tuwing maglo-login ka, pagkatapos masuri ang password mo. Ilagay ang code na iyon para makumpleto ang pag-sign in. Kung hindi ito dumating, tingnan ang spam folder, maghintay ng isang minuto, tapos gamitin ang resend option. Nag-e-expire ang code pagkatapos ng maikling panahon. Kung pipiliin mong i-trust ang device na ginagamit mo, hindi na ito hihingi ng code sa susunod na pag-login mo gamit ang parehong device.',
+        tgl: 'Para sa security ng account, nag-e-email ang Bee Bright ng 6-digit verification code tuwing maglo-login ka, right after masuri ang password mo. I-enter ang code para matapos ang sign in. Kung hindi dumating, i-check ang spam folder, maghintay ng isang minuto, tapos i-resend. Nag-e-expire ang code after ng ilang minuto. Kung i-trust mo ang device na ginagamit mo, hindi ka na hihingan ng code sa susunod mong login gamit ang same device.'
       }
     },
     // Change password while logged in — distinct from Forgot Password.

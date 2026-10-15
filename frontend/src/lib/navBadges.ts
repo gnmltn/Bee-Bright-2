@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { notificationService } from "@/services/api";
 
-/** Sidebar nav item name -> badge key, per role. Only these items ever carry a badge
- *  (Requests has its own badge — see useOpenRequestsCount in lib/escalations.ts). */
+/** Sidebar nav item name -> badge key, per role. Only these items ever carry a badge. */
 const PARENT_KEYS = { Schedule: "schedule", Progress: "progress", Announcements: "announcements", Payments: "payments" };
 const ADMIN_KEYS = { Users: "users", Enrollments: "enrollments", Payments: "payments", Remarks: "remarks", Announcements: "announcements" };
 

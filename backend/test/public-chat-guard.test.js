@@ -69,16 +69,15 @@ test('handleAnonymousChatGuards: anon marketing question → null (falls through
   });
 });
 
-test('handleAnonymousChatGuards: child-safety screen applies on the anonymous surface', async () => {
+// 2026-10-15, owner decision: the admin Requests ticket this used to open is retired
+// (createEscalation is now a no-op) — the safety-reply WORDING itself is explicitly
+// untouched, only the ticket behind it is gone.
+test('handleAnonymousChatGuards: child-safety screen still applies on the anonymous surface — same reply, no ticket any more', async () => {
   await withStubs(async ({ audits, escalations }) => {
     const out = await handleAnonymousChatGuards(anonReq('i want to kill myself'), 'i want to kill myself');
     assert.match(out, /Thank you for telling me/);
     assert.match(out, /1553/);
-    assert.equal(escalations.length, 1);
-    assert.equal(escalations[0].source, 'child_safety');
-    assert.equal(escalations[0].user, null);
-    assert.equal(escalations[0].userIdentifier, 'anonymous');
-    assert.equal(escalations[0].severity, 'urgent');
+    assert.equal(escalations.length, 0, 'no ticket is created any more');
     const a = audits.find((x) => x.action === 'AI Chat');
     assert.equal(a.metadata.groundingPath, 'safety');
     assert.equal(a.metadata.safetyCategory, 'self_harm');

@@ -73,6 +73,24 @@ function initRealtime(httpServer) {
   return io;
 }
 
+/**
+ * Force-disconnects every active socket for one user immediately — used when an
+ * account is archived/deactivated so it can't keep receiving realtime events (or
+ * anything else) off a connection that was authorized before that happened, instead of
+ * waiting for it to notice on its own next reconnect. Matched on `socket.data.userId`
+ * rather than by room: admin/super_admin all share the single ADMIN_ROOM, so a
+ * room-based disconnect would have kicked every other admin too.
+ */
+function disconnectUserSockets(userId) {
+  if (!io || !userId) return;
+  const targetId = String(userId);
+  for (const socket of io.sockets.sockets.values()) {
+    if (socket.data?.userId === targetId) {
+      socket.disconnect(true);
+    }
+  }
+}
+
 function emitToAdmins(event, payload) {
   if (!io) return; // realtime not initialized (e.g. under `node --test`) — never throw
   io.to(ADMIN_ROOM).emit(event, payload);
@@ -123,4 +141,5 @@ module.exports = {
   emitToTutors,
   emitNewEnrollment,
   emitNewPayment,
+  disconnectUserSockets,
 };

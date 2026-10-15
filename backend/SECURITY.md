@@ -13,11 +13,10 @@
 - **NoSQL injection guard** (`middleware/sanitize.js`) strips `$` and `.` from `req.body` and `req.query` so they are not used as Mongo operators.
 - Validation rules live in `middleware/inputValidation.js` and in route files. Add new rules there for new endpoints.
 
-## 3. Multer file validation
+## 3. File uploads
 
-- **Allowed types:** PDF, video (mp4, webm, mov, avi), images (jpeg, png, gif, webp, svg), Word, Excel, text/csv.
-- **Checks:** MIME type allowlist, **extension allowlist** (so extension must match an allowed one), **max file size** (80MB), **max filename length** (200 chars).
-- Implemented in `utils/uploadMaterial.js`. Profile images are sent as base64 in JSON (no multer); size limit is enforced in the auth controller.
+- All current uploads (profile photos, payment proofs, remarks/certificates attachments, etc.) are sent as base64 data URLs in the JSON body, not multipart/multer. Size and type are validated in the receiving controller.
+- `utils/uploadMaterial.js` (a multer-based handler for the removed Learning Materials feature, which also allowed `image/svg+xml` — a stored-XSS risk) was deleted as dead code; it was never wired to any route.
 
 ## 4. Helmet
 

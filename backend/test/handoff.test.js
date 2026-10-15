@@ -88,13 +88,53 @@ test('getHandoffAcknowledgement: category + language', () => {
   }
 });
 
-test('Task 30b: a fresh trigger starts the guided intake — NO escalation yet', async () => {
+// 2026-10-15, retired: "raise a concern" no longer starts a guided intake or ever creates
+// an escalation — a detected trigger gets a direct redirect to BeeBright's own contact
+// channels instead (wording lives in concernRedirectToContact, handoffService.js).
+test('Task 30 retired: a fresh trigger gets the email/social-media redirect — NOT the old guided intake, no escalation', async () => {
   await withStubs(async ({ escalations }) => {
     const req = { user: { _id: 'u9', id: 'u9', role: 'parent' }, body: {}, headers: {} };
     const reply = await handleExplicitHandoff(req, 'I want to talk to a real person please', []);
-    assert.match(reply, /Reason:/i);
-    assert.match(reply, /Explanation:/i);
-    assert.equal(escalations.length, 0, 'no ticket is created on the trigger alone');
+    assert.doesNotMatch(reply, /Reason:/i, 'must not start the old guided intake');
+    assert.doesNotMatch(reply, /Explanation:/i);
+    assert.match(reply, /beebrightph@gmail\.com/i);
+    assert.match(reply, /facebook/i);
+    assert.match(reply, /instagram/i);
+    assert.equal(escalations.length, 0, 'no ticket is ever created any more');
+  });
+});
+
+test('Task 30 retired: every trigger category (human_requested / billing_dispute / complaint / bare "concern") gets the same redirect, never an escalation', async () => {
+  await withStubs(async ({ escalations }) => {
+    const triggers = [
+      'can I talk to a real person',
+      'I was double charged for tuition',
+      'I want to file a complaint about my tutor',
+      'I have a concern',
+    ];
+    for (const message of triggers) {
+      const req = { user: { _id: 'u9', id: 'u9', role: 'parent' }, body: {}, headers: {} };
+      const reply = await handleExplicitHandoff(req, message, []);
+      assert.match(reply, /beebrightph@gmail\.com/i, `message: ${message}`);
+    }
+    assert.equal(escalations.length, 0);
+  });
+});
+
+test('Task 30 retired: stale pre-deploy history (an old guided-intake assistant turn) gets redirected cleanly too, and never creates an escalation', async () => {
+  await withStubs(async ({ escalations }) => {
+    const req = { user: { _id: 'u9', id: 'u9', role: 'parent' }, body: {}, headers: {} };
+    // Shape of a pre-retirement "awaiting_confirmation" assistant turn, in case any
+    // browser tab still has it in local history across the deploy. Even here, a reply to
+    // it gets the new redirect rather than being silently dropped or reviving the flow.
+    const staleHistory = [
+      { role: 'user', content: 'raise a concern' },
+      { role: 'assistant', content: 'Reason: billing concern\nExplanation: overcharged\n\nReply "yes" to submit this, or "no" to cancel.' },
+    ];
+    const reply = await handleExplicitHandoff(req, 'yes', staleHistory);
+    assert.match(reply, /beebrightph@gmail\.com/i);
+    assert.doesNotMatch(reply, /submitted|naisumite/i, 'must not act as if an escalation was confirmed/submitted');
+    assert.equal(escalations.length, 0);
   });
 });
 
@@ -107,90 +147,26 @@ test('handleExplicitHandoff: unauthenticated → null (D5 — public path stays 
 });
 
 // Batch 19 — "raise a concern" is parent/tutor-side only now (see the dedicated role-gate
-// tests near the bottom of this file). concernReq() used to default to role: 'student';
-// changed to 'parent' so the full-flow tests below keep exercising the intended path.
+// tests near the bottom of this file).
 function concernReq() {
   return { user: { _id: 'u9', id: 'u9', role: 'parent' }, body: {}, headers: {} };
 }
 
-// Walk the guided flow, appending each turn to `history` like the chat widget does.
-async function runConcernFlow(req, turns) {
-  const history = [];
-  let last = null;
-  for (const msg of turns) {
-    last = await handleExplicitHandoff(req, msg, history);
-    history.push({ role: 'user', content: msg });
-    if (last !== null) history.push({ role: 'assistant', content: last });
-  }
-  return { reply: last, history };
-}
-
-test('Task 30b: full flow, fields in one message, confirmed → escalation with reason + explanation', async () => {
-  await withStubs(async ({ escalations }) => {
-    const { reply } = await runConcernFlow(concernReq(), [
-      'I want to raise a concern about my payment',
-      'Reason: billing concern\nExplanation: I think I overpaid the remaining 50% balance. Can it be refunded?',
-      'yes',
-    ]);
-    assert.match(reply, /submitted|naisumite/i);
-    assert.equal(escalations.length, 1);
-    assert.equal(escalations[0].source, 'handoff');
-    assert.equal(escalations[0].status, 'open');
-    assert.equal(escalations[0].concernReason, 'billing concern');
-    assert.match(escalations[0].concernExplanation, /overpaid the remaining 50% balance/i);
-  });
-});
-
-test('Task 30b: full flow, fields across two messages, confirmed → escalation', async () => {
-  await withStubs(async ({ escalations }) => {
-    const { reply } = await runConcernFlow(concernReq(), [
-      'can I raise a concern',
-      'my tutor has skipped three sessions without telling me',   // no labels → treated as explanation
-      'tutor attendance',                                          // the short topic
-      'yes',
-    ]);
-    assert.match(reply, /submitted|naisumite/i);
-    assert.equal(escalations.length, 1);
-    assert.equal(escalations[0].concernReason, 'tutor attendance');
-    assert.match(escalations[0].concernExplanation, /skipped three sessions/i);
-  });
-});
-
-test('Task 30b: declining at the confirmation step creates NO escalation', async () => {
-  await withStubs(async ({ escalations }) => {
-    const { reply } = await runConcernFlow(concernReq(), [
-      'raise a concern',
-      'Reason: schedule issue\nExplanation: my class time keeps changing',
-      'no',
-    ]);
-    assert.match(reply, /won'?t submit|hindi ko/i);
-    assert.equal(escalations.length, 0);
-  });
-});
-
-test('Task 30b: abandoning mid-flow (unrelated message at confirm) creates NO escalation and yields to the pipeline', async () => {
+test('Task 30 retired: a conversation that used to walk the full guided intake now never creates an escalation at any turn', async () => {
   await withStubs(async ({ escalations }) => {
     const req = concernReq();
     const history = [];
-    for (const msg of ['raise a concern', 'Reason: billing\nExplanation: overcharged']) {
-      const r = await handleExplicitHandoff(req, msg, history);
+    const turns = [
+      'I want to raise a concern about my payment',
+      'Reason: billing concern\nExplanation: I think I overpaid the remaining 50% balance. Can it be refunded?',
+      'yes',
+    ];
+    for (const msg of turns) {
+      const out = await handleExplicitHandoff(req, msg, history);
       history.push({ role: 'user', content: msg });
-      history.push({ role: 'assistant', content: r });
+      if (out !== null) history.push({ role: 'assistant', content: out });
     }
-    const out = await handleExplicitHandoff(req, 'actually, what are your office hours?', history);
-    assert.equal(out, null, 'returns null so the normal pipeline answers the new question');
-    assert.equal(escalations.length, 0);
-  });
-});
-
-test('Task 30b: explicit "cancel" during collection abandons cleanly', async () => {
-  await withStubs(async ({ escalations }) => {
-    const { reply } = await runConcernFlow(concernReq(), [
-      'i have a concern',
-      'nevermind, cancel',
-    ]);
-    assert.match(reply, /won'?t submit|hindi ko|maitutulong/i);
-    assert.equal(escalations.length, 0);
+    assert.equal(escalations.length, 0, 'no escalation at any point in what used to be the full flow');
   });
 });
 
@@ -231,7 +207,7 @@ test('Batch 19: handleExplicitHandoff still works for parent and tutor', async (
     for (const role of ['parent', 'tutor']) {
       const req = { user: { _id: 'u9', id: 'u9', role }, body: {}, headers: {} };
       const reply = await handleExplicitHandoff(req, 'I want to raise a concern about my payment', []);
-      assert.match(reply, /Reason:/i, `role=${role}`);
+      assert.match(reply, /beebrightph@gmail\.com/i, `role=${role}`);
     }
     assert.equal(escalations.length, 0);
   });

@@ -64,8 +64,35 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Security headers (Helmet)
+//
+// CSP note: this backend never serves the React frontend's HTML (it's a Vite dev
+// server / separate static host — confirmed no express.static/sendFile for a
+// frontend build anywhere in this app), so THIS CSP only governs this app's own
+// responses: JSON API replies and the /uploads static files. It's real
+// defense-in-depth for this surface (e.g. if an uploaded file is ever opened
+// directly from its backend URL) but it is NOT what protects the actual app pages
+// from XSS — that CSP lives in frontend/index.html's <meta> tag instead, since a
+// <meta> CSP works no matter which static host ends up serving the built SPA.
+// Kept strict since this server renders no real HTML UI of its own.
 app.use(helmet({
-  contentSecurityPolicy: false, // Disable if you use inline scripts; enable and tune for production
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:'],
+      fontSrc: ["'self'"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"],
+      frameAncestors: ["'self'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      mediaSrc: ["'none'"],
+      workerSrc: ["'self'"],
+      manifestSrc: ["'self'"],
+    },
+  },
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
@@ -92,7 +119,13 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const { noSqlInjectionGuard } = require('./middleware/sanitize');
 app.use(noSqlInjectionGuard);
 
-// Request logging - never log Authorization or password fields
+// Request logging - never log Authorization, password, or verification-code fields.
+// `otp`/`code` cover every OTP-carrying field name in use across login MFA
+// (authController), password reset (passwordController), admin invites
+// (adminInviteController), and enrollment/parent-signup email verification
+// (enrollmentController, parentAuthController) — all currently 6-digit codes with a
+// short validity window, so logging them in plaintext would hand out a live
+// second factor to anyone with log access.
 app.use((req, res, next) => {
   const safeBody = req.method !== 'GET' && req.body ? { ...req.body } : undefined;
   if (safeBody) {
@@ -100,6 +133,8 @@ app.use((req, res, next) => {
     if (safeBody.currentPassword) safeBody.currentPassword = '[REDACTED]';
     if (safeBody.newPassword) safeBody.newPassword = '[REDACTED]';
     if (safeBody.token) safeBody.token = '[REDACTED]';
+    if (safeBody.otp) safeBody.otp = '[REDACTED]';
+    if (safeBody.code) safeBody.code = '[REDACTED]';
   }
   const hasAuth = !!req.headers.authorization || !!getAuthTokenFromCookies(req);
   console.log(`${req.method} ${req.path}`, { body: safeBody, query: req.query, auth: hasAuth ? 'present' : 'none' });

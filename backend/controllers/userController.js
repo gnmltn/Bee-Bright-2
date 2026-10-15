@@ -8,7 +8,7 @@ const { cleanupIncompleteUsers } = require('../utils/incompleteUserCleanup');
 const { getEmailError } = require('../utils/emailRules');
 const { hardDeleteUser } = require('../utils/hardDeleteUser');
 const { runTransactionSafe } = require('../utils/runTransactionSafe');
-const { emitToAdmins } = require('../utils/realtime');
+const { emitToAdmins, disconnectUserSockets } = require('../utils/realtime');
 
 const loadAdminUser = async (userId) => (
   User.findById(userId)
@@ -352,6 +352,14 @@ const deleteUser = async (req, res) => {
     const archivedAt = new Date();
     userToDelete.archivedAt = archivedAt;
     await userToDelete.save();
+
+    // Security audit fix #11 — cut off any realtime connection this account has open
+    // RIGHT NOW, rather than leaving it to keep receiving events until it naturally
+    // disconnects/reconnects (the REST API already re-checks isActive/isArchived on
+    // every request via middleware/auth.js, but a live socket was authorized at
+    // connect-time and is never re-checked after that).
+    disconnectUserSockets(userToDelete._id);
+
     await createArchiveRecord({
       user: userToDelete,
       action: 'archived',

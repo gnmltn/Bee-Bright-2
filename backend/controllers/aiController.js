@@ -19,7 +19,7 @@ const {
   detectExplicitHandoffTrigger, isUnhelpfulReply, getHandoffAcknowledgement,
   detectConcernFlowState, parseConcernFields, readEmbeddedReason, readEmbeddedExplanation,
   concernAskDetails, concernAskExplanation, concernAskReason, concernConfirm,
-  concernSubmitted, concernCancelled, isConcernCancel, isConcernYes, isConcernNo,
+  concernSubmitted, concernCancelled, concernRedirectToContact, isConcernCancel, isConcernYes, isConcernNo,
   MAX_REASON_LEN, MAX_EXPLANATION_LEN,
 } = require('../utils/handoffService');
 const { predictIntent, INTENT_CLASSIFIER_CONFIDENCE_THRESHOLD } = require('../utils/intentClassifierClient');
@@ -1186,26 +1186,29 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
       languageProfile,
       [
         'Bee Bright uses multiple account security controls:',
-        '1. Login includes CAPTCHA challenge.',
-        '2. Access uses authenticated tokens (JWT) with session expiry.',
-        '3. Protected routes require valid authorization.',
-        '4. Input validation and sanitization are applied to requests.',
+        '1. Login requires a one-time email verification code (OTP) in addition to your password, except on a device you have already marked as trusted.',
+        '2. Repeated failed login attempts temporarily lock the account, and a rate limiter blocks excessive attempts from the same source.',
+        '3. Access uses authenticated tokens (JWT) with session expiry.',
+        '4. Protected routes require valid authorization.',
+        '5. Input validation and sanitization are applied to requests.',
         'Always keep your password private and log out on shared devices.'
       ].join('\n'),
       [
         'Gumagamit ang Bee Bright ng maraming account security controls:',
-        '1. May CAPTCHA challenge sa login.',
-        '2. Gumagamit ng authenticated tokens (JWT) na may session expiry.',
-        '3. Ang protected routes ay nangangailangan ng valid authorization.',
-        '4. May input validation at sanitization sa mga request.',
+        '1. Kailangan ng one-time email verification code (OTP) bukod sa password mo pag mag-login, maliban na lang kung trusted device mo na ito.',
+        '2. Pag maraming paulit-ulit na maling attempt sa password, pansamantalang ma-lock ang account, at may rate limiter na humaharang sa sobra-sobrang attempts mula sa parehong source.',
+        '3. Gumagamit ng authenticated tokens (JWT) na may session expiry.',
+        '4. Ang protected routes ay nangangailangan ng valid authorization.',
+        '5. May input validation at sanitization sa mga request.',
         'Panatilihing pribado ang password at mag-log out kapag shared ang device.'
       ].join('\n'),
       [
         'Gumagamit ang Bee Bright ng maraming account security controls:',
-        '1. May CAPTCHA challenge sa login.',
-        '2. Gumagamit ng authenticated tokens (JWT) na may session expiry.',
-        '3. Ang protected routes ay kailangan ng valid authorization.',
-        '4. May input validation at sanitization sa mga request.',
+        '1. Kailangan ng one-time email verification code (OTP) bukod sa password mo pag mag-login, maliban kung trusted device mo na ito.',
+        '2. Pag paulit-ulit na mali ang password, pansamantalang ma-lock ang account, at may rate limiter na humaharang sa sobrang attempts mula sa parehong source.',
+        '3. Gumagamit ng authenticated tokens (JWT) na may session expiry.',
+        '4. Ang protected routes ay kailangan ng valid authorization.',
+        '5. May input validation at sanitization sa mga request.',
         'Panatilihing private ang password at mag-log out kapag shared ang device.'
       ].join('\n')
     );
@@ -1216,7 +1219,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
     [
       'Bee Bright applies key security measures in the system:',
       '1. Authenticated access with JWT and role-based protected routes.',
-      '2. CAPTCHA challenge on login.',
+      '2. Email OTP verification at login (with a trusted-device option so you are not asked every time), account lockout after repeated failed attempts, and a rate limiter against excessive login attempts.',
       '3. Input validation and sanitization to reduce invalid or unsafe requests.',
       '4. Payment proof review and admin verification before final activation.',
       'If you notice suspicious activity, contact Bee Bright admin immediately.'
@@ -1224,7 +1227,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
     [
       'May mahalagang security measures ang Bee Bright system:',
       '1. Authenticated access gamit ang JWT at role-based protected routes.',
-      '2. CAPTCHA challenge sa login.',
+      '2. Email OTP verification pag mag-login (may trusted-device option para hindi na palagiang tanungin), account lockout pag paulit-ulit na mali ang attempt, at rate limiter laban sa sobrang login attempts.',
       '3. Input validation at sanitization para mabawasan ang invalid o unsafe requests.',
       '4. Payment proof review at admin verification bago final activation.',
       'Kung may kahina-hinalang activity, makipag-ugnayan agad sa Bee Bright admin.'
@@ -1232,7 +1235,7 @@ function getSecurityReply(languageProfile = 'english', normalized = '') {
     [
       'May important security measures ang Bee Bright system:',
       '1. Authenticated access gamit ang JWT at role-based protected routes.',
-      '2. CAPTCHA challenge sa login.',
+      '2. Email OTP verification pag mag-login (may trusted-device option para hindi palaging tanungin), account lockout pag paulit-ulit na maling attempt, at rate limiter laban sa sobrang login attempts.',
       '3. Input validation at sanitization para mabawasan ang invalid o unsafe requests.',
       '4. Payment proof review at admin verification bago final activation.',
       'Kung may suspicious activity, makipag-ugnayan agad sa Bee Bright admin.'
@@ -1325,9 +1328,9 @@ function getLoginProcessReply(languageProfile = 'english', responsePreference = 
 
   return pickByLanguage(
     languageProfile,
-    'To log in, open the Login page for students/tutors, enter your email and password, complete the CAPTCHA challenge, then submit to access your dashboard.',
-    'Para mag-log in, buksan ang Login page para sa students/tutors, ilagay ang email at password, kumpletuhin ang CAPTCHA challenge, at i-submit para makapasok sa dashboard.',
-    'Para mag-log in, buksan ang Login page para sa students/tutors, ilagay ang email at password, kumpletuhin ang CAPTCHA challenge, at i-submit para makapasok sa dashboard.'
+    'To log in, open the Login page for students/tutors, enter your email and password, then enter the one-time verification code sent to your email to access your dashboard.',
+    'Para mag-log in, buksan ang Login page para sa students/tutors, ilagay ang email at password, pagkatapos ilagay ang one-time verification code na ipinadala sa email mo para makapasok sa dashboard.',
+    'Para mag-log in, buksan ang Login page para sa students/tutors, ilagay ang email at password, then ilagay ang one-time verification code na pinadala sa email mo para makapasok sa dashboard.'
   );
 }
 
@@ -7567,13 +7570,20 @@ async function submitConcernEscalation(req, reason, explanation, lang) {
 }
 
 /**
- * Explicit "raise a concern" handling (Task 30). Runs after the safety screen, before the
- * normal pipeline. Authenticated users only — the public/landing path stays removed (D5).
+ * Explicit "raise a concern" handling (Task 30, retired 2026-10-15). Runs after the
+ * safety screen, before the normal pipeline. Authenticated users only — the public/
+ * landing path stays removed (D5).
  *
- * On a fresh trigger it does NOT create an escalation: it starts a short guided exchange
- * (reason → explanation → yes/no) whose state lives entirely in `history`. The Escalation
- * record is created only after an explicit "yes". Returns a string to send, or null to let
- * the normal pipeline handle the message (no trigger, or the flow was abandoned).
+ * The owner retired the admin Requests queue this fed — see createEscalation's no-op in
+ * escalationService.js — so a detected trigger (or being mid an old guided flow from
+ * before this change, going by `history`) no longer starts/continues that intake at all.
+ * It now gets a direct redirect to BeeBright's own contact channels instead. The wording
+ * lives in concernRedirectToContact() (handoffService.js) — edit it there, not here.
+ *
+ * The functions below this short-circuit (submitConcernEscalation, concernAskDetails/
+ * Explanation/Reason, concernConfirm, the parsing/reason-embedding helpers) are now
+ * unreachable dead code, kept only to minimize the footprint of this change — nothing
+ * below this point runs any more.
  *
  * The child-safety flag and the implicit repeated-no-match handoff are untouched and still
  * escalate immediately without this intake (see handleChildSafetyScreen / applyRepeatedNoMatchHandoff).
@@ -7594,74 +7604,13 @@ async function handleExplicitHandoff(req, message, history = []) {
 
   const lang = concernFlowLanguage(message, history);
   const flowState = detectConcernFlowState(history);
-  const lastAssistant = getLastAssistantMessage(history);
-
-  if (flowState === 'awaiting_confirmation') {
-    const reason = readEmbeddedReason(lastAssistant);
-    const explanation = readEmbeddedExplanation(lastAssistant);
-    if (isConcernYes(message) && reason && explanation) {
-      return submitConcernEscalation(req, reason, explanation, lang);
-    }
-    if (isConcernNo(message)) {
-      const out = concernCancelled(lang);
-      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-      return out;
-    }
-    // Anything else at the confirmation step → abandon, let the pipeline answer it. No ticket.
-    return null;
-  }
-
-  if (flowState === 'awaiting_reason' || flowState === 'awaiting_explanation') {
-    if (isConcernCancel(message)) {
-      const out = concernCancelled(lang);
-      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-      return out;
-    }
-    const parsed = parseConcernFields(message);
-    if (flowState === 'awaiting_explanation') {
-      const reason = readEmbeddedReason(lastAssistant);
-      const explanation = (parsed.explanation || concernOneLine(message)).slice(0, MAX_EXPLANATION_LEN);
-      const out = concernConfirm(lang, reason, explanation);
-      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-      return out;
-    }
-    const explanation = readEmbeddedExplanation(lastAssistant);
-    const reason = (parsed.reason || concernOneLine(message)).slice(0, MAX_REASON_LEN);
-    const out = concernConfirm(lang, reason, explanation);
-    await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-    return out;
-  }
-
-  if (flowState === 'awaiting_details') {
-    if (isConcernCancel(message)) {
-      const out = concernCancelled(lang);
-      await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-      return out;
-    }
-    const parsed = parseConcernFields(message);
-    let out;
-    if (parsed.reason && parsed.explanation) {
-      out = concernConfirm(lang, parsed.reason, parsed.explanation);
-    } else if (parsed.reason) {
-      out = concernAskExplanation(lang, parsed.reason);
-    } else if (parsed.explanation) {
-      out = concernAskReason(lang, parsed.explanation);
-    } else {
-      // No labels — take the whole message as the explanation, then ask for a short topic.
-      out = concernAskReason(lang, concernOneLine(message).slice(0, MAX_EXPLANATION_LEN));
-    }
-    await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-    return out;
-  }
-
-  // Not mid-flow — is this a fresh "raise a concern" trigger?
   const trigger = detectExplicitHandoffTrigger(message);
-  if (!trigger) {
-    return null;
+  if (flowState || trigger) {
+    const out = concernRedirectToContact(lang);
+    await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
+    return out;
   }
-  const out = concernAskDetails(lang);
-  await logAiInteraction({ req, message, reply: out, groundingPath: 'handoff', language: lang });
-  return out;
+  return null;
 }
 
 // Batch 19 — the implicit "two consecutive unhelpful replies → auto-flag" handoff was

@@ -21,7 +21,6 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { MyRequestsBell } from "@/components/notifications/MyRequestsBell";
 import { StatCard } from "@/components/ui/stat-card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -1137,7 +1136,6 @@ export default function StudentDashboard() {
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </button>
                 ))}
-                <MyRequestsBell asRow />
               </div>
             </motion.div>
 

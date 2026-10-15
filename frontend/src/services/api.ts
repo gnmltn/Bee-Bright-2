@@ -136,18 +136,6 @@ export const pricingService = {
 
 // Auth Service - FIXED endpoints
 export const authService = {
-  getCaptchaChallenge: () =>
-    api.get<{
-      success: boolean;
-      challenge: {
-        captchaId: string;
-        imageData: string;
-        prompt: string;
-        maxAttempts: number;
-        attemptsRemaining: number;
-        expiresInSeconds: number;
-      };
-    }>('/auth/captcha-challenge'),
   loginStart: (credentials: { email: string; password: string; role: 'student' | 'tutor' | 'parent' }) =>
     api.post<{
       success: boolean;
@@ -189,8 +177,6 @@ export const authService = {
   adminVerifyOtp: (payload: { email: string; verificationId: string; otp: string }) =>
     api.post('/auth/admin-login-verify-otp', payload),
   logout: () => api.post('/auth/logout'),
-  completeLogin: (payload: { captchaId: string; captchaAnswer: string }) =>
-    api.post('/auth/login-complete', payload),
   register: (userData) => api.post('/auth/register', userData),
   login: (credentials: { email: string; password: string; role: 'student' | 'tutor'; captchaId: string; captchaAnswer: string }) =>
     api.post('/auth/login', credentials),
@@ -898,50 +884,6 @@ export const aiService = {
   /** Chatbot endpoint (route name kept for compatibility) – backend's LLM fallback now calls Gemini, not Ollama. No auth required. */
   ollamaChat: (message: string, history?: { role: 'user' | 'assistant'; content: string }[]) =>
     api.post<{ success: boolean; reply?: string; message?: string }>('/ai/ollama-chat', { message, history }),
-};
-
-// ── Escalations / support requests ───────────────────────────────────────────
-export type EscalationStatus = 'open' | 'acknowledged' | 'resolved';
-
-export interface MyEscalation {
-  _id: string;
-  category: string;
-  trigger?: string;
-  status: EscalationStatus;
-  severity: 'urgent' | 'normal';
-  createdAt: string;
-  updatedAt: string;
-  handledAt?: string | null;
-}
-
-export interface AdminEscalation extends MyEscalation {
-  source: 'child_safety' | 'handoff';
-  conversationSnippet?: string;
-  concernReason?: string;
-  concernExplanation?: string;
-  resolutionNote?: string;
-  role?: string | null;
-  userIdentifier?: string | null;
-  user?: { _id: string; firstName?: string; lastName?: string; email?: string; role?: string; phone?: string } | null;
-  handledBy?: { _id: string; firstName?: string; lastName?: string; email?: string } | null;
-}
-
-/** Admin Requests list filter: exact status, or 'unresolved' (open + being handled). */
-export type EscalationListStatus = EscalationStatus | 'unresolved';
-
-export const escalationService = {
-  /** The caller's own handoff tickets (any authenticated role). Read-only. */
-  listMine: () =>
-    api.get<{ success: boolean; count: number; escalations: MyEscalation[] }>('/escalations/mine'),
-  /** Admin / super_admin only. */
-  list: (params?: { status?: EscalationListStatus; source?: string; severity?: string; category?: string; limit?: number }) =>
-    api.get<{ success: boolean; count: number; escalations: AdminEscalation[] }>('/escalations', { params }),
-  getStats: () =>
-    api.get<{ success: boolean; stats: { openUrgent: number; openOrAcknowledged: number; unresolvedChildSafety: number } }>('/escalations/stats'),
-  get: (id: string) =>
-    api.get<{ success: boolean; escalation: AdminEscalation }>(`/escalations/${id}`),
-  update: (id: string, body: { status?: EscalationStatus; resolutionNote?: string }) =>
-    api.patch<{ success: boolean; escalation: AdminEscalation }>(`/escalations/${id}`, body),
 };
 
 // Base URL for static uploaded files (profile images, remark attachments, etc.)

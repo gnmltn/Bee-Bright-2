@@ -68,13 +68,6 @@ interface AuthContextType {
   isAuthenticated: boolean;
   /** True until initial session restore (getMe) has finished. Prevents redirect-to-login on refresh. */
   authLoading: boolean;
-  login: (
-    email: string,
-    password: string,
-    role: UserRole,
-    captchaId?: string,
-    captchaAnswer?: string
-  ) => Promise<LoginResult>;
   startOtpLogin: (email: string, password: string, role: UserRole) => Promise<OtpLoginStartResult>;
   verifyOtpLogin: (email: string, verificationId: string, otp: string, role?: UserRole) => Promise<LoginResult>;
   startPrivilegedLogin: (email: string, password: string) => Promise<OtpLoginStartResult>;
@@ -213,25 +206,6 @@ if (DEV_BYPASS) {
         setAuthLoading(false);
       });
   }, []);
-
-  const login = async (
-    email: string,
-    password: string,
-    role: UserRole,
-    captchaId?: string,
-    captchaAnswer?: string
-  ): Promise<LoginResult> => {
-    void email;
-    void password;
-    void role;
-    void captchaId;
-    void captchaAnswer;
-
-    return {
-      success: false,
-      message: "Login now uses email OTP verification.",
-    };
-  };
 
   const startOtpLogin = async (
     email: string,
@@ -393,7 +367,6 @@ if (DEV_BYPASS) {
         user,
         isAuthenticated: !!user,
         authLoading,
-        login,
         startOtpLogin,
         verifyOtpLogin,
         startPrivilegedLogin,

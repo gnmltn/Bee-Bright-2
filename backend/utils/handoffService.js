@@ -223,6 +223,18 @@ function concernCancelled(lang) {
     "Sige, hindi ko \'to isu-submit. May iba pa ba akong maitutulong?");
 }
 
+// 2026-10-15, owner decision: the guided "raise a concern" intake (and the admin Requests
+// queue it fed) is retired — no ticket is created from chat any more (see
+// createEscalation's no-op in escalationService.js). A detected trigger now gets this
+// direct redirect instead of starting/continuing that intake. THIS is the wording to
+// edit if the owner wants to change what the bot says here — nothing else needs touching.
+function concernRedirectToContact(lang) {
+  return pick(lang,
+    "I hear you — for concerns like this, the fastest way to reach us directly is by emailing beebrightph@gmail.com, or messaging our Facebook page (Bee Bright Tutorial Center) or Instagram (@beebrightph_) — our team usually responds quickest there. Is there anything else I can help you with in the meantime?",
+    'Naiintindihan ko — para sa mga concern na ganito, ang pinakamabilis na paraan para makontak kami nang direkta ay sa pag-email sa beebrightph@gmail.com, o sa pag-message sa aming Facebook page (Bee Bright Tutorial Center) o Instagram (@beebrightph_) — dito kadalasang pinakamabilis sumagot ang aming team. May iba pa ba akong maitutulong sa ngayon?',
+    "Naiintindihan ko 'yan — for concerns like this, ang fastest way para makontak kami directly ay sa pag-email sa beebrightph@gmail.com, or sa pag-message sa aming Facebook page (Bee Bright Tutorial Center) o Instagram (@beebrightph_) — dun kadalasang pinakamabilis sumagot ang team namin. May iba pa ba akong maitutulong sa ngayon?");
+}
+
 // Line-anchored: value lines only (never placeholder lines like "Reason: (a short topic)").
 const RX_VALUE_REASON = /^Reason:\s*(?!\()(.+)$/im;
 const RX_VALUE_EXPLANATION = /^Explanation:\s*(?!\()(.+)$/im;
@@ -298,6 +310,7 @@ module.exports = {
   concernConfirm,
   concernSubmitted,
   concernCancelled,
+  concernRedirectToContact,
   isConcernCancel,
   isConcernYes,
   isConcernNo,

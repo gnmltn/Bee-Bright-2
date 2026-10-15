@@ -76,15 +76,14 @@ test('handleExplicitHandoff: student is also blocked (user\'s scoping said paren
   });
 });
 
-test('handleExplicitHandoff: parent and tutor are unaffected — still start the guided intake', async () => {
+test('handleExplicitHandoff: parent and tutor are unaffected by the role gate — still get the redirect reply', async () => {
   await withStubs(async ({ escalations }) => {
     for (const role of ['parent', 'tutor']) {
       const req = { user: { _id: 'p1', id: 'p1', role }, body: {}, headers: {} };
       const reply = await handleExplicitHandoff(req, 'I want to raise a concern about my payment', []);
-      assert.match(reply, /Reason:/i, `role=${role}`);
-      assert.match(reply, /Explanation:/i, `role=${role}`);
+      assert.match(reply, /beebrightph@gmail\.com/i, `role=${role}`);
     }
-    assert.equal(escalations.length, 0, 'the trigger alone never creates a ticket');
+    assert.equal(escalations.length, 0, 'a trigger never creates a ticket any more');
   });
 });
 

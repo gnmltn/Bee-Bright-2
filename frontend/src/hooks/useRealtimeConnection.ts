@@ -5,7 +5,6 @@ import { getAuthToken } from "@/utils/authStorage";
 import type { User } from "@/contexts/AuthContext";
 import { REALTIME_EVENTS, dispatchRealtimeEvent } from "@/lib/realtimeBridge";
 import { notifyBadgesChanged } from "@/lib/navBadges";
-import { notifyRequestsChanged } from "@/lib/escalations";
 
 const SERVER_EVENT_TO_BRIDGE = {
   "enrollment:new": REALTIME_EVENTS.ENROLLMENT_NEW,
@@ -22,15 +21,14 @@ const SERVER_EVENT_TO_BRIDGE = {
   "enrollment:statusChanged": REALTIME_EVENTS.ENROLLMENT_STATUS_CHANGED,
   "assessment:completed": REALTIME_EVENTS.ASSESSMENT_COMPLETED,
   "user:changed": REALTIME_EVENTS.USER_CHANGED,
-  "request:new": REALTIME_EVENTS.REQUEST_NEW,
   "digest:new": REALTIME_EVENTS.DIGEST_NEW,
 } as const;
 
 /**
  * The ONE Socket.io connection for the whole app, mounted once above the router
  * (App.tsx) so it survives navigation between routes (including the several pages that
- * are logically part of a dashboard but are actually separate routes — AdminEscalations,
- * StudentPayments). Connects for any authenticated admin/super_admin/parent/tutor
+ * are logically part of a dashboard but are actually separate routes — StudentPayments
+ * is one example). Connects for any authenticated admin/super_admin/parent/tutor
  * session; the server's own handshake auth independently re-verifies the role and
  * decides which room the connection actually joins — this hook never claims a room
  * itself. Every server event is republished as a plain `window` CustomEvent (see
@@ -57,15 +55,13 @@ export function useRealtimeConnection(user: User | null | undefined) {
     for (const [serverEvent, bridgeEvent] of Object.entries(SERVER_EVENT_TO_BRIDGE)) {
       socket.on(serverEvent, (payload: unknown) => {
         dispatchRealtimeEvent(bridgeEvent, payload);
-        // The sidebar nav badges (navBadges.ts) and the separate Requests badge
-        // (lib/escalations.ts) each run their OWN pre-existing 60s poll, entirely
-        // unconnected to this socket — a schedule/remark/etc. change wouldn't move the
-        // badge for up to 60s otherwise ("bug (18).pdf" Group AW: the badge itself was
-        // never wired into the realtime work at all, a pre-existing characteristic of
-        // navBadges.ts, not a regression this expansion introduced). Nudging both here
-        // means the badge and the actual data it's counting move together.
+        // The sidebar nav badges (navBadges.ts) run their OWN pre-existing 60s poll,
+        // entirely unconnected to this socket — a schedule/remark/etc. change wouldn't
+        // move the badge for up to 60s otherwise ("bug (18).pdf" Group AW: the badge
+        // itself was never wired into the realtime work at all, a pre-existing
+        // characteristic of navBadges.ts, not a regression this expansion introduced).
+        // Nudging it here means the badge and the actual data it's counting move together.
         notifyBadgesChanged();
-        if (serverEvent === "request:new") notifyRequestsChanged();
       });
     }
     socket.on("connect_error", (err) => {
@@ -79,7 +75,6 @@ export function useRealtimeConnection(user: User | null | undefined) {
     socket.io.on("reconnect", () => {
       dispatchRealtimeEvent(REALTIME_EVENTS.RECONNECT_CATCHUP);
       notifyBadgesChanged();
-      notifyRequestsChanged();
     });
     socket.io.on("reconnect_attempt", (n) => console.debug("[realtime] reconnect_attempt", n));
     socket.on("disconnect", (reason) => console.debug("[realtime] disconnect", reason));

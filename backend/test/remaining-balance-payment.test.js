@@ -25,7 +25,10 @@ const {
   markRemainingBalancePaidOnsite,
 } = require('../controllers/enrollmentController');
 
-const TINY_PNG_DATA_URL = 'data:image/png;base64,' + Buffer.from('fake-image-bytes').toString('base64');
+// A real, minimal valid 1x1 PNG — enrollmentController now verifies the actual bytes
+// via magic-byte sniffing, not just the declared data: URL prefix, so a fake payload
+// would be rejected.
+const TINY_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 function mockRes() {
   const res = { _status: 200, _body: null };
@@ -186,7 +189,7 @@ test('submitRemainingPaymentProof: blocked until the down payment is verified', 
   });
   try {
     const res = mockRes();
-    await submitRemainingPaymentProof({ params: { enrollmentId: 'BB-20260101-0001' }, body: { proofDataUrl: TINY_PNG_DATA_URL } }, res);
+    await submitRemainingPaymentProof({ params: { enrollmentId: 'BB-20260101-0001' }, user: { _id: 'parent-1', role: 'parent' }, body: { proofDataUrl: TINY_PNG_DATA_URL } }, res);
     assert.equal(res._status, 400);
     assert.match(res._body.message, /down payment must be verified/i);
   } finally {
@@ -223,7 +226,7 @@ test('submitRemainingPaymentProof: computes the remaining amount as totalFee min
 
   try {
     const res = mockRes();
-    await submitRemainingPaymentProof({ params: { enrollmentId: 'BB-20260101-0001' }, body: { proofDataUrl: TINY_PNG_DATA_URL, payerReference: 'REF123' } }, res);
+    await submitRemainingPaymentProof({ params: { enrollmentId: 'BB-20260101-0001' }, user: { _id: 'parent-1', role: 'parent' }, body: { proofDataUrl: TINY_PNG_DATA_URL, payerReference: 'REF123' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(res._body.amount, 2000, 'remaining balance = totalFee(4000) - amountPaid(2000)');
     assert.equal(savedPaymentType, 'remaining');
