@@ -5623,6 +5623,17 @@ function detectGroundedTopic(user, message) {
     return 'renew_program';
   }
 
+  // Real bugs (live-reported) — neither of these topics existed anywhere before, so
+  // Gemini had no real data to answer "ilan ang tutors"/"revenue summary" with, every
+  // single time. Checked ahead of the generic 9-intent classifier below, same as
+  // renew_program above, since neither "tutors" nor "revenue" is one of its categories.
+  if ((user.role === 'admin' || user.role === 'super_admin') && isAdminTutorListQuestion(normalized)) {
+    return 'tutors';
+  }
+  if ((user.role === 'admin' || user.role === 'super_admin') && isRevenueQuestion(normalized)) {
+    return 'revenue';
+  }
+
   // Batch 12 — chat_intents.json (the generic classifier just below) only knows 9 intents
   // (greeting/location/contact/enrollment/schedule/payments/materials/tutor_help/farewell)
   // — there is no "remarks" category at all. Live QA testing found EVERY Student-Remarks-tab
@@ -6090,11 +6101,23 @@ async function buildAdminPaymentContext() {
   };
 }
 
+// Real bug (live-reported): "ilan ang enrolled students?" answered "3" while the admin's
+// own dashboard, shown in the same session, read "13" — because this used to query
+// `status: 'active'`/`status: 'pending'` literally. 'active' IS a real enum value, but
+// per Enrollment.js's own schema comment it's "legacy alias for approved" — the status
+// every current approval actually writes is 'approved', which this never matched at all.
+// 'pending' isn't even a real value in the enum (so that count was always silently 0).
+// Fixed to match dashboardController.js's getDashboardStats EXACTLY — the real
+// "Enrolled Students"/"Pending Enrollments" stat cards the admin dashboard itself shows
+// — so the chatbot's number can never disagree with the dashboard's again.
+const ADMIN_ACTIVE_ENROLLMENT_STATUSES = ['approved', 'active'];
+const ADMIN_PENDING_ENROLLMENT_STATUSES = ['submitted', 'payment_under_verification', 'pending_approval', 'pending'];
+
 async function buildAdminEnrollmentContext() {
   const [pendingCount, activeCount, latestEnrollments] = await Promise.all([
-    Enrollment.countDocuments({ status: 'pending' }),
-    Enrollment.countDocuments({ status: 'active' }),
-    Enrollment.find({ status: { $in: ['pending', 'active'] } })
+    Enrollment.countDocuments({ status: { $in: ADMIN_PENDING_ENROLLMENT_STATUSES } }),
+    Enrollment.countDocuments({ status: { $in: ADMIN_ACTIVE_ENROLLMENT_STATUSES } }),
+    Enrollment.find({ status: { $in: [...ADMIN_PENDING_ENROLLMENT_STATUSES, ...ADMIN_ACTIVE_ENROLLMENT_STATUSES] } })
       .populate('student', 'firstName middleName lastName')
       .sort({ createdAt: -1 })
       .limit(3)
@@ -6116,6 +6139,88 @@ async function buildAdminEnrollmentContext() {
       ...latestEnrollments.map((enrollment, index) => `Enrollment ${index + 1}: ${buildFullName(enrollment.student)} status ${formatStatusLabel(enrollment.status)} payment ${formatStatusLabel(enrollment.paymentStatus)}`)
     ].join('\n'),
     fallbackReply: `There are ${pendingCount} pending enrollments and ${activeCount} active enrollments right now.`
+  };
+}
+
+function isAdminTutorListQuestion(normalized) {
+  return /\btutors?\b/.test(normalized)
+    && /(how many|ilan|list|sino|who (are|is)|names?|pangalan|roster|lahat ng tutor)/.test(normalized);
+}
+
+// Real bug (live-reported): "ilan naman ang tutors at sino sino sila?" got "wala akong
+// hawak na listahan" (I have no tutor list at all) even though the admin's own
+// dashboard, shown in the same session, read "Active Tutors: 3" — because no grounded
+// topic for tutors existed anywhere in this file; the question had nowhere real to go.
+// Reuses the EXACT same count query as dashboardController.js's getDashboardStats
+// (activeTutorsResult), so the chatbot's count can never disagree with the dashboard's.
+async function buildAdminTutorContext() {
+  const activeTutorFilter = { role: 'tutor', isActive: true, isArchived: { $ne: true }, deletedAt: null };
+  const [activeCount, tutors] = await Promise.all([
+    User.countDocuments(activeTutorFilter),
+    User.find(activeTutorFilter).select('firstName middleName lastName').sort({ firstName: 1, lastName: 1 }).limit(20).lean(),
+  ]);
+
+  if (!activeCount) {
+    return {
+      contextText: 'Role: admin\nThere are no active tutors in the system right now.',
+      fallbackReply: 'There are no active tutors in the system right now.'
+    };
+  }
+
+  const names = tutors.map((t) => buildFullName(t)).filter(Boolean);
+  return {
+    contextText: [
+      'Role: admin',
+      `Active tutors: ${activeCount}`,
+      `Tutor names: ${names.join(', ')}`,
+    ].join('\n'),
+    fallbackReply: `There ${activeCount === 1 ? 'is' : 'are'} ${activeCount} active tutor${activeCount === 1 ? '' : 's'}: ${names.join(', ')}.`
+  };
+}
+
+// Real bug (live-reported): asking for a revenue summary got an inconsistent mix of "no
+// data for that period", a generic apology, or (eventually, by luck) the right number —
+// because 'revenue' was never a recognized grounded topic at all, so Gemini was being
+// asked to answer with ZERO real figures available to it every time; whether it admitted
+// that plainly or produced a vague non-answer was pure Gemini-generation luck, not a
+// real toggle between a "has data" and "has no data" state. Reuses the EXACT same
+// aggregation getRevenueSummaryReply (the deterministic-pipeline version of this
+// feature, batch 7) already uses — same date-scoping, same verified-payments
+// definition — so grounding Gemini can never disagree with that existing, already-live
+// feature's own number either.
+async function buildAdminRevenueContext(message) {
+  const normalized = normalizeMessage(message);
+  const allTime = isAllTimeRevenueQuestion(normalized);
+  const range = allTime ? null : parseScheduleDateRange(message);
+  const now = new Date();
+  const effectiveRange = range || (allTime ? null : {
+    start: startOfMonth(now.getFullYear(), now.getMonth()),
+    end: endOfMonth(now.getFullYear(), now.getMonth()),
+    label: 'this month',
+  });
+
+  const pipeline = [
+    { $match: { status: 'verified' } },
+    { $addFields: { dateToUse: { $ifNull: ['$verifiedAt', '$createdAt'] } } },
+  ];
+  if (effectiveRange) {
+    pipeline.push({ $match: { dateToUse: { $gte: effectiveRange.start, $lte: effectiveRange.end } } });
+  }
+  pipeline.push({ $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } });
+
+  const [result] = await Payment.aggregate(pipeline);
+  const total = result?.total || 0;
+  const count = result?.count || 0;
+  const periodLabel = effectiveRange ? effectiveRange.label : 'all time';
+
+  return {
+    contextText: [
+      'Role: admin',
+      `Revenue period: ${periodLabel}`,
+      `Revenue total: ${formatCurrency(total)}`,
+      `Verified payment count: ${count}`,
+    ].join('\n'),
+    fallbackReply: `Revenue (${periodLabel}): ${formatCurrency(total)} from ${count} verified payment${count === 1 ? '' : 's'}.`
   };
 }
 
@@ -7003,27 +7108,44 @@ async function getCarriedOverParentTopic(parentId, message, history = []) {
   return null;
 }
 
+// Real bug, inferred from a live report: an admin's revenue question intermittently
+// got the chat widget's own generic network-failure text ("I apologize... temporary
+// system issue") verbatim, twice in a row — that exact string only exists in
+// ChatBot.tsx's catch block, fired when the HTTP request itself fails, not whenever
+// Gemini merely answers poorly. A DB hiccup (or any other transient error) anywhere in
+// a grounded-context builder was previously able to throw all the way out of this
+// function, through chat()/ollamaChat()'s single outer try/catch, into a hard 500 —
+// taking the ENTIRE reply down over a failure in what's supposed to be optional,
+// best-effort context. Wrapped here so a grounding failure degrades the same way a
+// down classifier service already does elsewhere in this file ("a down service...
+// falls through unchanged") — the pipeline still continues to Gemini (ungrounded) or
+// the deterministic fallback instead of failing outright.
 async function getGroundedChatContext(user, message, history = []) {
-  let topic = detectGroundedTopic(user, message);
+  try {
+    let topic = detectGroundedTopic(user, message);
 
-  if (!topic && user?.role === 'parent') {
-    topic = getPendingParentDisambiguationTopic(history);
-  }
+    if (!topic && user?.role === 'parent') {
+      topic = getPendingParentDisambiguationTopic(history);
+    }
 
-  if (!topic && user?.role === 'parent') {
-    topic = await getCarriedOverParentTopic(user._id, message, history);
-  }
+    if (!topic && user?.role === 'parent') {
+      topic = await getCarriedOverParentTopic(user._id, message, history);
+    }
 
-  if (!topic) {
+    if (!topic) {
+      return null;
+    }
+
+    const context = await resolveGroundedContextForTopic(user, message, topic, history);
+    if (context && !context.topic) {
+      // Attach the resolved topic so callers (audit logging) know which record type was read.
+      context.topic = topic;
+    }
+    return context;
+  } catch (err) {
+    console.warn('getGroundedChatContext failed (continuing without grounded data):', err?.message || err);
     return null;
   }
-
-  const context = await resolveGroundedContextForTopic(user, message, topic, history);
-  if (context && !context.topic) {
-    // Attach the resolved topic so callers (audit logging) know which record type was read.
-    context.topic = topic;
-  }
-  return context;
 }
 
 async function resolveGroundedContextForTopic(user, message, topic, history = []) {
@@ -7067,6 +7189,8 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
     if (topic === 'enrollment') return buildAdminEnrollmentContext();
     if (topic === 'schedule') return buildAdminScheduleContext(message);
     if (topic === 'renew_program') return buildAdminRenewProgramContext(message);
+    if (topic === 'tutors') return buildAdminTutorContext();
+    if (topic === 'revenue') return buildAdminRevenueContext(message);
   }
 
   return null;
@@ -7286,6 +7410,12 @@ const NON_NAME_WORDS = new Set([
   // name at all ("anak ko meron pa ba", "kay alex may natitira pa") — without these, the
   // greedy capture below would read straight through them as part of a "name".
   'meron', 'mayroon', 'may', 'wala', 'ilan', 'saan', 'paano', 'bakit', 'gaano', 'ano',
+  // Real bug ("Ken Jen" lookup, reported live): "kay ken jen gusto ko malaman..." — the
+  // real first name itself is two words ("Ken Jen"), and neither "gusto" (want) nor
+  // "malaman"/"alam" (to know) were in this set, so the greedy capture read straight
+  // through them too, inflating a correct 2-word name into a 4-word non-name candidate
+  // ("ken jen gusto ko") that could never match anyone.
+  'gusto', 'malaman', 'alam', 'kailangan', 'dapat',
 ]);
 
 // A question/statement ABOUT the child ("can my child bring a snack to class", "can my
@@ -7382,23 +7512,45 @@ function findChildNameReferenceInConversation(message, history = []) {
 
 // Same word-boundary matching technique resolveParentChild/resolveNamedPerson already
 // use elsewhere in this file, generalized to a plain {firstName,lastName} list.
+//
+// Real bug (live-reported): a tutor naming their own actually-assigned student "Ken
+// Jen" (a genuine two-word FIRST name, no last name given) was wrongly declined. The
+// old version counted words in the CANDIDATE text and, once that count reached 2,
+// assumed the user must have given "a first name AND a last name" — so it demanded a
+// last-name match too ("Soriano"), which was never said. That assumption only holds
+// when the person's own first name is a single word; it breaks for anyone whose first
+// name itself has multiple words. Fixed by comparing against the length of the
+// PERSON'S OWN first/last name instead of an assumption about word order: a candidate
+// no longer than the first name alone (however many words that itself has) is accepted
+// on a first-name-only match; only a candidate with MORE words than that — i.e. one
+// that appears to continue past the given name into an attempted surname — still
+// requires both parts to independently, correctly match (preserving the original
+// anti-typo protection: a correct surname next to a misspelled given name, e.g. "alez
+// soriano" for the real "Alex Soriano", must still be declined).
 function nameMatchesAnyPerson(candidateName, people) {
   const normalized = normalizeMessage(candidateName);
-  const candidateTokenCount = normalized.split(/\s+/).filter(Boolean).length;
+  const candidateWords = normalized.split(/\s+/).filter(Boolean);
+  const wholeWordMatch = (phrase) => !!(phrase && phrase.length >= 2 && new RegExp(`\\b${escapeRegex(phrase)}\\b`).test(normalized));
+
   return people.some((p) => {
     const fn = String(p?.firstName || '').toLowerCase().trim();
     const ln = String(p?.lastName || '').toLowerCase().trim();
-    const fnMatch = !!(fn && fn.length >= 2 && new RegExp(`\\b${escapeRegex(fn)}\\b`).test(normalized));
-    const lnMatch = !!(ln && ln.length >= 2 && new RegExp(`\\b${escapeRegex(ln)}\\b`).test(normalized));
-    // A multi-word reference naming a real two-part name must get BOTH parts right — a
-    // typo'd first name with a coincidentally-correct last name (e.g. "alez soriano" vs
-    // the real "Alex Soriano") must not be treated as verified just because the surname
-    // happened to line up. A single-word reference (bare first or last name) is still
-    // accepted on its own, since a 2-part match can't be expected from 1 word.
-    if (candidateTokenCount >= 2 && fn && ln) {
-      return fnMatch && lnMatch;
-    }
-    return fnMatch || lnMatch;
+    if (!fn && !ln) return false;
+
+    const fnWordCount = fn ? fn.split(/\s+/).filter(Boolean).length : 0;
+    const lnWordCount = ln ? ln.split(/\s+/).filter(Boolean).length : 0;
+
+    // The whole candidate is (no more than) just the first name — accepted on its own,
+    // regardless of how many words that first name itself has.
+    if (fn && candidateWords.length <= fnWordCount && wholeWordMatch(fn)) return true;
+    // Same for a bare last name alone.
+    if (ln && candidateWords.length <= lnWordCount && wholeWordMatch(ln)) return true;
+
+    // The candidate has more words than the first name alone — it looks like an
+    // attempted first+last reference, so (anti-typo protection) both must independently
+    // match for real.
+    if (fn && ln) return wholeWordMatch(fn) && wholeWordMatch(ln);
+    return false;
   });
 }
 
@@ -7913,6 +8065,20 @@ const chat = async (req, res) => {
       return res.status(200).json({ success: true, reply: lessonPrepReply });
     }
 
+    // Hard access-control gate for a specific named student — MUST run before
+    // grounding/Gemini, AND before the classifier shortcut right below: a message that
+    // names a specific (possibly unauthorized/nonexistent) student can ALSO happen to
+    // score high confidence on an unrelated generic intent (e.g. "ano ang program ni
+    // rene bituin?" scoring confidently as "program_comparison" purely because it
+    // contains the word "program") — if the classifier ran first, it would answer that
+    // different, generic question and this guard would never get a chance to check
+    // whether "rene bituin" is real, silently skipping the security/accuracy check
+    // instead of declining. See verifyNamedStudentReference's own docs above.
+    const namedStudentDecline = await verifyNamedStudentReference(req, message, history);
+    if (namedStudentDecline) {
+      return res.status(200).json({ success: true, reply: namedStudentDecline });
+    }
+
     // Task 32 — trained intent classifier (Python microservice), an additional signal
     // alongside the weighted keyword matcher just below. Only short-circuits for a
     // narrow, pre-verified set of intents (see CLASSIFIER_INTENT_HANDLERS); a down
@@ -7920,13 +8086,6 @@ const chat = async (req, res) => {
     const classifierShortcutReply = await tryClassifierShortcut(req, message, history);
     if (classifierShortcutReply) {
       return res.status(200).json({ success: true, reply: classifierShortcutReply });
-    }
-
-    // Hard access-control gate for a specific named student — MUST run before
-    // grounding/Gemini. See verifyNamedStudentReference's own docs above.
-    const namedStudentDecline = await verifyNamedStudentReference(req, message, history);
-    if (namedStudentDecline) {
-      return res.status(200).json({ success: true, reply: namedStudentDecline });
     }
 
     // Task 21 — a vague follow-up ("uli dyan") is resolved against the last concrete
@@ -8051,6 +8210,17 @@ const ollamaChat = async (req, res) => {
       return res.status(200).json({ success: true, reply: lessonPrepReply });
     }
 
+    // Hard access-control gate for a specific named student — MUST run before
+    // grounding/Gemini, AND before the classifier shortcut right below (same ordering
+    // fix/reasoning as chat()'s copy of this pair above — a message naming a specific
+    // possibly-unauthorized student can also score confidently on an unrelated generic
+    // classifier intent, which must never pre-empt this check). Self-contained (logs
+    // internally), like the guards above.
+    const namedStudentDecline = await verifyNamedStudentReference(req, message, history);
+    if (namedStudentDecline) {
+      return res.status(200).json({ success: true, reply: namedStudentDecline });
+    }
+
     // Task 32 — trained intent classifier (Python microservice), an additional signal
     // alongside the weighted keyword matcher just below. Only short-circuits for a
     // narrow, pre-verified set of intents (see CLASSIFIER_INTENT_HANDLERS); a down
@@ -8059,14 +8229,6 @@ const ollamaChat = async (req, res) => {
     const classifierShortcutReply = await tryClassifierShortcut(req, message, history);
     if (classifierShortcutReply) {
       return res.status(200).json({ success: true, reply: classifierShortcutReply });
-    }
-
-    // Hard access-control gate for a specific named student — MUST run before
-    // grounding/Gemini. See verifyNamedStudentReference's own docs above. Self-contained
-    // (logs internally), like the guards above.
-    const namedStudentDecline = await verifyNamedStudentReference(req, message, history);
-    if (namedStudentDecline) {
-      return res.status(200).json({ success: true, reply: namedStudentDecline });
     }
 
     const languageOverride = detectLanguageOverrideCommand(message);
@@ -8644,6 +8806,9 @@ module.exports = {
   findChildNameReferenceInConversation,
   verifyNamedStudentReference,
   isRestrictedPublicTopicQuestion,
+  nameMatchesAnyPerson,
+  isRevenueQuestion,
+  isAdminTutorListQuestion,
   // Universal technical-scope guard (.env/API keys/database/backend/etc.) — exported for
   // test/technical-scope-guard.test.js
   isTechnicalScopeQuestion,

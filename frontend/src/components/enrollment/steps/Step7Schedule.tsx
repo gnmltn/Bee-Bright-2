@@ -173,28 +173,56 @@ export default function Step7Schedule({ data, update, onNext, onBack }: Props) {
   const [loadingAvailability, setLoadingAvailability] = useState<Record<string, boolean>>({});
   const [availabilityError, setAvailabilityError] = useState<Record<string, string>>({});
 
+  // Real tutor-conflict counts, re-checked periodically (not just once on mount) and on
+  // tab refocus — same polling convention as lib/navBadges.ts's own 60s refresh. Without
+  // this, the count shown here was a one-time snapshot: picking/re-picking a preferred
+  // slot never re-queries it (a preference is non-binding and never consumes a slot, by
+  // design — the admin always assigns the real tutor later), so if real bookings changed
+  // elsewhere — another parent's enrollment actually got scheduled, or the admin
+  // assigned a tutor directly — this preview could go stale for as long as the parent
+  // stayed on this step, with no way for them to notice short of a full page reload. The
+  // check itself was never wrong (same canTutorHandleSchedule the admin's own scheduling
+  // wizard uses) — only ever re-running it was missing.
   useEffect(() => {
     if (!data.preferredStartDate || selectedProgramCodes.length === 0) return;
     let cancelled = false;
-    selectedProgramCodes.forEach((code) => {
-      setLoadingAvailability((prev) => ({ ...prev, [code]: true }));
-      setAvailabilityError((prev) => ({ ...prev, [code]: '' }));
-      enrollmentService
-        .getAvailability(data.preferredStartDate, code)
-        .then((res) => {
-          if (cancelled) return;
-          setAvailability((prev) => ({ ...prev, [code]: res.data.slots }));
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setAvailabilityError((prev) => ({ ...prev, [code]: 'Could not load availability for this date. Please try again.' }));
-        })
-        .finally(() => {
-          if (cancelled) return;
-          setLoadingAvailability((prev) => ({ ...prev, [code]: false }));
-        });
-    });
-    return () => { cancelled = true; };
+
+    const fetchAvailability = (showLoading: boolean) => {
+      selectedProgramCodes.forEach((code) => {
+        if (showLoading) {
+          setLoadingAvailability((prev) => ({ ...prev, [code]: true }));
+          setAvailabilityError((prev) => ({ ...prev, [code]: '' }));
+        }
+        enrollmentService
+          .getAvailability(data.preferredStartDate, code)
+          .then((res) => {
+            if (cancelled) return;
+            setAvailability((prev) => ({ ...prev, [code]: res.data.slots }));
+            if (showLoading) setAvailabilityError((prev) => ({ ...prev, [code]: '' }));
+          })
+          .catch(() => {
+            if (cancelled) return;
+            // A failed background refresh keeps showing the last good count rather than
+            // replacing it with an error — only the initial foreground fetch surfaces one.
+            if (showLoading) setAvailabilityError((prev) => ({ ...prev, [code]: 'Could not load availability for this date. Please try again.' }));
+          })
+          .finally(() => {
+            if (cancelled) return;
+            if (showLoading) setLoadingAvailability((prev) => ({ ...prev, [code]: false }));
+          });
+      });
+    };
+
+    fetchAvailability(true);
+    const intervalId = window.setInterval(() => fetchAvailability(false), 30000);
+    const onFocus = () => fetchAvailability(false);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', onFocus);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.preferredStartDate, programCodesKey]);
 

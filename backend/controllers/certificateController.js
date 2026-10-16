@@ -7,6 +7,7 @@ const User = require('../models/User');
 const { logAudit } = require('../utils/auditService');
 const { parentOwnsStudent, resolveParentIdsForStudents } = require('../utils/parentChildAccess');
 const { emitToParents } = require('../utils/realtime');
+const { applyCertificateWatermark } = require('../utils/certificateWatermark');
 
 // Stored OUTSIDE the publicly-served uploads/ directory (never mounted via
 // express.static) — same approach as Remark attachments. Only ever readable through
@@ -30,23 +31,37 @@ function withinRetractWindow(publishedAt) {
 /** Decodes+saves a base64 data URL file. Throws a plain Error with a user-facing
  * message on any validation failure — same shape as remarkController.js's
  * saveAttachmentFromDataUrl, duplicated here (that one is private/unexported) rather
- * than importing from remarkController.js, to avoid touching that file. */
-function saveCertificateFile(dataUrl, displayName) {
+ * than importing from remarkController.js, to avoid touching that file.
+ *
+ * The watermark is applied here, BEFORE the file is ever written to disk — this is
+ * the one place both uploadCertificate and replaceCertificate save a file through, so
+ * there is no code path that can store (and therefore no path that can later serve)
+ * an unwatermarked certificate. `size` reflects the watermarked bytes actually on
+ * disk, not the original upload's size. */
+async function saveCertificateFile(dataUrl, displayName) {
   const match = String(dataUrl || '').match(/^data:(image\/(?:png|jpeg|jpg)|application\/pdf);base64,(.+)$/i);
   if (!match) throw new Error('Certificate file must be a JPG, PNG, or PDF.');
   const buf = Buffer.from(match[2], 'base64');
   if (!buf.length) throw new Error('Certificate file is empty.');
   if (buf.length > MAX_FILE_BYTES) throw new Error('Certificate file must be 5 MB or less.');
-  if (!fs.existsSync(PRIVATE_UPLOADS_DIR)) fs.mkdirSync(PRIVATE_UPLOADS_DIR, { recursive: true });
   const mimetype = match[1].toLowerCase();
+
+  let watermarkedBuf;
+  try {
+    watermarkedBuf = await applyCertificateWatermark(buf, mimetype);
+  } catch (err) {
+    throw new Error('Could not process this certificate file. Please check it is a valid JPG, PNG, or PDF.');
+  }
+
+  if (!fs.existsSync(PRIVATE_UPLOADS_DIR)) fs.mkdirSync(PRIVATE_UPLOADS_DIR, { recursive: true });
   const ext = mimetype.includes('pdf') ? 'pdf' : (mimetype.includes('png') ? 'png' : 'jpg');
   const diskFilename = `certificate-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(PRIVATE_UPLOADS_DIR, diskFilename), buf);
+  fs.writeFileSync(path.join(PRIVATE_UPLOADS_DIR, diskFilename), watermarkedBuf);
   return {
     path: diskFilename,
     fileName: String(displayName || '').trim() || diskFilename,
     mimetype,
-    size: buf.length,
+    size: watermarkedBuf.length,
     uploadedAt: new Date(),
   };
 }
@@ -99,7 +114,7 @@ const uploadCertificate = async (req, res) => {
 
     let file;
     try {
-      file = saveCertificateFile(fileDataUrl, fileName);
+      file = await saveCertificateFile(fileDataUrl, fileName);
     } catch (err) {
       return res.status(400).json({ success: false, message: err.message });
     }
@@ -222,17 +237,26 @@ const replaceCertificate = async (req, res) => {
 
     let newFile;
     try {
-      newFile = saveCertificateFile(fileDataUrl, fileName);
+      newFile = await saveCertificateFile(fileDataUrl, fileName);
     } catch (err) {
       return res.status(400).json({ success: false, message: err.message });
     }
 
-    const oldFile = certificate.file;
+    // Snapshot the OLD path into a plain object before reassigning `certificate.file`.
+    // `certificate.file` is a Mongoose single-nested subdocument — a bare reference to
+    // it (`const oldFile = certificate.file`) is NOT a copy. Assigning `certificate.file
+    // = newFile` below mutates that SAME subdocument instance in place, so `oldFile`
+    // silently changes too and ends up holding the NEW path by the time it's used.
+    // That was the real bug: deleteCertificateFileBestEffort(oldFile) was deleting the
+    // just-written REPLACEMENT file (because `oldFile.path` now equaled `newFile.path`),
+    // leaving the certificate record pointing at nothing on disk, while the genuinely
+    // old file was orphaned — "Could not open this certificate" on every subsequent view.
+    const oldFilePath = certificate.file?.path;
     certificate.file = newFile;
     if (message !== undefined) certificate.message = String(message || '').trim();
     certificate.replacedAt = new Date();
     await certificate.save();
-    deleteCertificateFileBestEffort(oldFile);
+    if (oldFilePath) deleteCertificateFileBestEffort({ path: oldFilePath });
 
     const studentIds = certificate.students.map(String);
     logAudit({

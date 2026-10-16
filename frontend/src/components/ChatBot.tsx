@@ -14,6 +14,31 @@ import { useAuth } from "@/hooks/useAuth";
 
 type Message = { role: "user" | "assistant"; content: string };
 
+// Chat history previously lived only in this component's React state — reloading the
+// page (new mount) or the backend restarting mid-session (the backend has never stored
+// any conversation state at all; `chat()`/`ollamaChat()` are fully stateless, replaying
+// the WHOLE conversation from the `history` the frontend sends on every request — see
+// aiController.js) always lost it, even though the user never actually left the tab.
+// Persisted to sessionStorage instead: survives a refresh, and (its whole point) is
+// cleared automatically when the tab itself is closed — never written to localStorage,
+// which would outlive the tab.
+const CHAT_HISTORY_STORAGE_KEY = "beebright_chat_history";
+
+function loadStoredMessages(fallbackIntro: string): Message[] {
+  try {
+    const raw = window.sessionStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed as Message[];
+      }
+    }
+  } catch {
+    // Corrupt/blocked storage — fall through to a fresh greeting below.
+  }
+  return [{ role: "assistant", content: fallbackIntro }];
+}
+
 type PromptRole = UserRole | "public";
 
 const QUESTIONNAIRES: Record<PromptRole, { title: string; intro: string; questions: string[] }> = {
@@ -116,13 +141,7 @@ export function ChatBot() {
     : "public";
   const questionnaire = QUESTIONNAIRES[promptRole] ?? QUESTIONNAIRES["public"];
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content:
-        questionnaire.intro,
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>(() => loadStoredMessages(questionnaire.intro));
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -133,13 +152,47 @@ export function ChatBot() {
   }, [messages]);
 
   useEffect(() => {
+    try {
+      window.sessionStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(messages));
+    } catch {
+      // Private window / blocked storage — the conversation still works for this page
+      // load, it just won't survive a refresh in that case.
+    }
+  }, [messages]);
+
+  useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "0px";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 140)}px`;
   }, [input]);
 
+  // Tracks the signed-in identity (not just the intro text) so a real LOGOUT can be
+  // told apart from everything else that also changes `questionnaire.intro` — a plain
+  // login (anonymous -> signed in) must NOT wipe an existing conversation (a visitor
+  // chatting, then logging in mid-conversation, should continue it naturally), but a
+  // logout must: sessionStorage persistence means the conversation would otherwise
+  // survive into whoever uses this same tab next, e.g. a shared front-desk computer —
+  // the same reasoning authStorage.ts's clearAuthSession already applies to its own
+  // sessionStorage keys on logout.
+  const prevUserIdRef = useRef<string | null>(user?.id ?? null);
+
   useEffect(() => {
+    const previousUserId = prevUserIdRef.current;
+    const currentUserId = user?.id ?? null;
+    const justLoggedOut = Boolean(previousUserId) && !currentUserId;
+    prevUserIdRef.current = currentUserId;
+
+    if (justLoggedOut) {
+      setMessages([{ role: "assistant", content: questionnaire.intro }]);
+      try {
+        window.sessionStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+      } catch {
+        // ignore — nothing sensitive stays readable either way once messages is reset
+      }
+      return;
+    }
+
     setMessages((prev) => {
       if (prev.length !== 1 || prev[0].role !== "assistant") {
         return prev;
@@ -147,7 +200,7 @@ export function ChatBot() {
 
       return [{ role: "assistant", content: questionnaire.intro }];
     });
-  }, [questionnaire.intro]);
+  }, [questionnaire.intro, user?.id]);
 
   const requestReply = async (text: string, useDirectRoute: boolean) => {
     const history = messages.slice(-10).map((message) => ({

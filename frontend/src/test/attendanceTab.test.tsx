@@ -425,3 +425,69 @@ describe("AttendanceTab: Student summary shows the program per row and never mer
     expect(screen.queryByText("—")).toBeNull();
   });
 });
+
+// Real bug report: marking a TODAY session present never moved "Attendance by student"
+// at all (stayed at 0 / total), while a separate overall-percentage display elsewhere
+// correctly reflected the same mark immediately. Root cause: this table's own tally
+// previously only counted sessions where `date < todayStr`, which excludes today's
+// sessions ENTIRELY, even after they're over and marked — unlike StudentDashboard.tsx's
+// equivalent computation, which already correctly treats "today, past its end time" as
+// completed. A today session is also exactly the normal case submitAttendance itself
+// already allows marking (it only rejects a FUTURE date), so excluding it here was
+// never intentional.
+describe("AttendanceTab: Student summary correctly counts a TODAY session once it has ended and been marked", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openSummary() {
+    fireEvent.click(screen.getByRole("button", { name: /student summary/i }));
+  }
+
+  it("a today session marked present, after its end time, counts immediately as 1 / 1 — not 0 / 1", () => {
+    vi.useFakeTimers();
+    const today = new Date();
+    today.setHours(10, 0, 0, 0); // well after the 8-9AM session below has ended
+    vi.setSystemTime(today);
+
+    const session = makeTodaySession({ attendanceStatus: "present" });
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /student summary/i }));
+
+    expect(screen.getByText("1 / 1 present")).toBeTruthy();
+  });
+
+  it("a today session marked present, BEFORE its own end time, is not yet counted as present (0 / 1 — same as unmarked/absent, since it isn't completed yet)", () => {
+    vi.useFakeTimers();
+    const today = new Date();
+    today.setHours(8, 30, 0, 0); // mid-session, before its own 9AM end time
+    vi.setSystemTime(today);
+
+    const session = makeTodaySession({ attendanceStatus: "present" });
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    openSummary();
+
+    // `overall` (the denominator) always counts every scheduled session regardless of
+    // whether it's done yet — unchanged, pre-existing behavior. Only the numerator
+    // (`present`, gated on isSessionDone) should still read 0 here, since the session
+    // hasn't actually finished, even though it's already marked.
+    expect(screen.getByText("0 / 1 present")).toBeTruthy();
+  });
+
+  it("a today session marked ABSENT, after its end time, counts immediately as 0 / 1 — not left out entirely", () => {
+    vi.useFakeTimers();
+    const today = new Date();
+    today.setHours(10, 0, 0, 0);
+    vi.setSystemTime(today);
+
+    const session = makeTodaySession({ attendanceStatus: "absent" });
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    openSummary();
+
+    expect(screen.getByText("0 / 1 present")).toBeTruthy();
+  });
+});

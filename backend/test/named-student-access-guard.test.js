@@ -30,6 +30,7 @@ const {
   findChildNameReferenceInConversation,
   verifyNamedStudentReference,
   isRestrictedPublicTopicQuestion,
+  nameMatchesAnyPerson,
 } = require('../controllers/aiController');
 
 AuditLog.create = async () => ({});
@@ -371,6 +372,110 @@ test('e2e: an existing vetted FAQ topic (attendance policy) is now ALSO gated fo
   } finally {
     geminiClient.generateChatbotReply = origReply;
   }
+});
+
+// ── Real bug (live-reported): a tutor's genuinely-assigned student "Ken Jen" (a real,
+// two-word FIRST name, no last name given at all) was wrongly declined as
+// not-found/not-assigned. Root cause: nameMatchesAnyPerson counted words in the
+// CANDIDATE text and assumed 2+ words meant "first AND last name both given", which
+// only holds when the person's own first name is a single word. ──────────────────────
+
+test('nameMatchesAnyPerson: a candidate matching a real MULTI-WORD first name (no last name given) is accepted', () => {
+  const people = [{ firstName: 'Ken Jen', lastName: 'Soriano' }];
+  assert.equal(nameMatchesAnyPerson('ken jen', people), true);
+});
+
+test('nameMatchesAnyPerson: still correctly declines a typo in a single-word first name even with a matching last name (anti-typo protection preserved)', () => {
+  const people = [{ firstName: 'Alex', lastName: 'Soriano' }];
+  assert.equal(nameMatchesAnyPerson('alez soriano', people), false);
+});
+
+test('nameMatchesAnyPerson: a bare single-word first name is still accepted on its own', () => {
+  const people = [{ firstName: 'Alex', lastName: 'Soriano' }];
+  assert.equal(nameMatchesAnyPerson('alex', people), true);
+});
+
+test('nameMatchesAnyPerson: a correct full first+last match for a single-word first name still works', () => {
+  const people = [{ firstName: 'Alex', lastName: 'Soriano' }];
+  assert.equal(nameMatchesAnyPerson('alex soriano', people), true);
+});
+
+test('verifyNamedStudentReference: the exact reported phrasing ("kay ken jen gusto ko malaman...") correctly resolves the tutor\'s real, multi-word-first-name student', async () => {
+  const origFind = Schedule.find;
+  Schedule.find = () => mockFindQuery([
+    { student: null, students: [{ _id: 'kenjen-1', firstName: 'Ken Jen', lastName: 'Soriano' }] },
+  ]);
+  try {
+    const reply = await verifyNamedStudentReference(
+      { user: { _id: 'tutor1', role: 'tutor' } },
+      'pwede bang pa summarize yung schedule ko para kay ken jen gusto ko malaman if hanggang kailan mag e-end ang sessions ko sakanya',
+      []
+    );
+    assert.equal(reply, null, 'a genuinely assigned student must not be declined');
+  } finally {
+    Schedule.find = origFind;
+  }
+});
+
+// ── Real bug (live-reported): a message naming a NONEXISTENT student that ALSO scored
+// high confidence on an unrelated generic classifier intent ("ano ang program ni rene
+// bituin?" — contains "program", confidently classified as program_comparison) got
+// answered with that generic reply instead of being declined — because
+// tryClassifierShortcut used to run BEFORE verifyNamedStudentReference. ────────────────
+
+async function withHighConfidenceClassifier(intent, fn) {
+  delete require.cache[require.resolve('../utils/intentClassifierClient')];
+  const intentClassifierClient = require('../utils/intentClassifierClient');
+  intentClassifierClient.predictIntent = async () => ({ intent, confidence: 0.99 });
+
+  delete require.cache[require.resolve('../controllers/aiController')];
+  const fresh = require('../controllers/aiController');
+
+  try {
+    await fn(fresh);
+  } finally {
+    delete require.cache[require.resolve('../utils/intentClassifierClient')];
+    delete require.cache[require.resolve('../controllers/aiController')];
+  }
+}
+
+test('e2e ordering fix: a nonexistent named student is still declined even when the message ALSO scores high confidence on an unrelated classifier intent (chat)', async () => {
+  await withHighConfidenceClassifier('program_comparison', async (fresh) => {
+    const origFind = Schedule.find;
+    Schedule.find = () => mockFindQuery([
+      { student: null, students: [{ firstName: 'Maria', lastName: 'Cruz' }] },
+    ]);
+    try {
+      const out = await invoke(fresh.chat, { message: 'ano ang program ni rene bituin?', history: [] }, { _id: 'tutor1', role: 'tutor' });
+      assert.match(out.reply, NON_PUBLIC_DECLINE_RE, 'must decline, not answer with the generic program-comparison reply');
+      assert.doesNotMatch(out.reply, /toddlers playgroup|academic tutorial|examination preparation/i);
+    } finally {
+      Schedule.find = origFind;
+    }
+  });
+});
+
+test('e2e ordering fix: same guarantee for ollamaChat', async () => {
+  await withHighConfidenceClassifier('program_comparison', async (fresh) => {
+    const origFind = Schedule.find;
+    Schedule.find = () => mockFindQuery([
+      { student: null, students: [{ firstName: 'Maria', lastName: 'Cruz' }] },
+    ]);
+    try {
+      const out = await invoke(fresh.ollamaChat, { message: 'ano ang program ni rene bituin?', history: [] }, { _id: 'tutor1', role: 'tutor' });
+      assert.match(out.reply, NON_PUBLIC_DECLINE_RE);
+      assert.doesNotMatch(out.reply, /toddlers playgroup|academic tutorial|examination preparation/i);
+    } finally {
+      Schedule.find = origFind;
+    }
+  });
+});
+
+test('e2e ordering fix: a classifier-shortcut-eligible message with NO named-student reference at all is unaffected — still answered by the classifier shortcut', async () => {
+  await withHighConfidenceClassifier('program_comparison', async (fresh) => {
+    const out = await invoke(fresh.chat, { message: 'what programs do you offer compared to each other', history: [] }, { _id: 'tutor1', role: 'tutor' });
+    assert.match(out.reply, /toddlers playgroup|academic tutorial|examination preparation/i);
+  });
 });
 
 test('cleanup: close mongoose if a test opened it', async () => {

@@ -68,6 +68,19 @@ function makeFakeCertificateStore() {
         ...data,
         _id: id,
       };
+      // Emulate Mongoose's real single-nested-subdocument behavior for `file`:
+      // assigning a whole new object to `doc.file` does NOT swap in a distinct object
+      // instance — it merges the new fields into the SAME underlying subdocument. This
+      // aliasing is exactly what caused the real Replace bug (certificateController.js:
+      // `const oldFile = certificate.file` captured a live reference, not a copy, which
+      // silently changed when `certificate.file = newFile` ran right after). A plain
+      // `doc.file = {...}` property would NOT reproduce this — it needs this accessor.
+      let fileSubdoc = { ...(data.file || {}) };
+      Object.defineProperty(doc, 'file', {
+        get() { return fileSubdoc; },
+        set(newValue) { Object.assign(fileSubdoc, newValue); },
+        enumerable: true,
+      });
       doc.save = async () => doc;
       docs.push(doc);
       return doc;
@@ -409,6 +422,269 @@ test('listMyCertificates: returns only PUBLISHED certificates for the named chil
     assert.equal(res._body.certificates.length, 1);
     assert.equal(res._body.certificates[0].file.path, 'a.png');
   } finally { restore(); }
+});
+
+// ── Watermarking integration (saveCertificateFile → applyCertificateWatermark) ──────
+// Confirms the actual end-to-end upload/replace flow — not just the watermark utility
+// in isolation (see certificateWatermark.test.js for that) — really writes watermarked
+// bytes to disk, for both image and PDF uploads, and that the existing realtime
+// notification still fires correctly once watermarking is in the critical path.
+
+test('uploadCertificate: the bytes actually written to disk are watermarked, not the original upload (image)', async () => {
+  const { restore } = stubModels();
+  const originalWrite = fs.writeFileSync;
+  let capturedBuffer = null;
+  fs.writeFileSync = (_filePath, buf) => { capturedBuffer = buf; };
+  try {
+    const res = mockRes();
+    await uploadCertificate({ user: ADMIN, body: { studentIds: [STUDENT_A], fileDataUrl: TINY_PNG_DATA_URL, fileName: 'cert.png' } }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.ok(capturedBuffer, 'a file must have been written');
+    assert.notEqual(
+      capturedBuffer.toString('base64'),
+      TINY_PNG_BASE64,
+      'the stored file must be the watermarked output, never the original unwatermarked upload'
+    );
+    // Genuinely a different, larger, still-valid PNG (the watermark SVG overlay adds
+    // real bytes) — not just a coincidental re-encode.
+    assert.ok(capturedBuffer.length > TINY_PNG_BUFFER.length);
+  } finally {
+    fs.writeFileSync = originalWrite;
+    restore();
+  }
+});
+
+test('replaceCertificate: the replacement file is ALSO watermarked, same as a fresh upload', async () => {
+  const { restore, store } = stubModels();
+  try {
+    const existing = await store.create({
+      students: [STUDENT_A],
+      file: { path: 'old.png', fileName: 'old.png', mimetype: 'image/png', size: 10, uploadedAt: new Date() },
+      publishedAt: new Date(),
+      status: 'published',
+    });
+
+    const originalWrite = fs.writeFileSync;
+    let capturedBuffer = null;
+    fs.writeFileSync = (_filePath, buf) => { capturedBuffer = buf; };
+    try {
+      const res = mockRes();
+      await replaceCertificate({ params: { id: existing._id }, user: ADMIN, body: { fileDataUrl: TINY_PNG_DATA_URL, fileName: 'new.png' } }, res);
+      assert.equal(res._status, 200, JSON.stringify(res._body));
+      assert.ok(capturedBuffer, 'a replacement file must have been written');
+      assert.notEqual(capturedBuffer.toString('base64'), TINY_PNG_BASE64, 'Replace must also store the watermarked bytes, never the raw re-upload');
+    } finally {
+      fs.writeFileSync = originalWrite;
+    }
+  } finally { restore(); }
+});
+
+test('uploadCertificate: a real PDF upload is watermarked before being written to disk', async () => {
+  const { PDFDocument } = require('pdf-lib');
+  const blankDoc = await PDFDocument.create();
+  blankDoc.addPage([400, 300]);
+  const blankPdfBuf = Buffer.from(await blankDoc.save());
+  const pdfDataUrl = `data:application/pdf;base64,${blankPdfBuf.toString('base64')}`;
+
+  const { restore } = stubModels();
+  const originalWrite = fs.writeFileSync;
+  let capturedBuffer = null;
+  fs.writeFileSync = (_filePath, buf) => { capturedBuffer = buf; };
+  try {
+    const res = mockRes();
+    await uploadCertificate({ user: ADMIN, body: { studentIds: [STUDENT_A], fileDataUrl: pdfDataUrl, fileName: 'cert.pdf' } }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+    assert.ok(capturedBuffer, 'a file must have been written');
+
+    const zlib = require('zlib');
+    const text = capturedBuffer.toString('latin1');
+    const re = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let m, inflatedAll = '';
+    while ((m = re.exec(text))) {
+      try { inflatedAll += zlib.inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1'); } catch { /* not flate */ }
+    }
+    const watermarkHex = Buffer.from('OFFICIAL COPY OF BEE BRIGHT', 'ascii').toString('hex').toUpperCase();
+    assert.ok(inflatedAll.includes(watermarkHex), 'the stored PDF must actually contain the drawn watermark text');
+  } finally {
+    fs.writeFileSync = originalWrite;
+    restore();
+  }
+});
+
+test('uploadCertificate: an invalid/corrupt PDF that cannot be watermarked is rejected with a clear error, nothing written', async () => {
+  const corruptPdfDataUrl = 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4 not a real pdf structure').toString('base64');
+  const { restore } = stubModels();
+  const originalWrite = fs.writeFileSync;
+  let writeCalled = false;
+  fs.writeFileSync = () => { writeCalled = true; };
+  try {
+    const res = mockRes();
+    await uploadCertificate({ user: ADMIN, body: { studentIds: [STUDENT_A], fileDataUrl: corruptPdfDataUrl, fileName: 'bad.pdf' } }, res);
+    assert.equal(res._status, 400, JSON.stringify(res._body));
+    assert.equal(writeCalled, false, 'a file that fails watermarking must never be written to disk');
+  } finally {
+    fs.writeFileSync = originalWrite;
+    restore();
+  }
+});
+
+test('uploadCertificate: still correctly emits certificate:published to the right parents after watermarking succeeds', async () => {
+  delete require.cache[require.resolve('../utils/realtime')];
+  const realtime = require('../utils/realtime');
+  const emitted = [];
+  realtime.emitToParents = (parentIds, event, payload) => emitted.push({ parentIds, event, payload });
+
+  delete require.cache[require.resolve('../controllers/certificateController')];
+  const { uploadCertificate: uploadCertificateFresh } = require('../controllers/certificateController');
+
+  const { restore } = stubModels({ existingStudentIds: [STUDENT_A], parentOwnsStudentIds: [STUDENT_A] });
+  try {
+    const res = mockRes();
+    await uploadCertificateFresh({ user: ADMIN, body: { studentIds: [STUDENT_A], fileDataUrl: TINY_PNG_DATA_URL, fileName: 'cert.png' } }, res);
+    assert.equal(res._status, 201, JSON.stringify(res._body));
+
+    // The emit is fire-and-forget (resolveParentIdsForStudents().then(emit)) — give its
+    // microtask a tick to run before asserting.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(emitted.length, 1, 'exactly one realtime notification for this publish');
+    assert.equal(emitted[0].event, 'certificate:published');
+    assert.deepEqual(emitted[0].parentIds, [PARENT.id]);
+    assert.deepEqual(emitted[0].payload.studentIds, [STUDENT_A]);
+  } finally {
+    restore();
+    delete require.cache[require.resolve('../utils/realtime')];
+    delete require.cache[require.resolve('../controllers/certificateController')];
+  }
+});
+
+// ── Real-disk Replace regression (live bug) ─────────────────────────────────────────
+// Real bug (live-reported): after using "Replace" on a published certificate, viewing
+// it afterward — admin side AND parent side — showed "Could not open this certificate."
+// Root cause: `const oldFile = certificate.file;` in replaceCertificate just took a
+// REFERENCE to the Mongoose single-nested `file` subdocument, not a copy. The very next
+// line, `certificate.file = newFile;`, mutates THAT SAME subdocument instance in place,
+// so `oldFile.path` silently became the NEW path too. `deleteCertificateFileBestEffort
+// (oldFile)` then deleted the just-written REPLACEMENT file instead of the real old one
+// — the DB record was left pointing at a path that no longer existed on disk, while the
+// genuinely old file was never cleaned up (orphaned). Confirmed against a real MongoDB
+// connection with real Document instances (a plain mock .save() can't reproduce
+// Mongoose's own subdocument aliasing behavior) before fixing.
+//
+// The gap in the EARLIER watermarking-feature testing that let this ship: every test
+// above stubs `fs.unlinkSync = () => {}` (a no-op) and `fs.existsSync = () => true`
+// (always true) via stubModels() — so the delete step always "succeeded" and a missing
+// file could never be observed, no matter which path got deleted. These tests use the
+// REAL filesystem instead (no fs stubbing at all), against this feature's own real
+// private-uploads/certificates directory, and clean up every file they create.
+const path = require('path');
+const PRIVATE_UPLOADS_DIR = path.join(__dirname, '..', 'private-uploads', 'certificates');
+
+// getCertificateFile's success path does `fs.createReadStream(filePath).pipe(res)`,
+// which needs a REAL writable stream (not the plain mockRes() object above) to pipe
+// into, and resolves before the piped data has necessarily finished flowing — so
+// callers await `res.finished` to know the stream genuinely completed before asserting.
+function mockStreamRes() {
+  const { Writable } = require('stream');
+  const res = new Writable({ write(chunk, enc, cb) { cb(); } });
+  res._status = 200;
+  let resolveFinished;
+  res.finished = new Promise((resolve) => { resolveFinished = resolve; });
+  res.status = (c) => { res._status = c; return res; };
+  res.json = (b) => { res._body = b; resolveFinished(); return res; }; // error paths never reach .pipe()
+  res.setHeader = () => {};
+  res.on('finish', resolveFinished);
+  res.on('error', resolveFinished);
+  return res;
+}
+
+function stubModelsOnly({ existingStudentIds = [STUDENT_A] } = {}) {
+  const origCreate = Certificate.create;
+  const origFindById = Certificate.findById;
+  const origUserFind = User.find;
+  const store = makeFakeCertificateStore();
+  Certificate.create = store.create;
+  Certificate.findById = store.findById;
+  User.find = (query) => {
+    const ids = (query?._id?.$in || []).map(String);
+    return mockQuery(ids.filter((id) => existingStudentIds.includes(id)).map((id) => ({ _id: id })));
+  };
+  return {
+    store,
+    restore() {
+      Certificate.create = origCreate;
+      Certificate.findById = origFindById;
+      User.find = origUserFind;
+    },
+  };
+}
+
+test('replaceCertificate (REAL disk I/O): the OLD file is deleted, the NEW file is the one left on disk, and it is still viewable afterward', async () => {
+  const { restore } = stubModelsOnly();
+  const writtenPaths = [];
+  const origWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = (filePath, buf) => { writtenPaths.push(filePath); origWriteFileSync(filePath, buf); };
+  try {
+    const uploadRes = mockRes();
+    await uploadCertificate({ user: ADMIN, body: { studentIds: [STUDENT_A], fileDataUrl: TINY_PNG_DATA_URL, fileName: 'first.png' } }, uploadRes);
+    assert.equal(uploadRes._status, 201, JSON.stringify(uploadRes._body));
+    const certId = uploadRes._body.certificate._id;
+    const firstDiskPath = path.join(PRIVATE_UPLOADS_DIR, uploadRes._body.certificate.file.path);
+    assert.ok(fs.existsSync(firstDiskPath), 'the first uploaded (watermarked) file must really exist on disk');
+
+    const replaceRes = mockRes();
+    await replaceCertificate({ user: ADMIN, params: { id: certId }, body: { fileDataUrl: TINY_PNG_DATA_URL, fileName: 'second.png' } }, replaceRes);
+    assert.equal(replaceRes._status, 200, JSON.stringify(replaceRes._body));
+    const secondDiskPath = path.join(PRIVATE_UPLOADS_DIR, replaceRes._body.certificate.file.path);
+
+    assert.ok(!fs.existsSync(firstDiskPath), 'the OLD file must be deleted after Replace');
+    assert.ok(fs.existsSync(secondDiskPath), 'the NEW (replacement) file must still exist on disk — this is what the bug deleted instead');
+
+    // The exact real-world symptom: View must succeed, not 404, after a Replace.
+    const viewRes = mockStreamRes();
+    await getCertificateFile({ user: ADMIN, params: { id: certId } }, viewRes);
+    await viewRes.finished;
+    assert.equal(viewRes._status, 200, 'viewing the certificate after Replace must succeed, not "Could not open this certificate"');
+  } finally {
+    fs.writeFileSync = origWriteFileSync;
+    for (const p of writtenPaths) { try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch { /* best effort */ } }
+    restore();
+  }
+});
+
+test('replaceCertificate (REAL disk I/O, PDF): same Replace-then-View regression check for a PDF certificate', async () => {
+  const { PDFDocument } = require('pdf-lib');
+  const blankDoc = await PDFDocument.create();
+  blankDoc.addPage([300, 200]);
+  const pdfDataUrl = `data:application/pdf;base64,${Buffer.from(await blankDoc.save()).toString('base64')}`;
+
+  const { restore } = stubModelsOnly();
+  const writtenPaths = [];
+  const origWriteFileSync = fs.writeFileSync;
+  fs.writeFileSync = (filePath, buf) => { writtenPaths.push(filePath); origWriteFileSync(filePath, buf); };
+  try {
+    const uploadRes = mockRes();
+    await uploadCertificate({ user: ADMIN, body: { studentIds: [STUDENT_A], fileDataUrl: pdfDataUrl, fileName: 'first.pdf' } }, uploadRes);
+    assert.equal(uploadRes._status, 201, JSON.stringify(uploadRes._body));
+    const certId = uploadRes._body.certificate._id;
+    const firstDiskPath = path.join(PRIVATE_UPLOADS_DIR, uploadRes._body.certificate.file.path);
+
+    const replaceRes = mockRes();
+    await replaceCertificate({ user: ADMIN, params: { id: certId }, body: { fileDataUrl: pdfDataUrl, fileName: 'second.pdf' } }, replaceRes);
+    assert.equal(replaceRes._status, 200, JSON.stringify(replaceRes._body));
+    const secondDiskPath = path.join(PRIVATE_UPLOADS_DIR, replaceRes._body.certificate.file.path);
+
+    assert.ok(!fs.existsSync(firstDiskPath), 'the OLD PDF must be deleted after Replace');
+    assert.ok(fs.existsSync(secondDiskPath), 'the NEW (replacement) PDF must still exist on disk');
+
+    const bytesOnDisk = fs.readFileSync(secondDiskPath);
+    const loaded = await PDFDocument.load(bytesOnDisk);
+    assert.equal(loaded.getPageCount(), 1, 'the file left on disk must be a valid, loadable PDF');
+  } finally {
+    fs.writeFileSync = origWriteFileSync;
+    for (const p of writtenPaths) { try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch { /* best effort */ } }
+    restore();
+  }
 });
 
 test('cleanup: nothing to tear down (no live DB connection opened by this suite)', () => {

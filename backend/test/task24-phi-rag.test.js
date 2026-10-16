@@ -65,6 +65,23 @@ test('24b: a location question retrieves the location entry, not the whole datas
   assert.ok(ref.split('\n\n').length <= 4, 'capped at 4 entries');
 });
 
+// Real content gaps (live-reported): neither of these existed anywhere in the dataset
+// (nor in bee_bright_system.txt) before, so a public visitor asking either of these
+// genuinely answerable questions fell through to the generic low-confidence fallback
+// instead of a real answer.
+
+test('24b: an age-eligibility question (the exact reported "11 months old" phrasing) now retrieves a real answer, pulled from the real enforced age ranges', () => {
+  const ref = buildPhiReferenceContext('tumatanggap ba kayo ng 11 months old', null);
+  assert.match(ref, /2/, 'Toddlers Playgroup starts at age 2');
+  assert.match(ref, /Toddlers Playgroup/i);
+});
+
+test('24b: an operating-hours question now retrieves the real 8am-5pm answer instead of "not explicitly listed"', () => {
+  const ref = buildPhiReferenceContext("what are bee bright's operating hours", null);
+  assert.match(ref, /8:00 ?AM/i);
+  assert.match(ref, /5:00 ?PM/i);
+});
+
 test('24b: pure filler / empty retrieves nothing', () => {
   assert.equal(buildPhiReferenceContext('', null), '');
   assert.equal(buildPhiReferenceContext('   ', 'student'), '');

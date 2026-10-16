@@ -113,6 +113,28 @@ function daysBetweenDateOnly(fromStr: string, toStr: string): number {
   return Math.round((to - from) / (1000 * 60 * 60 * 24));
 }
 
+function minutesSinceMidnight(hhmm: string): number {
+  const [h, m] = (hhmm || "00:00").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/**
+ * A session is "done" (eligible for the Attendance-by-student tally below) once it's
+ * genuinely over — any past date, OR today but only after its own end time has passed.
+ * A same-day session a tutor marks right after it finishes must count immediately, the
+ * same way StudentDashboard.tsx's own attendanceStats/attendanceByProgram already treat
+ * "today" (that computation was already correct; this one previously used a plain
+ * `date < todayStr` check, which excluded TODAY entirely — so marking a same-day session
+ * never moved this table even though it's exactly the normal, same-day use case
+ * submitAttendance itself already allows).
+ */
+function isSessionDone(s: SessionItem, todayStr: string, nowMinutes: number): boolean {
+  const sessionDay = dateOnly(s.date);
+  if (sessionDay < todayStr) return true;
+  if (sessionDay > todayStr) return false;
+  return nowMinutes >= minutesSinceMidnight(s.endTime);
+}
+
 export interface AttendanceTabProps {
   sessions: SessionItem[];
   onRefresh: () => void;
@@ -149,8 +171,16 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
   // mounted, and a session crossing the threshold wouldn't lock until a manual refresh.
   // Day-level granularity is all that matters here, so a 1-minute check is plenty.
   const [todayStr, setTodayStr] = useState(() => todayDateKey());
+  const [nowMinutes, setNowMinutes] = useState(() => {
+    const t = new Date();
+    return t.getHours() * 60 + t.getMinutes();
+  });
   useEffect(() => {
-    const id = window.setInterval(() => setTodayStr(todayDateKey()), 60 * 1000);
+    const id = window.setInterval(() => {
+      setTodayStr(todayDateKey());
+      const t = new Date();
+      setNowMinutes(t.getHours() * 60 + t.getMinutes());
+    }, 60 * 1000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -262,7 +292,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       });
     });
 
-    const doneSessions = uniqueSessions.filter((s) => dateOnly(s.date) < todayStr);
+    const doneSessions = uniqueSessions.filter((s) => isSessionDone(s, todayStr, nowMinutes));
     doneSessions.forEach((s) => {
       const programLabel = (s.subject?.name || "Unassigned Program").trim();
       const group = s.students ?? [];
@@ -282,7 +312,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
     return Array.from(byKey.values()).sort((a, b) =>
       a.name.localeCompare(b.name) || a.programLabel.localeCompare(b.programLabel) || a.cycleId.localeCompare(b.cycleId)
     );
-  }, [uniqueSessions, todayStr, getStatus]);
+  }, [uniqueSessions, todayStr, nowMinutes, getStatus]);
 
   const submitAttendance = useCallback((session: SessionItem, status: "present" | "absent", studentId?: string) => {
     const sessionDay = dateOnly(session.date);
@@ -541,7 +571,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
           <div className="p-4 border-b border-border">
             <h3 className="font-display font-bold text-lg text-foreground">Attendance by student</h3>
             <p className="text-sm text-muted-foreground">
-              Only completed past sessions with marked attendance are counted here.
+              Only completed sessions with marked attendance are counted here — including today's, once they've ended.
             </p>
           </div>
           <div className="divide-y divide-border">

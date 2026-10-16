@@ -52,13 +52,17 @@ test('V010 was not assigned to anything', () => {
   assert.ok(!byId.V010, 'V010 must stay unused — the live ticket-status handler owns that question');
 });
 
-test('getDatasetCount reflects the additions (108)', () => {
-  assert.equal(D.getDatasetCount(), 108);
+test('getDatasetCount reflects the additions (110)', () => {
+  // 110, not 108 — +V014 (age eligibility) and +V015 (operating hours), added for a
+  // real live-reported content gap: neither question had any matching content
+  // anywhere, so both fell through to the generic low-confidence fallback instead of
+  // a real answer.
+  assert.equal(D.getDatasetCount(), 110);
   const t = D.getDatasetCountByType();
   assert.equal(t.studentQueries, 45);
   assert.equal(t.tutorQueries, 8);
   assert.equal(t.adminQueries, 5);
-  assert.equal(t.visitorQueries, 12);
+  assert.equal(t.visitorQueries, 14);
   assert.equal(t.intentKeywordRules, 26);
 });
 

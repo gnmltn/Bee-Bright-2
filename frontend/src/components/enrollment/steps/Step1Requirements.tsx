@@ -17,7 +17,7 @@ const timeline = [
   { label: 'Complete Enrollment Form',         time: 'Today' },
   { label: 'Submit Payment Proof',             time: 'After submitting' },
   { label: 'Admin Reviews & Verifies Payment', time: '1–2 business days' },
-  { label: 'Enrollment Approved',              time: '2–3 business days' },
+  { label: 'Enrollment Approved',              time: '1–2 business days' },
   { label: 'Schedule Assigned by Admin',       time: 'After approval' },
 ];
 

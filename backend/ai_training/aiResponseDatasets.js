@@ -1137,6 +1137,44 @@ const AIResponseDatasets = {
         tgl: 'Ang Bee Bright ay web-based na system, walang separate mobile app. Buksan mo lang sa kahit anong browser sa phone, tablet, o computer — nag-a-adjust ang layout sa screen mo.'
       }
     },
+    // Real gap (live-reported): an age-eligibility question ("do you accept an
+    // 11-month-old?") had no matching content anywhere — not here, not in
+    // bee_bright_system.txt — so it fell all the way through to the generic "I can help
+    // with..." fallback instead of a real answer. Ages pulled directly from
+    // utils/ageEligibility.js's PROGRAM_AGE_RANGES (the real, enforced enrollment rule),
+    // not invented here.
+    {
+      id: 'V014',
+      topic: 'age_eligibility',
+      queries: {
+        en: 'Do you accept an 11-month-old / a 1-year-old?',
+        fil: 'Tumatanggap ba kayo ng 11 months old / 1 year old?',
+        tgl: 'Tumatanggap ba kayo ng 11 months old / 1 year old na bata?'
+      },
+      expectedReply: {
+        en: "Our programs start at 2 years old: Toddlers Playgroup is for ages 2-4, Academic Tutorial is for ages 2-18, and Examination Preparation is for ages 3-18. We don't have a program for a child under 2 yet. Once your child turns 2, you're welcome to enroll them in Toddlers Playgroup.",
+        fil: 'Nagsisimula ang mga programa namin sa edad na 2 taong gulang: ang Toddlers Playgroup ay para sa edad 2-4, Academic Tutorial para sa edad 2-18, at Examination Preparation para sa edad 3-18. Wala pa kaming program para sa batang wala pang 2 taong gulang. Pagka-2 taon na ng anak mo, puwede mo na siyang i-enroll sa Toddlers Playgroup.',
+        tgl: 'Nagsisimula ang mga program namin sa edad na 2 years old: ang Toddlers Playgroup ay for ages 2-4, Academic Tutorial for ages 2-18, at Examination Preparation for ages 3-18. Wala pa kaming program para sa batang wala pang 2 years old. Once 2 years old na ang anak mo, puwede mo na siyang i-enroll sa Toddlers Playgroup.'
+      }
+    },
+    // Real gap (live-reported): asking Bee Bright's operating hours got "not explicitly
+    // listed in the system" even though this is known, simple information — it was
+    // genuinely missing from both this dataset and the system prompt, not a retrieval
+    // failure.
+    {
+      id: 'V015',
+      topic: 'operating_hours',
+      queries: {
+        en: "What are Bee Bright's operating hours?",
+        fil: 'Ano ang oras ng operasyon ng Bee Bright?',
+        tgl: "Ano ang oras ng Bee Bright? Anong time kayo bukas?"
+      },
+      expectedReply: {
+        en: 'Bee Bright is open from 8:00 AM to 5:00 PM.',
+        fil: 'Bukas ang Bee Bright mula 8:00 AM hanggang 5:00 PM.',
+        tgl: 'Bukas ang Bee Bright from 8:00 AM to 5:00 PM.'
+      }
+    },
   ],
 
   // ===============================

@@ -1150,6 +1150,11 @@ const logout = async (req, res) => {
         description: 'Manual logout from current device',
         status: 'SUCCESS'
       }).catch(() => {});
+
+      const fcmToken = String(req.body?.fcmToken || '').trim();
+      if (fcmToken) {
+        User.updateOne({ _id: userId }, { $pull: { fcmTokens: fcmToken } }).catch(() => {});
+      }
     }
   } catch (error) {
     // Ignore token decode errors on logout.
