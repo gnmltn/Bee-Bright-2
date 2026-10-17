@@ -29,6 +29,7 @@ import {
   RotateCcw,
   CalendarOff,
   AlertTriangle,
+  Search,
 } from "lucide-react";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
@@ -247,6 +248,25 @@ export const sameCalendarDay = (a: Date, b: string) => {
   const bd = new Date(b);
   return a.getFullYear() === bd.getFullYear() && a.getMonth() === bd.getMonth() && a.getDate() === bd.getDate();
 };
+
+type UserForFilter = Pick<AdminUser, "firstName" | "lastName" | "email" | "role">;
+
+/** Case-insensitive name-or-email match for the Users tab search bar. An empty/
+ *  whitespace-only query always matches (no search applied yet). */
+export const matchesUserSearch = (u: UserForFilter, query: string): boolean => {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const name = `${u.firstName || ""} ${u.lastName || ""}`.trim().toLowerCase();
+  return name.includes(q) || (u.email || "").toLowerCase().includes(q);
+};
+
+/** Role filter + search for one Users-tab sub-tab (Active or Archived). The two
+ *  sub-tabs each call this with their OWN roleFilter/searchQuery state, so they never
+ *  share or carry over a filter — see activeUsersRoleFilter/archivedUsersRoleFilter
+ *  below. */
+export function filterUsersForTab<T extends UserForFilter>(users: T[], roleFilter: string, searchQuery: string): T[] {
+  return users.filter((u) => (roleFilter === "all" || u.role === roleFilter) && matchesUserSearch(u, searchQuery));
+}
 
 export const handleExportAll = (
   enrollmentsList: AdminEnrollment[],
@@ -829,6 +849,35 @@ export default function AdminDashboard() {
     () => users.filter((u) => managedUserRoles.has(u.role) && u.isArchived && !u.deletedAt),
     [managedUserRoles, users]
   );
+
+  // Role filter + search for the Users tab. Active and Archived are two fully
+  // separate, self-contained instances (own state each) so switching sub-tabs never
+  // carries one's filter/search into the other. Both narrow whatever activeUsers/
+  // archivedUsers currently hold, so the existing realtime add/remove wiring (which
+  // only ever touches the underlying `users` state) keeps working unchanged — a live
+  // update just flows through these the same way it already flows through those.
+  const [activeUsersRoleFilter, setActiveUsersRoleFilter] = useState<string>("all");
+  const [activeUsersSearch, setActiveUsersSearch] = useState("");
+  const [archivedUsersRoleFilter, setArchivedUsersRoleFilter] = useState<string>("all");
+  const [archivedUsersSearch, setArchivedUsersSearch] = useState("");
+
+  const userRoleFilterOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [{ value: "all", label: "All" }];
+    if (managedUserRoles.has("parent")) opts.push({ value: "parent", label: "Parent/Guardian" });
+    if (managedUserRoles.has("tutor")) opts.push({ value: "tutor", label: "Tutor" });
+    if (managedUserRoles.has("admin")) opts.push({ value: "admin", label: "Admin" });
+    return opts;
+  }, [managedUserRoles]);
+
+  const filteredActiveUsers = useMemo(
+    () => filterUsersForTab(activeUsers, activeUsersRoleFilter, activeUsersSearch),
+    [activeUsers, activeUsersRoleFilter, activeUsersSearch]
+  );
+  const filteredArchivedUsers = useMemo(
+    () => filterUsersForTab(archivedUsers, archivedUsersRoleFilter, archivedUsersSearch),
+    [archivedUsers, archivedUsersRoleFilter, archivedUsersSearch]
+  );
+
   const pendingUserActionDialog = useMemo(() => {
     if (!pendingUserAction) return null;
 
@@ -4757,6 +4806,41 @@ export default function AdminDashboard() {
                       </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
+                    {/* Role filter + search — Active and Archived each bind to their OWN
+                        state (activeUsersRoleFilter/activeUsersSearch vs. archivedUsersRoleFilter/
+                        archivedUsersSearch), so switching sub-tabs never carries one's filter
+                        into the other. */}
+                    <Select
+                      value={usersCategory === "active" ? activeUsersRoleFilter : archivedUsersRoleFilter}
+                      onValueChange={(value) => {
+                        if (usersCategory === "active") setActiveUsersRoleFilter(value);
+                        else setArchivedUsersRoleFilter(value);
+                      }}
+                    >
+                      <SelectTrigger className="h-9 w-[150px]" data-testid="users-role-filter">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {userRoleFilterOptions.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="relative">
+                      <Search className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={usersCategory === "active" ? activeUsersSearch : archivedUsersSearch}
+                        onChange={(e) => {
+                          if (usersCategory === "active") setActiveUsersSearch(e.target.value);
+                          else setArchivedUsersSearch(e.target.value);
+                        }}
+                        placeholder="Search by name or email"
+                        className="h-9 pl-8 w-[220px]"
+                        data-testid="users-search-input"
+                      />
+                    </div>
                     {usersCategory === "active" && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -4814,8 +4898,12 @@ export default function AdminDashboard() {
                         <tr>
                           <td colSpan={6} className="p-8 text-center text-muted-foreground">No users in the database yet.</td>
                         </tr>
+                      ) : filteredActiveUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-muted-foreground">No users match this filter or search.</td>
+                        </tr>
                       ) : (
-                        activeUsers.map((u) => {
+                        filteredActiveUsers.map((u) => {
                           const name = `${u.firstName || ""} ${u.lastName || ""}`.trim() || "—";
                           const initials = name !== "—" ? name.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—";
                           const status = u.isArchived ? "archived" : u.isActive ? "active" : "inactive";
@@ -4960,8 +5048,14 @@ export default function AdminDashboard() {
                             No archived users.
                           </td>
                         </tr>
+                      ) : filteredArchivedUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-muted-foreground">
+                            No users match this filter or search.
+                          </td>
+                        </tr>
                       ) : (
-                        archivedUsers.map((u) => {
+                        filteredArchivedUsers.map((u) => {
                           const name = `${u.firstName || ""} ${u.lastName || ""}`.trim() || "—";
                           const initials =
                             name !== "—" ? name.split(" ").map((n) => n[0]).join("").slice(0, 2) : "—";
