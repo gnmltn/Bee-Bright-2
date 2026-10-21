@@ -31,6 +31,10 @@ const {
   enrollmentCoversSubject,
   PLAYGROUP_MAX_CHILDREN,
   ONE_ON_ONE_SLOT_CAP,
+  OPERATING_START_MINUTES,
+  LUNCH_START_MINUTES,
+  LUNCH_END_MINUTES,
+  OPERATING_END_MINUTES,
 } = require('../utils/schedulingPolicy');
 const { matchesParentPreference, resolvePreferredDays } = require('../utils/schedulePreferences');
 const { parentOwnsStudent, resolveParentIdsForStudents } = require('../utils/parentChildAccess');
@@ -38,6 +42,7 @@ const { permanentIdOf } = require('../utils/studentIdentity');
 const { isRoomDoubleBooked, isOneOnOneHourFull, filterLiveSessions } = require('../utils/weeklySchedulingUtils');
 const { emitToAdmins, emitToParents, emitToTutors, disconnectUserSockets } = require('../utils/realtime');
 const { attachCycleByStudent } = require('../utils/attendanceCycles');
+const { attachRemainingDueDates, attachProgramDateRangeToCycles } = require('../utils/remainingDueDate');
 
 const MAX_SUBSTITUTION_ATTEMPTS = 3;
 
@@ -2438,6 +2443,268 @@ const checkMonthlySchedule = async (req, res) => {
   }
 };
 
+// The 1-on-1 wizard's standard 1-hour blocks (8-9, 9-10, ..., 4-5), skipping the 12-1
+// lunch break — derived from the SAME operating-hours constants validateTimeWindow
+// enforces, rather than a second hardcoded copy of "8:00 AM to 5:00 PM" that could drift.
+function buildStandardOneOnOneHourSlots() {
+  const slots = [];
+  for (let startMin = OPERATING_START_MINUTES; startMin + 60 <= OPERATING_END_MINUTES; startMin += 60) {
+    if (startMin < LUNCH_END_MINUTES && startMin + 60 > LUNCH_START_MINUTES) continue; // the lunch hour itself
+    const toTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    slots.push({ startTime: toTime(startMin), endTime: toTime(startMin + 60) });
+  }
+  return slots;
+}
+
+// Same context a tutor would need to be ALREADY chosen for (loadMonthlyContext), but
+// deliberately WITHOUT requiring one — this is for the NEW calendar-first/slot-first
+// grid, which exists precisely to help the admin find which tutors are free BEFORE
+// picking one, for each of the student's already-chosen weekdays.
+async function loadSlotGridContext(body) {
+  const { studentId: studentIdRaw, enrollmentId, subjectId, days: daysRaw, startDate } = body || {};
+  const days = Array.isArray(daysRaw) ? [...new Set(daysRaw.map(Number).filter((d) => d >= 0 && d <= 6))] : [];
+  if ((!studentIdRaw && !enrollmentId) || !subjectId || days.length === 0) {
+    return { status: 400, message: 'studentId (or enrollmentId), subjectId and at least one day are required' };
+  }
+
+  const subject = await Subject.findById(subjectId).select('name code').lean();
+  if (!subject) return { status: 404, message: 'Subject or program not found' };
+  const policy = getProgramPolicy(subject);
+  if (policy?.sessionType !== 'one-on-one') {
+    return { status: 400, message: 'The availability grid currently supports one-on-one programs only.' };
+  }
+
+  const enrollment = await Enrollment.findOne(enrollmentId ? { _id: enrollmentId } : { student: studentIdRaw })
+    .sort({ createdAt: -1 })
+    .populate('selectedSubjects')
+    .lean();
+  if (!enrollment || !isSchedulableEnrollmentStatus(enrollment)) {
+    return { status: 400, message: 'Student has no active enrollment' };
+  }
+  if (!enrollmentCoversSubject(enrollment, subject)) {
+    return { status: 400, message: 'Student is not enrolled in this subject' };
+  }
+
+  const window = resolveMonthlyWindow(enrollment, startDate);
+  if (window.error) return { status: 400, message: window.error };
+
+  const tutoringAreaId = await getDefaultTutoringAreaId('one-on-one');
+  if (!tutoringAreaId) {
+    return { status: 400, message: 'Tutoring Area is not configured yet. Please add an active tutoring area before scheduling.' };
+  }
+
+  // A preview must not create the student account, so only an already-existing one (if
+  // any) is available to check for conflicts against — same rule loadMonthlyContext uses.
+  const existingStudentId = await resolveExistingStudentId(enrollment);
+
+  return { subject, policy, days, tutoringAreaId, existingStudentId, ...window };
+}
+
+function rowMatchesPerson(row, personId, singularField, pluralField) {
+  if (!personId) return false;
+  if (String(row[singularField]) === String(personId)) return true;
+  return (row[pluralField] || []).some((id) => String(id) === String(personId));
+}
+
+function rowOverlapsSlot(row, slot) {
+  const targetStart = normalizeTime(slot.startTime);
+  const targetEnd = normalizeTime(getSessionEndTime(slot.startTime, slot.endTime));
+  return timeRangesOverlap(targetStart, targetEnd, row.startTime, row.endTime || getSessionEndTime(row.startTime, row.endTime));
+}
+
+/**
+ * The FULL calendar-first / slot-first availability grid for the 1-on-1 wizard's tutor
+ * step — every REAL calendar date within the student's one-month generation window
+ * that matches one of their chosen weekdays, each with all 8 standard hourly slots'
+ * cross-tutor availability. This is what lets the actual calendar component show a
+ * whole month at once (prev/next navigable) with the right days/slots pre-computed,
+ * rather than one representative date per weekday.
+ *
+ * Same RULES as canTutorHandleSchedule/hasStudentScheduleConflict/isOneOnOneHourFull
+ * (tutor availability-window containment via parseAvailability, ghost-session
+ * filtering via filterLiveSessions, the system-wide ONE_ON_ONE_SLOT_CAP, time overlap
+ * via timeRangesOverlap) — but evaluated as ONE batched pass over the whole window
+ * (one tutor-roster fetch, one Schedule fetch, one TutorUnavailability fetch) instead
+ * of a separate Mongo round-trip per tutor per slot per date, which is what made the
+ * earlier single-representative-date version the practical limit: a real month can
+ * have 10-25+ matching dates × 8 slots × several tutors, and calling the per-call
+ * functions that many times over would be far too slow for an interactive calendar.
+ * test/one-on-one-slot-grid.test.js cross-checks this batched computation against
+ * canTutorHandleSchedule/hasStudentScheduleConflict directly, to guard against drift.
+ *
+ * IMPORTANT — whole-pattern availability, not just the one clicked date: assigning a
+ * tutor to e.g. "Monday 8am" commits every Monday in the month (createMonthlySchedules
+ * inserts one session per datesForWeekday occurrence, and aborts the whole batch if ANY
+ * of them fails), and checkMonthlySchedule's conflict list is built the exact same way —
+ * one entry per failing occurrence across the WHOLE window, not just the first one. So a
+ * tutor/slot here must only be marked "available" when it would actually succeed across
+ * EVERY occurrence of that weekday in the window, not merely the single date being
+ * rendered — otherwise this grid can say a tutor is free for a date where checkMonthly
+ * (correctly) reports them unavailable because of a conflict on a LATER occurrence of
+ * the same weekday. The system-wide-cap and student-conflict checks get the same
+ * whole-pattern treatment for the same reason (isOneOnOneHourFull/hasStudentScheduleConflict
+ * are both evaluated per-occurrence inside checkMonthlySlot too).
+ */
+async function getAvailableTutorsGridForWindow({ subjectId, existingStudentId, days, generationStart, subscriptionEnd }) {
+  const hourSlots = buildStandardOneOnOneHourSlots();
+
+  const datesByDayOfWeek = new Map();
+  for (const dayOfWeek of days) {
+    datesByDayOfWeek.set(dayOfWeek, datesForWeekday(generationStart, subscriptionEnd, dayOfWeek));
+  }
+  const allDates = [];
+  for (const [dayOfWeek, dates] of datesByDayOfWeek) {
+    for (const date of dates) allDates.push({ date, dayOfWeek, dateKey: dateKeyOf(date) });
+  }
+  if (allDates.length === 0) return {};
+
+  let minDate = allDates[0].date;
+  let maxDate = allDates[0].date;
+  for (const { date } of allDates) {
+    if (date < minDate) minDate = date;
+    if (date > maxDate) maxDate = date;
+  }
+
+  const tutors = await User.find({ role: 'tutor', isActive: true, deletedAt: null })
+    .select('firstName lastName middleName employmentType availability')
+    .sort({ firstName: 1, lastName: 1 })
+    .lean();
+
+  // ONE fetch for every live Schedule row touching the whole window — covers both the
+  // tutor-conflict side and the student-conflict side; ghost sessions (tutor/child
+  // account gone) dropped via the SAME filterLiveSessions this file uses elsewhere.
+  const rawRows = await Schedule.find({ date: { $gte: minDate, $lte: maxDate } })
+    .select('tutor tutors student students date startTime endTime sessionType')
+    .lean();
+  const liveRows = await filterLiveSessions(rawRows);
+  const rowsByDateKey = new Map();
+  for (const row of liveRows) {
+    const key = dateKeyOf(row.date);
+    if (!rowsByDateKey.has(key)) rowsByDateKey.set(key, []);
+    rowsByDateKey.get(key).push(row);
+  }
+
+  // ONE fetch for every TutorUnavailability window touching the whole range.
+  const unavailRows = await TutorUnavailability.find({ startDate: { $lte: maxDate }, endDate: { $gte: minDate } })
+    .select('tutor startDate endDate')
+    .lean();
+  const isTutorUnavailableOnDate = (tutorId, date) =>
+    unavailRows.some((u) => String(u.tutor) === String(tutorId) && u.startDate <= date && u.endDate >= date);
+
+  const availabilityByTutor = new Map(tutors.map((t) => [String(t._id), parseAvailability(t.employmentType, t.availability)]));
+
+  const grid = {};
+  for (const [dayOfWeek, dates] of datesByDayOfWeek) {
+    // Precomputed ONCE per (weekday, slot) — identical across every occurrence of that
+    // weekday in the window, since "available" now means available for the WHOLE pattern.
+    const perSlotInfo = hourSlots.map((slot) => {
+      // Student-side conflict (tutor-independent) — blocked if the student has a
+      // conflicting session on ANY occurrence of this weekday, not just this one date.
+      let studentConflictDateKey = null;
+      for (const date of dates) {
+        const dayRows = rowsByDateKey.get(dateKeyOf(date)) || [];
+        if (existingStudentId && dayRows.some((r) => rowMatchesPerson(r, existingStudentId, 'student', 'students') && rowOverlapsSlot(r, slot))) {
+          studentConflictDateKey = dateKeyOf(date);
+          break;
+        }
+      }
+      // System-wide 12-per-hour cap (tutor-independent) — full on ANY occurrence blocks
+      // the whole pattern, same as isOneOnOneHourFull being checked per-occurrence.
+      let fullDateKey = null;
+      if (!studentConflictDateKey) {
+        for (const date of dates) {
+          const dayRows = rowsByDateKey.get(dateKeyOf(date)) || [];
+          const liveOneOnOneCountAtSlot = dayRows.filter((r) => r.sessionType === 'one-on-one' && normalizeTime(r.startTime) === normalizeTime(slot.startTime)).length;
+          if (liveOneOnOneCountAtSlot >= ONE_ON_ONE_SLOT_CAP) { fullDateKey = dateKeyOf(date); break; }
+        }
+      }
+      // Per tutor: availability-window containment (parseAvailability) + ghost-filtered
+      // conflict, required on EVERY occurrence of this weekday, not just one.
+      const availableTutors = (studentConflictDateKey || fullDateKey) ? [] : tutors.filter((t) => {
+        const slots = availabilityByTutor.get(String(t._id)) || [];
+        const inWindow = slots.some((s) =>
+          s.dayOfWeek === dayOfWeek
+          && getMinutesSinceMidnight(slot.startTime) >= getMinutesSinceMidnight(s.start)
+          && getMinutesSinceMidnight(slot.endTime) <= getMinutesSinceMidnight(s.end)
+        );
+        if (!inWindow) return false;
+        return dates.every((date) => {
+          if (isTutorUnavailableOnDate(t._id, date)) return false;
+          const dayRows = rowsByDateKey.get(dateKeyOf(date)) || [];
+          return !dayRows.some((r) => rowMatchesPerson(r, t._id, 'tutor', 'tutors') && rowOverlapsSlot(r, slot));
+        });
+      });
+      return { slot, studentConflictDateKey, fullDateKey, availableTutors };
+    });
+
+    for (const date of dates) {
+      const dateKey = dateKeyOf(date);
+      grid[dateKey] = perSlotInfo.map(({ slot, studentConflictDateKey, fullDateKey, availableTutors }) => {
+        if (studentConflictDateKey) {
+          const onThisDate = studentConflictDateKey === dateKey;
+          return {
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            available: false,
+            tutors: [],
+            reason: onThisDate
+              ? 'The student already has a conflicting session at this time.'
+              : `The student already has a conflicting session at this time on ${studentConflictDateKey} (same weekday, later in the month).`,
+          };
+        }
+        if (fullDateKey) {
+          const onThisDate = fullDateKey === dateKey;
+          return {
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            available: false,
+            tutors: [],
+            reason: onThisDate
+              ? `This hour is full — the center fits at most ${ONE_ON_ONE_SLOT_CAP} one-on-one sessions at the same time.`
+              : `This hour is already full on ${fullDateKey} (same weekday, later in the month) — the center fits at most ${ONE_ON_ONE_SLOT_CAP} one-on-one sessions at the same time.`,
+          };
+        }
+        return {
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          available: availableTutors.length > 0,
+          tutors: availableTutors.map((t) => ({ _id: t._id, name: buildFullName(t) })),
+          reason: availableTutors.length ? null : 'No available tutor for this time across every occurrence this month.',
+        };
+      });
+    }
+  }
+  return grid;
+}
+
+// @desc    Calendar-first / slot-first availability grid for the 1-on-1 wizard's tutor
+//          step — a REAL month: every actual calendar date within the student's
+//          one-month generation window matching one of their chosen weekdays, each
+//          with all 8 standard hourly slots' cross-tutor availability (which tutors
+//          are free, or why none are). Replaces "pick one tutor, see only their
+//          calendar" — the admin instead sees, up front, every real date/slot any
+//          tutor could actually cover, in a real calendar grid.
+// @route   POST /api/schedules/monthly/slot-grid
+// @access  Private (Admin)
+// Body: studentId|enrollmentId, subjectId, days: [1,3,5], startDate?
+const getMonthlySlotGrid = async (req, res) => {
+  try {
+    const ctx = await loadSlotGridContext(req.body);
+    if (ctx.status) return res.status(ctx.status).json({ success: false, message: ctx.message });
+    const { subject, days, existingStudentId, generationStart, subscriptionEnd } = ctx;
+    const grid = await getAvailableTutorsGridForWindow({
+      subjectId: String(subject._id),
+      existingStudentId,
+      days,
+      generationStart,
+      subscriptionEnd,
+    });
+    res.status(200).json({ success: true, startDate: dateKeyOf(generationStart), subscriptionEnd: dateKeyOf(subscriptionEnd), grid });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load the availability grid' });
+  }
+};
+
 // @desc    List active Toddlers Playgroup groups, optionally filtered to an exact
 //          day-set + time-window match (used to find groups a new child can join).
 //          A "group" has no stored roster of its own — its current child/tutor
@@ -3005,11 +3272,15 @@ const getMySessions = async (req, res) => {
       .lean();
     const schedules = dedupeSchedulesForResponse(schedulesRaw);
     const withCycles = await attachCycleByStudent(schedules);
+    // Tutor Dashboard "Student summary" — the same per-program start/end date range the
+    // parent side already shows (Request 3), attached per cycle so it's never blended
+    // across a renewal (see attachProgramDateRangeToCycles).
+    const withRanges = await attachProgramDateRangeToCycles(withCycles);
 
     res.status(200).json({
       success: true,
-      count: withCycles.length,
-      schedules: withCycles
+      count: withRanges.length,
+      schedules: withRanges
     });
   } catch (error) {
     res.status(500).json({
@@ -3083,12 +3354,16 @@ const getMyStudentCards = async (req, res) => {
     // placeholder `child.<id>@students.beebright.internal` email — same root cause and fix
     // as the announcement-email bug, "bug (14).pdf" Group 2) so the "Assigned Students" mail
     // icon can address the parent directly instead of the fake internal domain.
-    const enrollments = byStudent.size
+    const enrollmentsRaw = byStudent.size
       ? await Enrollment.find({ student: { $in: [...byStudent.keys()] }, status: { $nin: ['cancelled', 'rejected', 'draft'] } })
-          .select('student permanentStudentId enrollmentId studentId packages parent')
+          .select('student permanentStudentId enrollmentId studentId packages parent status')
           .populate('parent', 'firstName lastName email')
           .lean()
       : [];
+    // "My Students" per-program start/end date range — the exact same computation the
+    // parent side already shows (Request 3) and Student summary now also shows, reused
+    // here rather than re-estimated so all three can never disagree for the same child.
+    const enrollments = await attachRemainingDueDates(enrollmentsRaw);
     const enrollmentsByStudent = new Map();
     for (const e of enrollments) {
       const k = String(e.student);
@@ -3107,10 +3382,14 @@ const getMyStudentCards = async (req, res) => {
       for (const e of enr) {
         for (const pkg of e.packages || []) {
           const code = String(pkg.programCode || '').toUpperCase();
-          if (pkg.displayName && entry.programCodes.has(code) && !programs.includes(pkg.displayName)) programs.push(pkg.displayName);
+          if (pkg.displayName && entry.programCodes.has(code) && !programs.some((p) => p.displayName === pkg.displayName)) {
+            programs.push({ displayName: pkg.displayName, programCode: code, startDate: pkg.startDate || null, endDate: pkg.endDate || null, status: e.status || null });
+          }
         }
       }
-      if (programs.length === 0) programs.push(...entry.subjectNames);
+      if (programs.length === 0) {
+        for (const name of entry.subjectNames) programs.push({ displayName: name, programCode: null, startDate: null, endDate: null, status: null });
+      }
 
       const upcoming = entry.schedules.filter((s) => new Date(s.date).getTime() >= todayMs);
       const scheduleSummary = summarizeSchedulePattern(upcoming.length ? upcoming : entry.schedules);
@@ -3123,7 +3402,7 @@ const getMyStudentCards = async (req, res) => {
       const key = studentId || `user-${id}`;
       const existing = cards.get(key);
       if (existing) {
-        for (const p of programs) if (!existing.programs.includes(p)) existing.programs.push(p);
+        for (const p of programs) if (!existing.programs.some((ep) => ep.displayName === p.displayName)) existing.programs.push(p);
         continue;
       }
       cards.set(key, { studentUserId: id, name, programs, studentId, schedule: scheduleSummary, parentEmail, parentName });
@@ -3302,8 +3581,13 @@ const markAttendance = async (req, res) => {
     // tutor assigned to it (not just the one who marked it) so a co-tutor viewing the
     // same session's attendance sees it live, with no refresh. Reuses the existing
     // 'schedule:changed' event the tutor dashboard already listens for everywhere else.
+    // Also pushes to the student(s)' own parent(s) — previously omitted here (only
+    // createSchedule/emitScheduleChangedForSchedule passed studentIds), so a parent with
+    // the Progress tab open never actually saw a live update when a tutor marked
+    // attendance, despite that tab listening for the exact same event everywhere else.
     const tutorIds = (schedule.tutors && schedule.tutors.length ? schedule.tutors : [schedule.tutor]).filter(Boolean);
-    emitScheduleChanged({ tutorIds });
+    const studentIds = (schedule.students && schedule.students.length ? schedule.students : [schedule.student]).filter(Boolean);
+    emitScheduleChanged({ tutorIds, studentIds });
 
     const populated = await Schedule.findById(schedule._id)
       .populate('student', 'firstName lastName middleName')
@@ -4139,6 +4423,8 @@ module.exports = {
   createSchedule,
   createMonthlySchedules,
   checkMonthlySchedule,
+  getMonthlySlotGrid,
+  getAvailableTutorsGridForWindow,
   bulkDeleteSchedules,
   listPlaygroupGroups,
   checkPlaygroupWindows,
@@ -4164,5 +4450,7 @@ module.exports = {
   timeRangesOverlap,
   getMinutesSinceMidnight,
   getSessionEndTime,
-  canTutorHandleSchedule
+  canTutorHandleSchedule,
+  hasStudentScheduleConflict,
+  findStudentScheduleConflictDetail
 };

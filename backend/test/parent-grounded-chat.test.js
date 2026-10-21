@@ -207,6 +207,18 @@ test('grounded grades context: a published remark for the named child surfaces i
 // Attendance had no dedicated grounding path for parents at all — a question like "ilan
 // absent ni alex" fell through to a generic "check your dashboard" instruction instead
 // of the real present/absent counts, even for the parent's own verified child.
+//
+// The "unmarked" row here is deliberately TODAY, not a fixed calendar date — it must stay
+// genuinely inside the 3-day grace window no matter when this suite runs, since (as of
+// the fix below) a stale hardcoded date would eventually drift past the grace window and
+// silently flip this row to Absent, breaking this test's own "still honestly unmarked"
+// assertion for reasons unrelated to what it's actually testing.
+function daysAgoDate(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d;
+}
+
 test('grounded attendance context: real present/absent counts for the named child, not a generic instruction', async () => {
   const origEnr = Enrollment.find;
   const origSched = Schedule.find;
@@ -217,7 +229,7 @@ test('grounded attendance context: real present/absent counts for the named chil
     { date: new Date('2026-09-01'), attendanceStatus: 'present' },
     { date: new Date('2026-09-08'), attendanceStatus: 'absent' },
     { date: new Date('2026-09-15'), attendanceStatus: 'present' },
-    { date: new Date('2026-09-22'), attendanceStatus: 'unmarked' },
+    { date: daysAgoDate(1), attendanceStatus: 'unmarked' },
   ]);
   try {
     const ctx = await getGroundedChatContext(PARENT, 'ilan absent ni ana cruz sa klase?');
@@ -227,6 +239,36 @@ test('grounded attendance context: real present/absent counts for the named chil
     assert.match(ctx.contextText, /Present: 2/);
     assert.match(ctx.fallbackReply, /absent 1 time/i);
     assert.match(ctx.fallbackReply, /out of 4 past sessions/i);
+  } finally {
+    restore(Enrollment, 'find', origEnr);
+    restore(Schedule, 'find', origSched);
+  }
+});
+
+// REAL BUG (found 2026-10-21): a tutor's attendance chatbot reply for a child whose
+// program had already elapsed still said "5 unmarked sessions" instead of counting the
+// long-overdue ones as Absent — the existing 3-day-grace auto-absent rule (established
+// for the tutor/parent dashboards' own UI) was never applied to ANY backend-computed
+// attendance summary, including this parent-side chatbot reply. Fixed via
+// effectiveAttendanceStatusForStudent (schedulingPolicy.js), reusing the exact same rule,
+// not a new one.
+test('REAL BUG FIX: a session left unmarked for more than 3 days counts as Absent here too, not "unmarked" forever', async () => {
+  const origEnr = Enrollment.find;
+  const origSched = Schedule.find;
+  stubModel(Enrollment, 'find', [
+    enrollment({ _id: 'e1', student: 'stu-1', studentSnapshot: { firstName: 'Ana', lastName: 'Cruz' } }),
+  ]);
+  stubModel(Schedule, 'find', [
+    { date: daysAgoDate(30), attendanceStatus: 'present' },
+    { date: daysAgoDate(20), attendanceStatus: 'unmarked' }, // long overdue — must count as Absent
+    { date: daysAgoDate(1), attendanceStatus: 'unmarked' }, // still within grace — stays unmarked
+  ]);
+  try {
+    const ctx = await getGroundedChatContext(PARENT, 'ilan absent ni ana cruz sa klase?');
+    assert.match(ctx.contextText, /Present: 1/);
+    assert.match(ctx.contextText, /Absent: 1/);
+    assert.match(ctx.contextText, /Unmarked \(tutor has not recorded attendance for this session yet\): 1/);
+    assert.match(ctx.fallbackReply, /absent 1 time/i);
   } finally {
     restore(Enrollment, 'find', origEnr);
     restore(Schedule, 'find', origSched);

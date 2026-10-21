@@ -39,8 +39,11 @@ import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment
 import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
 import AddChildModal, { type AddChildPrefill } from "@/components/enrollment/AddChildModal";
 import { ContactTutorPanel } from "@/components/dashboard/ContactTutorPanel";
-import { AttendanceCard } from "@/components/dashboard/AttendanceCard";
+import { AttendanceCard, type AttendanceCalendarSession } from "@/components/dashboard/AttendanceCard";
+import { resolveAttendanceStatus, computeAttendanceStats } from "@/lib/attendanceGrace";
 import { useSelectedChild } from "@/hooks/useSelectedChild";
+import type { DashboardEnrollment } from "@/contexts/SelectedChildContext";
+import { formatDateRangeOnly, isProgramInProgress, hasProgramEndRange, formatProgramEndRange } from "@/lib/programEndDate";
 import { resolveUploadUrl, displayStudentId } from "@/lib/children";
 import { remainingBalanceOf, isReminderDue, formatDueDate, peso, type BalanceEnrollment } from "@/lib/balance";
 import { notifyBadgesChanged } from "@/lib/navBadges";
@@ -528,7 +531,10 @@ export default function StudentDashboard() {
       childName: string;
       birthdate?: string;
       statuses: string[];
-      programs: string[];
+      /** Carries the owning enrollment's status alongside each package so the "program
+       *  ends on" display can hide itself once that specific program is no longer
+       *  in-progress — see lib/programEndDate.ts's isProgramInProgress. */
+      programs: (NonNullable<DashboardEnrollment["packages"]>[number] & { enrollmentStatus?: string })[];
       enrollments: typeof enrollments;
     }>();
 
@@ -554,14 +560,25 @@ export default function StudentDashboard() {
       }
 
       for (const pkg of enrollment.packages || []) {
-        if (pkg.displayName && !entry.programs.includes(pkg.displayName)) {
-          entry.programs.push(pkg.displayName);
+        if (pkg.displayName && !entry.programs.some((p) => p.displayName === pkg.displayName)) {
+          entry.programs.push({ ...pkg, enrollmentStatus: enrollment.status });
         }
       }
     }
 
     return Array.from(map.values()).sort((a, b) => a.childName.localeCompare(b.childName));
   }, [enrollments]);
+
+  // The currently-viewed child's in-progress programs with a real end-date range —
+  // reused by the Schedule tab below. Matches childEntries by name (same name the
+  // "My Child" tab's own grouping already uses), falling back to the only entry when
+  // there's just one child (covers a student logged in directly, not via a parent).
+  const activeChildProgramsInProgress = useMemo(() => {
+    const name = isParent ? activeChild?.name : (user?.name || "");
+    const entry = childEntries.find((c) => c.childName === name) || (childEntries.length === 1 ? childEntries[0] : undefined);
+    if (!entry) return [];
+    return entry.programs.filter((p) => isProgramInProgress(p.enrollmentStatus) && hasProgramEndRange(p));
+  }, [childEntries, isParent, activeChild, user]);
 
   const uniqueSchedules = useMemo(() => {
     const seen = new Map<string, (typeof schedules)[number]>();
@@ -802,47 +819,38 @@ export default function StudentDashboard() {
     }
   };
 
-  const attendanceStats = useMemo(() => {
-    const now = new Date();
-    const todayKey = toDateKey(now);
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  // Mirrors the tutor dashboard's own 3-day grace rule (frontend/src/lib/attendanceGrace.ts,
+  // reused from frontend/src/components/tutor/AttendanceTab.tsx): a session left unmarked
+  // more than ATTENDANCE_GRACE_DAYS after its date effectively IS Absent, even though
+  // nothing was ever written to the DB. computeAttendanceStats is unit-tested directly in
+  // src/test/attendanceGrace.test.ts.
+  const attendanceStats = useMemo(() => computeAttendanceStats(
+    uniqueSchedules.map((s) => ({
+      date: toStableDateKey(s.date),
+      status: s.attendanceStatus === "present" || s.attendanceStatus === "absent" ? s.attendanceStatus : "unmarked",
+      endTime: s.endTime,
+    }))
+  ), [uniqueSchedules]);
 
-    const total = uniqueSchedules.length;
-    const present = uniqueSchedules.filter((s) => {
-      if (s.attendanceStatus !== "present") return false;
+  // Attendance card's front-face calendar — one entry per real session, scoped to
+  // whichever child uniqueSchedules is already scoped to (getMyClasses(activeChildUserId)),
+  // and live-updating the same way uniqueSchedules itself already does (SCHEDULE_CHANGED).
+  // status runs through the same grace-rule resolver as attendanceStats above, so an old
+  // unmarked session shows (and counts) as Absent here too, not just "Not yet marked".
+  const attendanceCalendarSessions = useMemo<AttendanceCalendarSession[]>(() => {
+    const todayKey = toDateKey(new Date());
+    return uniqueSchedules.map((s) => {
       const sessionDay = toStableDateKey(s.date);
-      if (sessionDay < todayKey) return true;
-      if (sessionDay > todayKey) return false;
-      return nowMinutes >= toMinutes(s.endTime || "00:00");
-    }).length;
-    const percent = total > 0 ? Math.round((present / total) * 100) : null;
-    return { total, present, percent };
-  }, [uniqueSchedules]);
-
-  const attendanceByProgram = useMemo(() => {
-    const now = new Date();
-    const todayKey = toDateKey(now);
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const byProgram = new Map<string, { label: string; total: number; present: number; percent: number }>();
-
-    uniqueSchedules.forEach((s) => {
-      const label = (s.subject?.name || "Unassigned Program").trim();
-      if (!byProgram.has(label)) {
-        byProgram.set(label, { label, total: 0, present: 0, percent: 0 });
-      }
-      const rec = byProgram.get(label)!;
-      rec.total += 1;
-
-      if (s.attendanceStatus === "present") {
-        const sessionDay = toStableDateKey(s.date);
-        const isCompleted = sessionDay < todayKey || (sessionDay === todayKey && nowMinutes >= toMinutes(s.endTime || "00:00"));
-        if (isCompleted) rec.present += 1;
-      }
+      const real = s.attendanceStatus === "present" || s.attendanceStatus === "absent" ? s.attendanceStatus : "unmarked";
+      return {
+        date: sessionDay,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        programLabel: (s.subject?.name || "Unassigned Program").trim(),
+        status: resolveAttendanceStatus(real, sessionDay, todayKey),
+        tutorName: formatClassTutorNames(s),
+      };
     });
-
-    return Array.from(byProgram.values())
-      .map((rec) => ({ ...rec, percent: rec.total > 0 ? Math.round((rec.present / rec.total) * 100) : 0 }))
-      .sort((a, b) => a.label.localeCompare(b.label));
   }, [uniqueSchedules]);
 
   // Attendance card's back face ("Program History") — every program the child has ever
@@ -1300,9 +1308,15 @@ export default function StudentDashboard() {
                               <div className="rounded-xl border border-border bg-background p-3">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Programs</p>
                                 <div className="mt-2 space-y-1">
-                                  {child.programs.length > 0 ? child.programs.map((program) => (
-                                    <div key={`${child.childName}-${program}`} className="text-sm text-foreground">• {program}</div>
-                                  )) : (
+                                  {child.programs.length > 0 ? child.programs.map((program) => {
+                                    const endRange = isProgramInProgress(program.enrollmentStatus) ? formatDateRangeOnly(program) : null;
+                                    return (
+                                      <div key={`${child.childName}-${program.displayName}`} className="text-sm text-foreground">
+                                        • {program.displayName}
+                                        {endRange && <span className="text-muted-foreground"> · {endRange}</span>}
+                                      </div>
+                                    );
+                                  }) : (
                                     <p className="text-sm text-muted-foreground">No program selected yet.</p>
                                   )}
                                 </div>
@@ -1364,6 +1378,18 @@ export default function StudentDashboard() {
                       <p className="text-xs text-muted-foreground">{calendarMonthLabel}</p>
                     </div>
                   </div>
+
+                  {/* Program end date(s) — only while an availed program is still in
+                      progress; disappears automatically once completed. */}
+                  {activeChildProgramsInProgress.length > 0 && (
+                    <div className="space-y-1">
+                      {activeChildProgramsInProgress.map((p) => (
+                        <p key={p.displayName} className="text-sm text-muted-foreground">
+                          {formatProgramEndRange(p)}
+                        </p>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Schedule toolbar */}
                   <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1612,7 +1638,7 @@ export default function StudentDashboard() {
                   <AttendanceCard
                     key={activeChildUserId ?? user?.id ?? "self"}
                     stats={attendanceStats}
-                    byProgram={attendanceByProgram}
+                    sessions={attendanceCalendarSessions}
                     history={programHistory}
                     childLabel={isParent ? (activeChild?.name || "child") : [user?.firstName, user?.lastName].filter(Boolean).join(" ")}
                   />

@@ -268,60 +268,99 @@ export function filterUsersForTab<T extends UserForFilter>(users: T[], roleFilte
   return users.filter((u) => (roleFilter === "all" || u.role === roleFilter) && matchesUserSearch(u, searchQuery));
 }
 
-export const handleExportAll = (
+/** Which single dataset a CSV export covers — Export is now a two-step picker: dataset
+ *  first (this type), then the time range (ExportTimeRange) below. */
+export type ExportDataset = "enrollments" | "payments" | "users";
+
+/** Monthly reuses the existing MonthOption picker; Yearly covers every month within one
+ *  calendar year; Overall applies no date filtering at all. */
+export type ExportTimeRange =
+  | { type: "monthly"; month: MonthOption }
+  | { type: "yearly"; year: number }
+  | { type: "overall" };
+
+export const dateInYear = (dateStr: string | undefined, year: number): boolean => {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  return !Number.isNaN(d.getTime()) && d.getFullYear() === year;
+};
+
+const matchesExportRange = (dateStr: string | undefined, range: ExportTimeRange): boolean => {
+  if (range.type === "overall") return true;
+  if (range.type === "monthly") return dateInMonth(dateStr, range.month);
+  return dateInYear(dateStr, range.year);
+};
+
+export const exportRangeLabel = (range: ExportTimeRange): string => {
+  if (range.type === "overall") return "All Time";
+  if (range.type === "monthly") return monthLabel(range.month.year, range.month.month);
+  return String(range.year);
+};
+
+const exportRangeFileToken = (range: ExportTimeRange): string => {
+  if (range.type === "overall") return "all-time";
+  if (range.type === "monthly") return monthKey(range.month.year, range.month.month);
+  return String(range.year);
+};
+
+const EXPORT_DATASET_LABELS: Record<ExportDataset, string> = {
+  enrollments: "Enrollments",
+  payments: "Payments",
+  users: "Users",
+};
+
+/** One dataset's CSV, scoped to the chosen time range — the exact same per-row columns
+ *  and formatting the combined export used for that section, just separated and
+ *  date-filtered by `range` instead of the old single optional month filter. */
+export const handleExportDataset = (
+  dataset: ExportDataset,
   enrollmentsList: AdminEnrollment[],
   usersList: AdminUser[],
   paymentsList: PaymentForExport[],
-  monthFilter?: MonthOption
+  range: ExportTimeRange
 ) => {
-  const enrollmentsInScope = monthFilter
-    ? enrollmentsList.filter((e) => dateInMonth(e.enrollmentDate || e.createdAt, monthFilter))
-    : enrollmentsList;
-  const paymentsInScope = monthFilter
-    ? paymentsList.filter((p) => dateInMonth(p.createdAt, monthFilter))
-    : paymentsList;
-  const usersInScope = monthFilter
-    ? usersList.filter((u) => dateInMonth(u.createdAt, monthFilter))
-    : usersList;
+  const datasetLabel = EXPORT_DATASET_LABELS[dataset];
+  let csvContent = `=== Bee Bright Tutorial Center — ${datasetLabel} (${exportRangeLabel(range)}) ===\nGenerated: ${new Date().toLocaleString()}\n\n`;
 
-  let csvContent = "=== Bee Bright Tutorial Center — " + (monthFilter ? `${monthLabel(monthFilter.year, monthFilter.month)} Report` : "Full Report") + " ===\nGenerated: " + new Date().toLocaleString() + "\n\n";
-
-  csvContent += "--- ENROLLMENTS ---\nName,Programs,Date,Status\n";
-  enrollmentsInScope.forEach((e: AdminEnrollment) => {
-    const snap = e.studentSnapshot;
-    const name = snap ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim() : "—";
-    const programs = e.packages?.map((p) => p.displayName).join("; ") || e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
-    const date = formatEnrollmentDate(e.enrollmentDate || e.createdAt);
-    const status = enrollmentStatusLabel(e.status);
-    csvContent += `${name},${programs},${date},${status}\n`;
-  });
-
-  csvContent += "\n--- PAYMENTS ---\nReference,Student,Amount,Status,Date,Method\n";
-  paymentsInScope.forEach((p) => {
-    const studentName = p.student ? [p.student.firstName, p.student.lastName].filter(Boolean).join(" ").trim() : "—";
-    const date = p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—";
-    csvContent += `${p.referenceNumber ?? p._id},${studentName},₱${p.amount ?? 0},${p.status},${date},${p.paymentMethod ?? "—"}\n`;
-  });
-
-  csvContent += "\n--- USERS ---\nName,Role,Email,Phone,Status\n";
-  usersInScope.forEach((u: AdminUser) => {
-    const name = `${u.firstName || ""} ${u.lastName || ""}`.trim() || "—";
-    const status = u.isActive ? "active" : "inactive";
-    csvContent += `${name},${u.role},${u.email},${u.phone || "—"},${status}\n`;
-  });
+  if (dataset === "enrollments") {
+    const enrollmentsInScope = enrollmentsList.filter((e) => matchesExportRange(e.enrollmentDate || e.createdAt, range));
+    csvContent += "Name,Programs,Date,Status\n";
+    enrollmentsInScope.forEach((e: AdminEnrollment) => {
+      const snap = e.studentSnapshot;
+      const name = snap ? `${snap.firstName || ''} ${snap.lastName || ''}`.trim() : "—";
+      const programs = e.packages?.map((p) => p.displayName).join("; ") || e.selectedSubjects?.map((s) => s.name).join("; ") || "—";
+      const date = formatEnrollmentDate(e.enrollmentDate || e.createdAt);
+      const status = enrollmentStatusLabel(e.status);
+      csvContent += `${name},${programs},${date},${status}\n`;
+    });
+  } else if (dataset === "payments") {
+    const paymentsInScope = paymentsList.filter((p) => matchesExportRange(p.createdAt, range));
+    csvContent += "Reference,Student,Amount,Status,Date,Method\n";
+    paymentsInScope.forEach((p) => {
+      const studentName = p.student ? [p.student.firstName, p.student.lastName].filter(Boolean).join(" ").trim() : "—";
+      const date = p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—";
+      csvContent += `${p.referenceNumber ?? p._id},${studentName},₱${p.amount ?? 0},${p.status},${date},${p.paymentMethod ?? "—"}\n`;
+    });
+  } else {
+    const usersInScope = usersList.filter((u) => matchesExportRange(u.createdAt, range));
+    csvContent += "Name,Role,Email,Phone,Status\n";
+    usersInScope.forEach((u: AdminUser) => {
+      const name = `${u.firstName || ""} ${u.lastName || ""}`.trim() || "—";
+      const status = u.isActive ? "active" : "inactive";
+      csvContent += `${name},${u.role},${u.email},${u.phone || "—"},${status}\n`;
+    });
+  }
 
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = monthFilter
-    ? `beebright_report_${monthKey(monthFilter.year, monthFilter.month)}.csv`
-    : `beebright_full_report_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = `beebright_${dataset}_${exportRangeFileToken(range)}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
-  toast.success(monthFilter ? `${monthLabel(monthFilter.year, monthFilter.month)} report exported!` : "Full report exported!");
+  toast.success(`${datasetLabel} (${exportRangeLabel(range)}) exported!`);
 };
 
 function formatEnrollmentDate(d: string | undefined): string {
@@ -2826,7 +2865,7 @@ export default function AdminDashboard() {
       // AdminEnrollment in services/api.ts) for pre-packages records only, and reading
       // it alone left this table always empty since real current enrollments don't
       // populate it. Same packages-first/selectedSubjects-fallback precedent already
-      // used by handleExportAll's CSV builder just above.
+      // used by handleExportDataset's CSV builder just above.
       const names = enrollment.packages?.length
         ? enrollment.packages.map((p) => (p.displayName || p.programCode || "").trim()).filter(Boolean)
         : (enrollment.selectedSubjects || []).map((subject) => (subject?.name || "").trim()).filter(Boolean);
@@ -2876,8 +2915,25 @@ export default function AdminDashboard() {
     });
   }, []);
 
-  // Export's single-step month picker.
+  // Export's two-step picker: which dataset (Enrollments/Payments/Users), then which
+  // time range (Monthly — reuses the same month list below, Yearly, or Overall).
   const [exportPickerOpen, setExportPickerOpen] = useState(false);
+  const [exportDataset, setExportDataset] = useState<ExportDataset | null>(null);
+  const [exportRangeType, setExportRangeType] = useState<"monthly" | "yearly" | null>(null);
+  const reportAvailableYears = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    return Array.from({ length: 6 }, (_, i) => currentYear - i);
+  }, []);
+  const resetExportPicker = () => {
+    setExportPickerOpen(false);
+    setExportDataset(null);
+    setExportRangeType(null);
+  };
+  const runExport = (range: ExportTimeRange) => {
+    if (!exportDataset) return;
+    handleExportDataset(exportDataset, enrollments, users, allPaymentsList, range);
+    resetExportPicker();
+  };
   // Generate Report's 2-step picker: null month = showing the month list, a picked
   // month = showing that month's real calendar weeks.
   const [digestPickerOpen, setDigestPickerOpen] = useState(false);
@@ -3672,7 +3728,7 @@ export default function AdminDashboard() {
                 <div className="p-4 border-b border-border flex items-center justify-between">
                   <h3 className="font-display font-bold text-lg text-foreground">Reports</h3>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setExportPickerOpen(true)}>
+                    <Button variant="outline" size="sm" onClick={() => { setExportDataset(null); setExportRangeType(null); setExportPickerOpen(true); }}>
                       <Download className="h-4 w-4 mr-2" />
                       Export
                     </Button>
@@ -3775,7 +3831,7 @@ export default function AdminDashboard() {
                   </div>
 
                   <p className="text-xs text-muted-foreground">
-                    Report data is computed live from current database-backed dashboard sources (users, enrollments, and payments). Export lets you pick a month, then downloads that month's data snapshot as CSV.
+                    Report data is computed live from current database-backed dashboard sources (users, enrollments, and payments). Export lets you pick one dataset (Enrollments, Payments, or Users), then a time range (Monthly, Yearly, or Overall), and downloads that as CSV.
                   </p>
 
                   <div className="rounded-lg border border-border overflow-hidden">
@@ -3837,29 +3893,80 @@ export default function AdminDashboard() {
               </div>
             </TabsContent>
 
-            <Dialog open={exportPickerOpen} onOpenChange={setExportPickerOpen}>
+            <Dialog open={exportPickerOpen} onOpenChange={(open) => { if (!open) resetExportPicker(); }}>
               <DialogContent className="max-w-sm">
                 <DialogHeader>
-                  <DialogTitle>Export Report</DialogTitle>
-                  <DialogDescription>Pick a month to export as CSV.</DialogDescription>
+                  <DialogTitle>
+                    {!exportDataset ? "Export Report" : !exportRangeType ? `Export ${EXPORT_DATASET_LABELS[exportDataset]}` : `Export ${EXPORT_DATASET_LABELS[exportDataset]} — ${exportRangeType === "monthly" ? "Monthly" : "Yearly"}`}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {!exportDataset
+                      ? "Pick which dataset to export as CSV."
+                      : !exportRangeType
+                      ? "Pick the time range to apply."
+                      : exportRangeType === "monthly"
+                      ? "Pick a month to export."
+                      : "Pick a year to export."}
+                  </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-1.5 max-h-80 overflow-y-auto">
-                  {reportAvailableMonths.map((m) => (
-                    <Button
-                      key={monthKey(m.year, m.month)}
-                      variant="outline"
-                      className="w-full justify-start"
-                      onClick={() => {
-                        setExportPickerOpen(false);
-                        handleExportAll(enrollments, users, allPaymentsList, m);
-                      }}
-                    >
-                      {m.label}
-                    </Button>
-                  ))}
+                  {!exportDataset ? (
+                    (["enrollments", "payments", "users"] as ExportDataset[]).map((dataset) => (
+                      <Button
+                        key={dataset}
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => setExportDataset(dataset)}
+                      >
+                        {EXPORT_DATASET_LABELS[dataset]}
+                      </Button>
+                    ))
+                  ) : !exportRangeType ? (
+                    <>
+                      <Button variant="outline" className="w-full justify-start" onClick={() => setExportRangeType("monthly")}>
+                        Monthly
+                      </Button>
+                      <Button variant="outline" className="w-full justify-start" onClick={() => setExportRangeType("yearly")}>
+                        Yearly
+                      </Button>
+                      <Button variant="outline" className="w-full justify-start" onClick={() => runExport({ type: "overall" })}>
+                        Overall (all time)
+                      </Button>
+                    </>
+                  ) : exportRangeType === "monthly" ? (
+                    reportAvailableMonths.map((m) => (
+                      <Button
+                        key={monthKey(m.year, m.month)}
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => runExport({ type: "monthly", month: m })}
+                      >
+                        {m.label}
+                      </Button>
+                    ))
+                  ) : (
+                    reportAvailableYears.map((year) => (
+                      <Button
+                        key={year}
+                        variant="outline"
+                        className="w-full justify-start"
+                        onClick={() => runExport({ type: "yearly", year })}
+                      >
+                        {year}
+                      </Button>
+                    ))
+                  )}
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setExportPickerOpen(false)}>Cancel</Button>
+                  {exportDataset && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => { if (exportRangeType) setExportRangeType(null); else setExportDataset(null); }}
+                    >
+                      Back
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={resetExportPicker}>Cancel</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>

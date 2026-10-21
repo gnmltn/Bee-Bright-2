@@ -22,7 +22,17 @@ export type DashboardEnrollment = {
    *  ensureStudentUserForEnrollment). Absent until the child's first class. */
   student?: string;
   selectedSubjects?: { _id: string; name: string }[];
-  packages?: { displayName?: string; programCode?: string }[];
+  /** startDate/endDate/sessionsScheduled/sessionCount are computed server-side by
+   *  attachRemainingDueDates (same source as invoiceDueDate) — endDate stays null
+   *  until every one of this package's sessions actually exists in the schedule. */
+  packages?: {
+    displayName?: string;
+    programCode?: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    sessionsScheduled?: number;
+    sessionCount?: number | null;
+  }[];
   preEnrollmentAssessment?: PreEnrollmentAssessment | null;
   rejectionReason?: string | null;
   allowResubmission?: boolean;

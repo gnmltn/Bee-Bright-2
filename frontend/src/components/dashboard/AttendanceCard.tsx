@@ -1,19 +1,13 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Download, RotateCw, RotateCcw } from "lucide-react";
+import { Download, RotateCw, RotateCcw, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 
 export interface AttendanceCardStats {
   total: number;
   present: number;
   percent: number | null;
-}
-
-export interface AttendanceByProgramEntry {
-  label: string;
-  total: number;
-  present: number;
-  percent: number;
 }
 
 export interface AttendanceHistoryEntry {
@@ -29,13 +23,60 @@ export interface AttendanceHistoryEntry {
   percent: number;
 }
 
+/** One real session, for the front face's calendar — only this child's own sessions,
+ *  scoped the same way every other Progress tab feature already is (the caller's own
+ *  getMyClasses(activeChildUserId) fetch). `status` is already the EFFECTIVE status —
+ *  the caller runs it through the same 3-day-grace auto-absent resolver the tutor
+ *  dashboard uses (frontend/src/lib/attendanceGrace.ts) before handing it to this
+ *  component, so this component itself never computes grace-period logic. */
+export interface AttendanceCalendarSession {
+  /** YYYY-MM-DD */
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  programLabel: string;
+  status: "present" | "absent" | "unmarked";
+  /** Assigned tutor(s)' display name(s) — already comma-joined by the caller for a
+   *  Toddlers Playgroup session with co-tutors (same formatClassTutorNames helper the
+   *  Schedule tab/Tutor Dashboard already use), "—" when none is assigned. */
+  tutorName?: string;
+}
+
 interface AttendanceCardProps {
   stats: AttendanceCardStats;
-  byProgram: AttendanceByProgramEntry[];
+  sessions: AttendanceCalendarSession[];
   history: AttendanceHistoryEntry[];
   /** Used only for the exported CSV's filename. */
   childLabel?: string;
 }
+
+function dateKeyToLocalDate(key: string): Date {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function dateToKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatClock12(hhmm?: string): string {
+  if (!hhmm) return "";
+  const [hRaw, mRaw] = hhmm.split(":").map(Number);
+  if (!Number.isFinite(hRaw)) return "";
+  const period = hRaw >= 12 ? "PM" : "AM";
+  const h12 = hRaw % 12 === 0 ? 12 : hRaw % 12;
+  return `${h12}:${String(mRaw || 0).padStart(2, "0")} ${period}`;
+}
+
+function formatSelectedDate(d: Date): string {
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+}
+
+const ATTENDANCE_CALENDAR_STATUS: Record<AttendanceCalendarSession["status"], { label: string; className: string; icon: typeof CheckCircle2 }> = {
+  present: { label: "Present", className: "bg-success/10 text-success border-success/30", icon: CheckCircle2 },
+  absent: { label: "Absent", className: "bg-destructive/10 text-destructive border-destructive/30", icon: XCircle },
+  unmarked: { label: "Not yet marked", className: "bg-muted text-muted-foreground border-border", icon: CheckCircle2 },
+};
 
 const FLIP_DURATION_SECONDS = 0.5;
 
@@ -69,9 +110,12 @@ function downloadAttendanceCsv(entries: AttendanceHistoryEntry[], childLabel?: s
 }
 
 /**
- * The parent/student Progress page's Attendance card — front face is the existing
- * overall ring + per-program bars; a "History" button flips it to a back face listing
- * every program the child has ever availed (completed and active), with a CSV export.
+ * The parent/student Progress page's Attendance card — front face is the overall ring
+ * plus a calendar marking each real session day Present or Absent, scoped to this one
+ * child (the caller's `sessions` prop is already access-scoped and already live-updates
+ * the same way the rest of this page does — nothing new needed here for either). A
+ * "History" button flips it to a back face listing every program the child has ever
+ * availed (completed and active) with its own date range and present count, unchanged.
  *
  * Only ONE face is ever mounted at a time (not two stacked absolutely-positioned faces
  * — an earlier version did that and it broke the card's natural height, since absolutely
@@ -88,9 +132,31 @@ function downloadAttendanceCsv(entries: AttendanceHistoryEntry[], childLabel?: s
  * component from scratch, which resets state to its default for free, rather than
  * relying on an effect to watch for a child change.
  */
-export function AttendanceCard({ stats, byProgram, history, childLabel }: AttendanceCardProps) {
+export function AttendanceCard({ stats, sessions, history, childLabel }: AttendanceCardProps) {
   const [flipped, setFlipped] = useState(false);
   const [showBack, setShowBack] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
+
+  const { presentDates, absentDates } = useMemo(() => {
+    const present = new Set<string>();
+    const absent = new Set<string>();
+    sessions.forEach((s) => {
+      if (!s.date) return;
+      if (s.status === "absent") absent.add(s.date);
+      else if (s.status === "present") present.add(s.date);
+    });
+    // A day with both a present AND an absent session (2+ programs, mixed outcome) is
+    // marked absent on the calendar — the day deserves a closer look either way, and
+    // the detail panel below still lists every session with its own real status.
+    for (const key of absent) present.delete(key);
+    return { presentDates: present, absentDates: absent };
+  }, [sessions]);
+
+  const selectedDateKey = useMemo(() => dateToKey(selectedDate), [selectedDate]);
+  const selectedDaySessions = useMemo(
+    () => sessions.filter((s) => s.date === selectedDateKey),
+    [sessions, selectedDateKey]
+  );
   const swapTimer = useRef<number | null>(null);
   const percent = stats.percent ?? 0;
 
@@ -184,27 +250,62 @@ export function AttendanceCard({ stats, byProgram, history, childLabel }: Attend
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Overall: present at {stats.present} of {stats.total} sessions</p>
-                <p className="text-xs text-muted-foreground mt-1">Attendance is also separated by program below.</p>
+                <p className="text-xs text-muted-foreground mt-1">Pick a day below to see that day's session.</p>
               </div>
             </div>
 
-            <div className="space-y-3">
-              {byProgram.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No sessions scheduled yet.</p>
-              ) : byProgram.map((program) => (
-                <div key={program.label} className="rounded-lg border border-border p-3 bg-muted/20">
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <p className="text-sm font-semibold text-foreground">{program.label}</p>
-                    <p className="text-xs text-muted-foreground">{program.present} / {program.total} present</p>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all duration-500"
-                      style={{ width: `${Math.max(0, Math.min(100, program.percent))}%` }}
-                    />
-                  </div>
+            <div className="flex flex-col sm:flex-row gap-4">
+              <Calendar
+                mode="single"
+                selected={selectedDate}
+                onSelect={(date) => date && setSelectedDate(date)}
+                modifiers={{
+                  present: Array.from(presentDates, dateKeyToLocalDate),
+                  absent: Array.from(absentDates, dateKeyToLocalDate),
+                }}
+                modifiersClassNames={{
+                  present: "bg-success/15 text-success font-semibold hover:bg-success/25",
+                  absent: "bg-destructive/15 text-destructive font-semibold hover:bg-destructive/25",
+                }}
+                showOutsideDays={false}
+                className="rounded-md border border-border w-fit mx-auto sm:mx-0"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-3 mb-2 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-success" /> Present</span>
+                  <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-destructive" /> Absent</span>
                 </div>
-              ))}
+                <p className="text-sm font-medium text-foreground mb-2">{formatSelectedDate(selectedDate)}</p>
+                {selectedDaySessions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground rounded-lg border border-border bg-muted/20 p-4 text-center">No session on this date.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedDaySessions.map((s, idx) => {
+                      const statusInfo = ATTENDANCE_CALENDAR_STATUS[s.status];
+                      const StatusIcon = statusInfo.icon;
+                      const timeLabel = s.startTime ? `${formatClock12(s.startTime)}${s.endTime ? ` – ${formatClock12(s.endTime)}` : ""}` : null;
+                      const tutorLabel = s.tutorName && s.tutorName !== "—" ? s.tutorName : null;
+                      return (
+                        <div key={`${s.date}-${s.programLabel}-${idx}`} className="rounded-lg border border-border p-3 bg-muted/20 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-foreground truncate">{s.programLabel}</p>
+                            {(timeLabel || tutorLabel) && (
+                              <p className="text-xs text-muted-foreground truncate">
+                                {timeLabel}
+                                {timeLabel && tutorLabel ? " · " : ""}
+                                {tutorLabel}
+                              </p>
+                            )}
+                          </div>
+                          <span className={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${statusInfo.className}`}>
+                            <StatusIcon className="h-3.5 w-3.5" /> {statusInfo.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

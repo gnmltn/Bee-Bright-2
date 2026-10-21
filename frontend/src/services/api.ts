@@ -732,6 +732,28 @@ export interface MonthlyScheduleCheck {
   slotCap: number;
 }
 
+/** One standard hourly slot's cross-tutor availability, for one specific real
+ *  calendar date — see scheduleService.getMonthlySlotGrid. */
+export interface MonthlySlotGridEntry {
+  startTime: string;
+  endTime: string;
+  available: boolean;
+  tutors: { _id: string; name: string }[];
+  reason: string | null;
+}
+
+export interface MonthlySlotGridResponse {
+  success: boolean;
+  startDate: string;
+  subscriptionEnd: string;
+  /** Keyed by the REAL calendar date (YYYY-MM-DD) — one entry per actual date within
+   *  the student's one-month generation window that matches one of the chosen
+   *  weekdays. A real monthly calendar grid renders directly off these keys: any date
+   *  NOT present here is outside the valid window/weekday and must render as
+   *  grayed/non-clickable. */
+  grid: Record<string, MonthlySlotGridEntry[]>;
+}
+
 export const scheduleService = {
   getOptions: () => api.get('/schedules/options'),
   getTutorsBySubject: (subjectId: string, opts?: { date?: string; startTime?: string; endTime?: string; excludeScheduleId?: string; excludeTutorIds?: string[] }) =>
@@ -775,6 +797,12 @@ export const scheduleService = {
   createMonthly: (data: MonthlyScheduleRequest) => api.post('/schedules/monthly', data),
   /** Preview a 1-on-1 monthly schedule for a Starting Date without creating anything (blocked dates + next open starting dates). */
   checkMonthly: (data: MonthlyScheduleRequest) => api.post<MonthlyScheduleCheck>('/schedules/monthly/check', data),
+  /** Calendar-first/slot-first cross-tutor availability for the 1-on-1 wizard's tutor
+   *  step — for each requested weekday, every standard 1-hour slot's real availability
+   *  (which tutors are free, or why none are), reusing the exact same rule functions
+   *  checkMonthly/createMonthly already use for one already-chosen tutor. */
+  getMonthlySlotGrid: (data: { studentId?: string; enrollmentId?: string; subjectId: string; days: number[]; startDate?: string }) =>
+    api.post<MonthlySlotGridResponse>('/schedules/monthly/slot-grid', data),
   /** Delete many sessions in a single server-side operation. */
   bulkDelete: (ids: string[]) => api.post<{ success: boolean; deleted: number; message?: string }>('/schedules/bulk-delete', { ids }),
   /** List active Toddlers Playgroup groups, optionally filtered to an exact day-set + time-window match. */
@@ -909,10 +937,21 @@ export type PendingBalanceItem = {
   }[];
 };
 
+export type TutorStudentCardProgram = {
+  displayName: string;
+  programCode: string | null;
+  /** Same computation/data source as the parent side's "program ends on" display
+   *  (lib/programEndDate.ts) — null until the whole package is actually scheduled, or
+   *  when there's no linked enrollment at all. */
+  startDate: string | null;
+  endDate: string | null;
+  status: string | null;
+};
+
 export type TutorStudentCard = {
   studentUserId: string;
   name: string;
-  programs: string[];
+  programs: TutorStudentCardProgram[];
   /** The child's permanent Student ID (BB-…), when known. */
   studentId: string | null;
   /** e.g. "Mon/Tue/Wed, 9:00–10:00 AM"; empty when nothing is scheduled. */

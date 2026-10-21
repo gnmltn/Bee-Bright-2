@@ -188,11 +188,10 @@ function isSessionFullyMarked(schedule) {
   return students.every((s) => marked.has(String(s?._id || s)));
 }
 
-/** The effective present/absent/unmarked status for ONE specific student on a
- * session — the per-child record for a Playgroup/group session, or the
- * whole-session field for a one-on-one session. (Display-only concerns like the
- * tutor dashboard's 3-day grace-period auto-resolve are NOT applied here — see
- * AttendanceTab.tsx, which never writes that to the database.) */
+/** The RAW present/absent/unmarked status for ONE specific student on a session —
+ * the per-child record for a Playgroup/group session, or the whole-session field for
+ * a one-on-one session. The 3-day grace-period auto-resolve is NOT applied here — see
+ * effectiveAttendanceStatusForStudent below for that. */
 function attendanceStatusForStudent(schedule, studentId) {
   const students = Array.isArray(schedule?.students) ? schedule.students : [];
   if (students.length === 0) return schedule?.attendanceStatus || 'unmarked';
@@ -200,6 +199,44 @@ function attendanceStatusForStudent(schedule, studentId) {
     (a) => String(a.student?._id || a.student) === String(studentId)
   );
   return entry ? entry.status : 'unmarked';
+}
+
+// Mirrors frontend/src/lib/attendanceGrace.ts's ATTENDANCE_GRACE_DAYS exactly — a
+// session left unmarked more than this many days after its date effectively IS
+// Absent, even though nothing was ever written to the DB. That frontend module only
+// covers the tutor/parent dashboards' own UI; backend-computed attendance SUMMARIES
+// (the tutor/parent chatbot's attendance replies, aiController.js's
+// buildTutorAttendanceContext/buildParentAttendanceContext) read Schedule documents
+// directly and had no equivalent rule at all, so an old unmarked session stayed
+// "unmarked" in those replies forever instead of resolving to Absent (real bug, found
+// via a tutor asking about a child's attendance on an already-elapsed program).
+const ATTENDANCE_GRACE_DAYS = 3;
+
+function dateOnlyKeyUTC(d) {
+  const date = d instanceof Date ? d : new Date(d);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function daysBetweenDateOnlyUTC(fromKey, toKey) {
+  const [fy, fm, fd] = fromKey.split('-').map(Number);
+  const [ty, tm, td] = toKey.split('-').map(Number);
+  const from = Date.UTC(fy, (fm || 1) - 1, fd || 1);
+  const to = Date.UTC(ty, (tm || 1) - 1, td || 1);
+  return Math.round((to - from) / (1000 * 60 * 60 * 24));
+}
+
+/** Layers the 3-day-grace auto-absent rule on top of attendanceStatusForStudent's real
+ *  stored value — for a backend-computed SUMMARY only (chatbot replies); never written
+ *  to the database, same "display-only" rule the frontend already follows. A session
+ *  already explicitly marked present/absent is never overridden, regardless of age. */
+function effectiveAttendanceStatusForStudent(schedule, studentId, now = new Date()) {
+  const real = attendanceStatusForStudent(schedule, studentId);
+  if (real !== 'unmarked') return real;
+  if (!schedule?.date) return 'unmarked';
+  const sessionDayKey = dateOnlyKeyUTC(schedule.date);
+  const todayKey = dateOnlyKeyUTC(now);
+  if (daysBetweenDateOnlyUTC(sessionDayKey, todayKey) > ATTENDANCE_GRACE_DAYS) return 'absent';
+  return 'unmarked';
 }
 
 function enrollmentCoversSubject(enrollment, subject) {
@@ -233,4 +270,6 @@ module.exports = {
   getMinutes,
   isSessionFullyMarked,
   attendanceStatusForStudent,
+  effectiveAttendanceStatusForStudent,
+  ATTENDANCE_GRACE_DAYS,
 };

@@ -1,6 +1,7 @@
 import { useMemo, useState, useCallback, useEffect } from "react";
-import { CheckCircle2, XCircle, Users, Loader2, ChevronDown } from "lucide-react";
+import { CheckCircle2, XCircle, Users, Loader2, ChevronDown, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import {
   AlertDialog,
@@ -14,6 +15,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { scheduleService } from "@/services/api";
+import { SHOW_LEGACY_ATTENDANCE_TABS } from "./attendanceTabFlags";
+import { isProgramInProgress, formatDateRangeOnly } from "@/lib/programEndDate";
+import { resolveAttendanceStatus, isAttendanceLocked } from "@/lib/attendanceGrace";
 
 type AttendanceStatus = "present" | "absent" | "unmarked";
 
@@ -52,7 +56,17 @@ interface SessionItem {
    *  across a renewal/re-enrollment in the same program. `enrollmentId` is `null` when
    *  no matching enrollment could be found. Used only to keep "Attendance by student"
    *  from blending an old, finished cycle together with a brand new one. */
-  cycleByStudent?: { student: string; enrollmentId: string | null }[];
+  cycleByStudent?: {
+    student: string;
+    enrollmentId: string | null;
+    /** The program's real start/end session-date range for this cycle — the SAME
+     *  computation (and data source) the parent side's "program ends on" display
+     *  already uses (lib/programEndDate.ts), reused here rather than re-estimated.
+     *  `endDate` stays null until the whole package is actually fully scheduled. */
+    startDate?: string | null;
+    endDate?: string | null;
+    status?: string | null;
+  }[];
   subject?: { name: string };
 }
 
@@ -95,22 +109,11 @@ function dateOnly(d: string): string {
   return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`;
 }
 
-// "bug (13).pdf" Group AR — a tutor gets a 3-day grace period after a session date to mark
-// Present/Absent; past that, an unmarked session auto-resolves to Absent. Computed on read,
-// never written to the database until (if ever) a tutor explicitly marks it — same pattern
-// as backend/utils/remainingDueDate.js's schedule-derived due dates, the closest existing
-// precedent in this codebase for a time-based auto-status. No cron/scheduled-job
-// infrastructure exists anywhere in this backend (confirmed), so a background sweep would
-// be a new pattern; this fits how the codebase already does this kind of thing.
-const ATTENDANCE_GRACE_DAYS = 3;
-
-/** Whole-calendar-day difference between two YYYY-MM-DD strings, independent of local timezone. */
-function daysBetweenDateOnly(fromStr: string, toStr: string): number {
-  const [fy, fm, fd] = fromStr.split("-").map(Number);
-  const [ty, tm, td] = toStr.split("-").map(Number);
-  const from = Date.UTC(fy, (fm || 1) - 1, fd || 1);
-  const to = Date.UTC(ty, (tm || 1) - 1, td || 1);
-  return Math.round((to - from) / (1000 * 60 * 60 * 24));
+/** A YYYY-MM-DD key as a LOCAL midnight Date — for react-day-picker's `modifiers`/
+ *  `selected`, which compare Date objects by local calendar day. */
+function dateKeyToLocalDate(key: string): Date {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
 }
 
 function minutesSinceMidnight(hhmm: string): number {
@@ -142,7 +145,16 @@ export interface AttendanceTabProps {
 }
 
 export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabProps) {
-  const [view, setView] = useState<"today" | "history" | "summary">("today");
+  // Calendar Sessions is the default tab while the legacy two are hidden (see
+  // SHOW_LEGACY_ATTENDANCE_TABS above) — nothing external ever overrides this; every
+  // way of reaching this tab (sidebar link, Overview shortcuts) just mounts this
+  // component fresh, so this one default covers all of them.
+  const [view, setView] = useState<"today" | "history" | "summary" | "calendar">(SHOW_LEGACY_ATTENDANCE_TABS ? "today" : "calendar");
+  // An additional, alternative way to BROWSE to a given day's sessions — display only.
+  // Feeds the SAME renderSessionRow/renderAttendanceButtons/getStatus/isLocked used by
+  // "Today's sessions"/"Past sessions" below, completely unmodified, so the 3-day lock
+  // behaves identically no matter which path reached that session's row.
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date>(() => new Date());
   // Tracked as a set (not a single id) so marking one child in a Playgroup/group
   // session doesn't disable the OTHER enrolled children's buttons in the same
   // session — each child's own Present/Absent request is independent.
@@ -216,6 +228,25 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       .slice(0, 30);
   }, [uniqueSessions, todayStr]);
 
+  // Days to highlight on the calendar — built from the UNCAPPED uniqueSessions (not
+  // historySessions, which is sliced to the 30 most recent), so an older day isn't
+  // silently missing a highlight just because it fell off that cap.
+  const datesWithSessions = useMemo(() => {
+    const keys = new Set(uniqueSessions.map((s) => dateOnly(s.date)).filter(Boolean));
+    return Array.from(keys, dateKeyToLocalDate);
+  }, [uniqueSessions]);
+
+  const selectedCalendarDateKey = useMemo(() => {
+    const d = selectedCalendarDate;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, [selectedCalendarDate]);
+
+  const calendarDaySessions = useMemo(() => {
+    return uniqueSessions
+      .filter((s) => dateOnly(s.date) === selectedCalendarDateKey)
+      .sort((a, b) => (a.startTime || "").localeCompare(b.startTime || ""));
+  }, [uniqueSessions, selectedCalendarDateKey]);
+
   // The value actually ON RECORD right now — a per-child entry for a Toddlers
   // Playgroup/group session (studentId given), or the whole-session field for a
   // one-on-one session (no studentId). Never includes the grace-period auto-resolve;
@@ -237,10 +268,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
   // view, the Summary tab, and the Present/Absent buttons themselves never disagree.
   const getStatus = useCallback((s: SessionItem, studentId?: string): AttendanceStatus => {
     const real = realStatus(s, studentId);
-    if (real !== "unmarked") return real;
-    const sessionDay = dateOnly(s.date);
-    if (sessionDay && daysBetweenDateOnly(sessionDay, todayStr) > ATTENDANCE_GRACE_DAYS) return "absent";
-    return "unmarked";
+    return resolveAttendanceStatus(real, dateOnly(s.date), todayStr);
   }, [todayStr, realStatus]);
 
   // Once a session (or child) has crossed the grace period, it's locked — BOTH
@@ -250,8 +278,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
   // locked as one that auto-resolved to Absent from being left unmarked — a tutor can
   // no longer retroactively change EITHER one after the window has closed.
   const isLocked = useCallback((s: SessionItem): boolean => {
-    const sessionDay = dateOnly(s.date);
-    return !!sessionDay && daysBetweenDateOnly(sessionDay, todayStr) > ATTENDANCE_GRACE_DAYS;
+    return isAttendanceLocked(dateOnly(s.date), todayStr);
   }, [todayStr]);
 
   // Keyed by (real student _id, program name, ENROLLMENT CYCLE) — NOT just a name
@@ -266,11 +293,15 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
   // ones. One row per program per student per cycle also avoids a misleading blended
   // percentage for a student enrolled in more than one program at once.
   const studentSummaries = useMemo(() => {
-    const byKey = new Map<string, { studentId: string; name: string; programLabel: string; cycleId: string; total: number; present: number; overall: number }>();
+    const byKey = new Map<string, {
+      studentId: string; name: string; programLabel: string; cycleId: string;
+      total: number; present: number; overall: number;
+      startDate: string | null; endDate: string | null; status: string | null;
+    }>();
 
-    const touch = (studentId: string, name: string, programLabel: string, cycleId: string) => {
+    const touch = (studentId: string, name: string, programLabel: string, cycleId: string, range: { startDate: string | null; endDate: string | null; status: string | null }) => {
       const key = `${studentId}|${programLabel}|${cycleId}`;
-      if (!byKey.has(key)) byKey.set(key, { studentId, name, programLabel, cycleId, total: 0, present: 0, overall: 0 });
+      if (!byKey.has(key)) byKey.set(key, { studentId, name, programLabel, cycleId, total: 0, present: 0, overall: 0, ...range });
       return byKey.get(key)!;
     };
 
@@ -282,13 +313,18 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
     // Falls back to one shared "unknown cycle" bucket (never a per-session singleton)
     // when no matching enrollment could be resolved — a rare edge case, not a reason
     // to explode into one row per session.
-    const cycleIdFor = (s: SessionItem, studentId: string) =>
-      s.cycleByStudent?.find((c) => String(c.student) === String(studentId))?.enrollmentId ?? "__unknown__";
+    const cycleFor = (s: SessionItem, studentId: string) =>
+      s.cycleByStudent?.find((c) => String(c.student) === String(studentId)) ?? null;
+    const cycleIdFor = (s: SessionItem, studentId: string) => cycleFor(s, studentId)?.enrollmentId ?? "__unknown__";
+    const rangeFor = (s: SessionItem, studentId: string) => {
+      const c = cycleFor(s, studentId);
+      return { startDate: c?.startDate ?? null, endDate: c?.endDate ?? null, status: c?.status ?? null };
+    };
 
     uniqueSessions.forEach((s) => {
       const programLabel = (s.subject?.name || "Unassigned Program").trim();
       rosterOf(s).forEach((student) => {
-        touch(student._id, fullName(student), programLabel, cycleIdFor(s, student._id)).overall += 1;
+        touch(student._id, fullName(student), programLabel, cycleIdFor(s, student._id), rangeFor(s, student._id)).overall += 1;
       });
     });
 
@@ -300,7 +336,7 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
       rosterOf(s).forEach((student) => {
         const status = getStatus(s, isGroup ? student._id : undefined);
         if (status !== "present" && status !== "absent") return;
-        const rec = touch(student._id, fullName(student), programLabel, cycleIdFor(s, student._id));
+        const rec = touch(student._id, fullName(student), programLabel, cycleIdFor(s, student._id), rangeFor(s, student._id));
         rec.total += 1;
         if (status === "present") rec.present += 1;
       });
@@ -499,18 +535,12 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
     <div className="space-y-6">
       <div className="flex flex-wrap gap-2">
         <Button
-          variant={view === "today" ? "default" : "outline"}
+          variant={view === "calendar" ? "default" : "outline"}
           size="sm"
-          onClick={() => setView("today")}
+          onClick={() => setView("calendar")}
         >
-          Today&apos;s sessions
-        </Button>
-        <Button
-          variant={view === "history" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setView("history")}
-        >
-          Past sessions
+          <CalendarDays className="h-4 w-4 mr-2" />
+          Calendar Sessions
         </Button>
         <Button
           variant={view === "summary" ? "default" : "outline"}
@@ -520,7 +550,63 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
           <Users className="h-4 w-4 mr-2" />
           Student summary
         </Button>
+        {SHOW_LEGACY_ATTENDANCE_TABS && (
+          <>
+            <Button
+              variant={view === "today" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setView("today")}
+            >
+              Today&apos;s sessions
+            </Button>
+            <Button
+              variant={view === "history" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setView("history")}
+            >
+              Past sessions
+            </Button>
+          </>
+        )}
       </div>
+
+      {view === "calendar" && (
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
+          <div className="p-4 border-b border-border">
+            <h3 className="font-display font-bold text-lg text-foreground">Browse by date</h3>
+            <p className="text-sm text-muted-foreground">
+              {SHOW_LEGACY_ATTENDANCE_TABS
+                ? "Pick any day to see its sessions — the same 3-day marking window applies as in Today's sessions / Past sessions."
+                : "Pick any day to see its sessions. A session more than 3 days old with nothing marked automatically shows as Absent, and can no longer be changed."}
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-4 p-4">
+            <Calendar
+              mode="single"
+              selected={selectedCalendarDate}
+              onSelect={(date) => date && setSelectedCalendarDate(date)}
+              modifiers={{ hasSession: datesWithSessions }}
+              modifiersClassNames={{ hasSession: "font-bold underline" }}
+              showOutsideDays={false}
+              className="rounded-md border border-border w-fit"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground mb-2">{formatDate(selectedCalendarDateKey)}</p>
+              {loading ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : calendarDaySessions.length === 0 ? (
+                <p className="p-6 text-center text-muted-foreground">No sessions on this date.</p>
+              ) : (
+                <div className="divide-y divide-border border border-border rounded-lg overflow-hidden">
+                  {calendarDaySessions.map((s) => renderSessionRow(s, false))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {view === "today" && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -580,12 +666,18 @@ export function AttendanceTab({ sessions, onRefresh, loading }: AttendanceTabPro
             ) : (
               studentSummaries.map((sum) => {
                 const rate = sum.overall > 0 ? Math.round((sum.present / sum.overall) * 100) : 0;
+                const dateRange = isProgramInProgress(sum.status || undefined)
+                  ? formatDateRangeOnly({ startDate: sum.startDate, endDate: sum.endDate })
+                  : null;
                 return (
                   <div key={`${sum.studentId}|${sum.programLabel}|${sum.cycleId}`} className="p-4">
                     <div className="flex items-center justify-between mb-1">
                       <div>
                         <p className="font-semibold text-foreground">{sum.name}</p>
-                        <p className="text-xs text-primary font-medium">{sum.programLabel}</p>
+                        <p className="text-xs text-primary font-medium">
+                          {sum.programLabel}
+                          {dateRange && <span className="text-muted-foreground font-normal"> · {dateRange}</span>}
+                        </p>
                       </div>
                       <span className="text-sm text-muted-foreground">
                         {sum.present} / {sum.overall} present

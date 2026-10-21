@@ -10,6 +10,7 @@ const {
   createSchedule,
   createMonthlySchedules,
   checkMonthlySchedule,
+  getMonthlySlotGrid,
   bulkDeleteSchedules,
   listPlaygroupGroups,
   checkPlaygroupWindows,
@@ -44,6 +45,7 @@ router.get('/available-slots-by-day', protect, authorize('admin'), getAvailableS
 router.post('/', protect, authorize('admin'), createSchedule);
 router.post('/monthly', protect, authorize('admin'), createMonthlySchedules);
 router.post('/monthly/check', protect, authorize('admin'), checkMonthlySchedule);
+router.post('/monthly/slot-grid', protect, authorize('admin'), getMonthlySlotGrid);
 router.post('/bulk-delete', protect, authorize('admin'), bulkDeleteSchedules);
 router.get('/playgroup-groups', protect, authorize('admin'), listPlaygroupGroups);
 router.post('/playgroup-groups/check-windows', protect, authorize('admin'), checkPlaygroupWindows);

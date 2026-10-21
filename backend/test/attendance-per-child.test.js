@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
 
 const Schedule = require('../models/Schedule');
 const { markAttendance } = require('../controllers/scheduleController');
-const { isSessionFullyMarked, attendanceStatusForStudent } = require('../utils/schedulingPolicy');
+const { isSessionFullyMarked, attendanceStatusForStudent, effectiveAttendanceStatusForStudent, ATTENDANCE_GRACE_DAYS } = require('../utils/schedulingPolicy');
 
 function mockQuery(result) {
   const q = {
@@ -181,6 +181,29 @@ test('markAttendance: never throws when the session has co-tutors (Group 3 realt
   } finally { h.restore(); }
 });
 
+// Real bug found while wiring the parent-side Progress tab's attendance calendar: the
+// realtime push on a mark only ever passed tutorIds to emitScheduleChanged, never
+// studentIds — so emitScheduleChanged's own emitToParents branch (see its definition,
+// scheduleController.js ~line 56) never fired, and a parent with the Progress tab open
+// never actually got a live update when a tutor marked attendance, despite that tab
+// listening for the exact same 'schedule:changed' event every other live feature here
+// does. Fixed by also resolving student(s) off the schedule, the same way
+// emitScheduleChangedForSchedule already does for schedule creation. Genuine
+// cross-socket delivery (that emitToParents reaches a real connected parent) needs a
+// live Socket.io server and is out of reach for this test harness — same acknowledged
+// limitation as the co-tutors test above; this just confirms the fix doesn't throw for
+// BOTH a one-on-one session (singular `student`) and a group session (`students[]`),
+// the two shapes the new studentIds computation has to handle.
+test('markAttendance: never throws for a one-on-one session with a real student (parent-notification studentIds computation)', async () => {
+  const doc = fakeScheduleDoc({ student: 'kid-1', students: [] });
+  const h = stub(doc);
+  try {
+    const res = mockRes();
+    await markAttendance(req({ status: 'present' }), res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+  } finally { h.restore(); }
+});
+
 // ── isSessionFullyMarked / attendanceStatusForStudent (schedulingPolicy.js) ──
 
 test('isSessionFullyMarked: one-on-one is fully marked once attendanceStatus is present or absent', () => {
@@ -205,4 +228,51 @@ test('attendanceStatusForStudent: resolves the right child\'s own status on a gr
 test('attendanceStatusForStudent: falls back to the whole-session field for a one-on-one session', () => {
   assert.equal(attendanceStatusForStudent({ students: [], attendanceStatus: 'present' }, 'anyone'), 'present');
   assert.equal(attendanceStatusForStudent({ students: [], attendanceStatus: 'unmarked' }, 'anyone'), 'unmarked');
+});
+
+// ── effectiveAttendanceStatusForStudent: the 3-day-grace auto-absent rule, backend side ──
+// Mirrors frontend/src/lib/attendanceGrace.ts's resolveAttendanceStatus exactly, so a
+// backend-computed attendance SUMMARY (the tutor/parent chatbot's attendance replies)
+// can never disagree with what the tutor's own Attendance tab already shows.
+
+function daysAgo(days) {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d;
+}
+
+test('effectiveAttendanceStatusForStudent: a session still within the grace window stays unmarked', () => {
+  const schedule = { students: [], attendanceStatus: 'unmarked', date: daysAgo(ATTENDANCE_GRACE_DAYS) };
+  assert.equal(effectiveAttendanceStatusForStudent(schedule, 'anyone', new Date()), 'unmarked');
+});
+
+test('effectiveAttendanceStatusForStudent: a session older than the grace window with nothing marked auto-resolves to absent', () => {
+  const schedule = { students: [], attendanceStatus: 'unmarked', date: daysAgo(ATTENDANCE_GRACE_DAYS + 1) };
+  assert.equal(effectiveAttendanceStatusForStudent(schedule, 'anyone', new Date()), 'absent');
+});
+
+test('effectiveAttendanceStatusForStudent: an 8-day-old unmarked session (the exact reported case) resolves to absent', () => {
+  const schedule = { students: [], attendanceStatus: 'unmarked', date: daysAgo(8) };
+  assert.equal(effectiveAttendanceStatusForStudent(schedule, 'anyone', new Date()), 'absent');
+});
+
+test('effectiveAttendanceStatusForStudent: a future/today unmarked session is never auto-resolved', () => {
+  const schedule = { students: [], attendanceStatus: 'unmarked', date: new Date() };
+  assert.equal(effectiveAttendanceStatusForStudent(schedule, 'anyone', new Date()), 'unmarked');
+});
+
+test('effectiveAttendanceStatusForStudent: a session already marked present/absent keeps its real status, never overridden regardless of age', () => {
+  const oldDate = daysAgo(90);
+  assert.equal(effectiveAttendanceStatusForStudent({ students: [], attendanceStatus: 'present', date: oldDate }, 'anyone', new Date()), 'present');
+  assert.equal(effectiveAttendanceStatusForStudent({ students: [], attendanceStatus: 'absent', date: oldDate }, 'anyone', new Date()), 'absent');
+});
+
+test('effectiveAttendanceStatusForStudent: resolves the right child on a group session, including auto-absent for an overdue unmarked child', () => {
+  const schedule = {
+    students: ['a', 'b'],
+    date: daysAgo(10),
+    attendanceByStudent: [{ student: 'a', status: 'present' }],
+  };
+  assert.equal(effectiveAttendanceStatusForStudent(schedule, 'a', new Date()), 'present');
+  assert.equal(effectiveAttendanceStatusForStudent(schedule, 'b', new Date()), 'absent');
 });

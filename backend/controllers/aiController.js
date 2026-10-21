@@ -4,7 +4,26 @@ const { detect } = require('franc');
 const Enrollment = require('../models/Enrollment');
 const Payment = require('../models/Payment');
 const { computeRemainingBalance } = require('../utils/remainingBalance');
-const { attendanceStatusForStudent } = require('../utils/schedulingPolicy');
+const { effectiveAttendanceStatusForStudent, PROGRAM_POLICIES, resolveProgramCode } = require('../utils/schedulingPolicy');
+const Subject = require('../models/Subject');
+const {
+  computeOpenSlotsForTutor,
+  checkSpecificDaySlot,
+  isStudentAlreadyScheduledForProgram,
+  formatTimeOfDay12h,
+  formatFullDateWithWeekday,
+  dayNameToNumber,
+  dayNumberToLabel,
+} = require('../utils/scheduleAvailability');
+// Reused for the "is this exact slot full" question (Request 1, Issue 2) — the SAME
+// batched per-date/per-slot computation the real Scheduling Wizard calendar uses
+// (scheduleController.js), never a separate estimate.
+const { getAvailableTutorsGridForWindow } = require('./scheduleController');
+// Reused for the tutor chatbot's attendance-report capability (Request 1, Issue 5) — the
+// EXACT SAME cycle resolution and per-program start/end date computation already behind
+// the Tutor Dashboard's Student summary / My Students tabs, never a separate estimate.
+const { attachCycleByStudent } = require('../utils/attendanceCycles');
+const { attachProgramDateRangeToCycles } = require('../utils/remainingDueDate');
 const Schedule = require('../models/Schedule');
 const Remark = require('../models/Remark');
 const User = require('../models/User');
@@ -1037,7 +1056,14 @@ function isPersonInfoQuery(normalized) {
     // question in Tagalog fell straight through getRoleAwarePersonInfoReply's gate
     // (which already has full, working name-lookup logic further down — it just never
     // got the chance to run) into the generic clarification/escalation fallback.
-    || /\bsino\s+(si|ang)\s+[a-z]/.test(normalized)
+    //
+    // Real bug (live-reported), follow-up: this same pattern ALSO matched "sino ang
+    // available na tutor..." — a filter question ("which tutors satisfy X condition"),
+    // not a lookup of one specific named person — purely because "ang" was followed by
+    // SOME lowercase word. That misclassification returned null for the whole grounded-
+    // topic dispatch before the real scheduling-availability topic ever got a chance to
+    // run. Excluded here since "available" never starts a person's name.
+    || /\bsino\s+(si|ang)\s+(?!(?:mga\s+)?available\b)[a-z]/.test(normalized)
     || /tell me about\s+[a-z]/.test(normalized)
     || /(contact\s*(number|info)?|phone\s*(number)?|mobile\s*(number)?|cell\s*(number)?|telephone|\btel\.?\b)/.test(normalized)
     || /(what\s+is\s+(his|her|their)\s+(contact|phone|mobile|number))/.test(normalized);
@@ -4602,9 +4628,41 @@ const CLASSIFIER_INTENT_HANDLERS = Object.freeze({
  * wired handler, or the wired handler itself found nothing to say. A down or wrong
  * classifier can never break or alter a reply here.
  */
+// Real bug, same shape as the revenue-grounding 500 (see getGroundedChatContext's own
+// comment): an admin scheduling-availability question ("anong oras available si [tutor]
+// para kay [student] sa hapon?") intermittently got the chat widget's generic
+// network-failure text instead of a real answer — the EXACT SAME question, asked twice
+// in a row, once failed and once succeeded. Root cause: this function calls several
+// DB-backed handlers directly (resolveGroundedContextForTopic among them, for whichever
+// topic the classifier confidently predicted — e.g. a false-positive generic "schedule"
+// match ahead of the dedicated schedule_availability topic below in detectGroundedTopic)
+// with NO try/catch of its own, unlike getGroundedChatContext's identical call, which IS
+// protected. A transient DB hiccup here threw all the way out through chat()'s single
+// outer try/catch into a hard 500 — taking the entire reply down over what's supposed to
+// be an optional, best-effort shortcut. Wrapped the same way getGroundedChatContext
+// already is, so a failure here degrades to "no shortcut" (falls through to the normal
+// Gemini/deterministic pipeline) instead of failing the whole request.
 async function tryClassifierShortcut(req, message, history = []) {
   if (!req || !req.user) return null;
+  try {
+    return await tryClassifierShortcutInner(req, message, history);
+  } catch (err) {
+    console.warn('tryClassifierShortcut failed (continuing without classifier shortcut):', err?.message || err);
+    return null;
+  }
+}
 
+// Generic, non-name first words a "for/kay/ni ___" phrase can start with — used only to
+// decide whether the tutor_attendance_static classifier route (below) should defer to
+// the real grounded pipeline instead of answering with its static text. "attendance
+// history for MY STUDENT" names no one real; "...ni LEO" does.
+const ATTENDANCE_STATIC_ROUTE_GENERIC_WORDS = new Set([
+  'my', 'our', 'a', 'an', 'the', 'this', 'that', 'these', 'those',
+  'student', 'students', 'estudyante', 'estudyanteng', 'bata', 'mga',
+  'child', 'children', 'kid', 'kids', 'anak',
+]);
+
+async function tryClassifierShortcutInner(req, message, history = []) {
   const prediction = await predictIntent(message);
   if (!prediction || prediction.confidence < INTENT_CLASSIFIER_CONFIDENCE_THRESHOLD) {
     return null;
@@ -4676,11 +4734,30 @@ async function tryClassifierShortcut(req, message, history = []) {
       // text for every other role, including parent.
       reply = await getTutorContactReply(req.user, message, languageProfile, { skipKeywordCheck: true });
       break;
-    case 'tutor_attendance_static':
+    case 'tutor_attendance_static': {
+      // Real bug (live-reported): the ML classifier's generic "attendance" intent fires
+      // confidently even when a SPECIFIC assigned student is actually named in plain
+      // lowercase chat text ("...ni leo", "...kay leo") — extractAttendanceNameCandidate
+      // can't catch this (it only looks for Title-Case runs). This route is deliberately
+      // DB-free (see its own test, "no DB access"), so a real roster check isn't an
+      // option here — instead, reuse the SAME pure "for/kay/ni NAME" phrase extractor the
+      // admin scheduling topic already has (extractForPhrasesForScheduling), filtering
+      // out generic non-name phrases ("my student", "a student") via a small stopword
+      // check. Whenever a plausible name IS present, defer (leave reply null) so the
+      // normal grounded pipeline runs instead — it does its own real roster check there
+      // and either returns the genuine per-student report or an honest "not assigned to
+      // you", either of which beats the static "go mark it yourself" deflection for a
+      // question that actually named someone.
+      const namesAPlausibleStudent = role === 'tutor' && extractForPhrasesForScheduling(normalizeMessage(message))
+        .some((phrase) => {
+          const firstWord = phrase.trim().split(/\s+/)[0];
+          return firstWord && !ATTENDANCE_STATIC_ROUTE_GENERIC_WORDS.has(firstWord);
+        });
       // No account data at all — still a static, role-keyed deflection (no new DB-backed
       // capability), but Batch 11 made the text itself role-accurate (see getAttendanceReply).
-      reply = getAttendanceReply(languageProfile, {}, req.user?.role);
+      reply = namesAPlausibleStudent ? null : getAttendanceReply(languageProfile, {}, req.user?.role);
       break;
+    }
     case 'admin_count':
       // Three distinct handlers, each already role-gated internally to admin/super_admin
       // — dispatch on the original predicted intent (not just the shared route name).
@@ -4749,6 +4826,25 @@ async function getResolvedReply(user, message, classifierResult, groundedContext
   // that would tell a tutor to "check the Progress section".
   if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
     return groundedContext.fallbackReply;
+  }
+
+  // Real bug (live-reported), same shadowing shape as renew_program/student_notes above:
+  // "sino sino ang mga estudyante ko?"/"who are my students?" also matches the static
+  // `tutor_students` dataset entry (getIntentKeywordDatasetReply, checked further below)
+  // and isPersonInfoQuery (getRoleAwarePersonInfoReply, also further below) — either one
+  // would otherwise swallow this real, structured per-student report (Name/Program/
+  // Student ID/Schedule) before groundedContext.fallbackReply is ever consulted, leaving
+  // Gemini to answer with a bare name list or, worse, nothing real at all to go on.
+  if (user?.role === 'tutor' && groundedContext?.topic === 'my_students' && groundedContext.fallbackReply) {
+    return groundedContext.fallbackReply;
+  }
+
+  // Real bug (live-reported) — the admin's "list of students not yet scheduled" question
+  // also overlaps getAdminSystemKnowledgeReply's "sino...student" roster-listing pattern
+  // (checked further below), which would answer with EVERY enrolled student instead of
+  // just the ones still waiting to be scheduled. Same priority fix as above.
+  if ((user?.role === 'admin' || user?.role === 'super_admin') && groundedContext?.topic === 'unscheduled_students' && groundedContext.fallbackReply) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
   }
 
   // Live-testing fix (batch 5): a date/week/month-scoped schedule question ("what is my
@@ -4950,6 +5046,25 @@ async function getOllamaBypassReply(user, message, groundedContext, classifierRe
   // that would tell a tutor to "check the Progress section".
   if (user?.role === 'tutor' && groundedContext?.topic === 'student_notes' && groundedContext.fallbackReply) {
     return groundedContext.fallbackReply;
+  }
+
+  // Real bug (live-reported), same shadowing shape as renew_program/student_notes above:
+  // "sino sino ang mga estudyante ko?"/"who are my students?" also matches the static
+  // `tutor_students` dataset entry (getIntentKeywordDatasetReply, checked further below)
+  // and isPersonInfoQuery (getRoleAwarePersonInfoReply, also further below) — either one
+  // would otherwise swallow this real, structured per-student report (Name/Program/
+  // Student ID/Schedule) before groundedContext.fallbackReply is ever consulted, leaving
+  // Gemini to answer with a bare name list or, worse, nothing real at all to go on.
+  if (user?.role === 'tutor' && groundedContext?.topic === 'my_students' && groundedContext.fallbackReply) {
+    return groundedContext.fallbackReply;
+  }
+
+  // Real bug (live-reported) — the admin's "list of students not yet scheduled" question
+  // also overlaps getAdminSystemKnowledgeReply's "sino...student" roster-listing pattern
+  // (checked further below), which would answer with EVERY enrolled student instead of
+  // just the ones still waiting to be scheduled. Same priority fix as above.
+  if ((user?.role === 'admin' || user?.role === 'super_admin') && groundedContext?.topic === 'unscheduled_students' && groundedContext.fallbackReply) {
+    return localizeKnownReply(groundedContext.fallbackReply, effectiveLanguageProfile);
   }
 
   // Live-testing fix (batch 5): a date/week/month-scoped schedule question ("what is my
@@ -5574,7 +5689,7 @@ function detectGroundedTopic(user, message) {
     // absences") used to have no dedicated topic for parents at all, so it fell through
     // to a generic "check your dashboard" reply instead of the child's real attendance
     // count — the same real-data gap payment/schedule questions didn't have.
-    if (/\battendance\b|\babsen(t|ces?|teeism)?\b|\bpresent\b.*(class|today|session|niya|siya)|\blumiban\b|\bdumalo\b|\bdalo\b|\bpumasok\b.*(ba|klase)/.test(normalized)) {
+    if (isAttendanceQuestion(normalized)) {
       return 'attendance';
     }
     if (isParentChildProgressQuestion(normalized)) return 'grades';
@@ -5608,6 +5723,25 @@ function detectGroundedTopic(user, message) {
     return 'student_notes';
   }
 
+  // Request 1, Issue 5 (real bug, live-reported) — a tutor asking for an assigned
+  // student's attendance report always got a vague "can't find"/"not in my records"
+  // reply, since no attendance topic existed for tutors at all (only the parent branch
+  // above had one) — impossible to tell whether that meant "genuinely not your student"
+  // or just "no real lookup exists". Checked before the generic classifier below.
+  if (user.role === 'tutor' && isAttendanceQuestion(normalized)) {
+    return 'attendance';
+  }
+
+  // Real bug (live-reported) — "sino sino ang mga estudyante ko?" ALSO matches
+  // isPersonInfoQuery's Tagalog "sino ang X" pattern a few lines down (same collision
+  // already fixed for the admin scheduling-availability topic), which returned null and
+  // left the question ungrounded — Gemini then fabricated plausible-looking names AND
+  // internal placeholder emails rather than admit it had nothing real to answer from.
+  // Checked here, before that gate, so this always resolves to the real per-student list.
+  if (user.role === 'tutor' && isTutorStudentListQuestion(normalized)) {
+    return 'my_students';
+  }
+
   if (isGeneralScheduleHoursQuestion(normalized)) {
     return null;
   }
@@ -5623,15 +5757,50 @@ function detectGroundedTopic(user, message) {
     return 'renew_program';
   }
 
+  // Real bug (live-reported) — "list of students not yet scheduled" had nowhere real to
+  // go at all (no "unscheduled" keyword appears anywhere in the generic 9-intent
+  // classifier below), so it always fell through to a generic deflection. Checked before
+  // the generic classifier for the same reason as renew_program/tutors/revenue above.
+  if ((user.role === 'admin' || user.role === 'super_admin') && isUnscheduledStudentsListQuestion(normalized)) {
+    return 'unscheduled_students';
+  }
+
   // Real bugs (live-reported) — neither of these topics existed anywhere before, so
   // Gemini had no real data to answer "ilan ang tutors"/"revenue summary" with, every
   // single time. Checked ahead of the generic 9-intent classifier below, same as
   // renew_program above, since neither "tutors" nor "revenue" is one of its categories.
-  if ((user.role === 'admin' || user.role === 'super_admin') && isAdminTutorListQuestion(normalized)) {
+  //
+  // Real bug (live-reported), follow-up: "sino ang available na tutor na pwede para kay
+  // [student]...sa Monday/Tuesday/Wednesday...8-9am" ALSO matches this simple "tutor" +
+  // "sino" roster-listing gate, and since this check ran first, it won outright —
+  // producing a flat, completely unfiltered list of every tutor's name with none of the
+  // actual day/time/student filtering the question asked for. The guard below defers to
+  // the real scheduling-availability topic (checked a few lines down) whenever the
+  // message ALSO carries genuine scheduling-filter signal (a day name, an explicit time
+  // range, or an availability word alongside one of those) — a bare "sino ang mga
+  // tutors"/"ilan ang tutors" roster question has none of that and is unaffected.
+  if ((user.role === 'admin' || user.role === 'super_admin') && isAdminTutorListQuestion(normalized) && !isScheduleAvailabilityQuestion(normalized)) {
     return 'tutors';
   }
   if ((user.role === 'admin' || user.role === 'super_admin') && isRevenueQuestion(normalized)) {
     return 'revenue';
+  }
+
+  // Request 1 follow-up, Issue 2 — "is this exact date+time slot full" questions need
+  // their own topic (isScheduleAvailabilityQuestion's keyword gate doesn't fire for
+  // "full ba" phrasing at all — no "available"/"open"/"schedule"/"oras" word). Checked
+  // right alongside schedule_availability, before the generic classifier below.
+  if ((user.role === 'admin' || user.role === 'super_admin') && isSlotCapacityQuestion(normalized)) {
+    return 'slot_capacity';
+  }
+
+  // Request 1 — AI scheduling SUGGESTIONS: must be checked before the generic
+  // "schedule" regex a few lines down, same reason as tutors/revenue above — a plain
+  // availability question has nowhere else real to go and would otherwise get the
+  // generic "next 3 upcoming sessions" context, which produced the reported malformed
+  // "8am to 8am" answer.
+  if ((user.role === 'admin' || user.role === 'super_admin') && isScheduleAvailabilityQuestion(normalized)) {
+    return 'schedule_availability';
   }
 
   // Batch 12 — chat_intents.json (the generic classifier just below) only knows 9 intents
@@ -5910,6 +6079,152 @@ function personDisplayName(person) {
   return [person?.firstName, person?.lastName].filter(Boolean).join(' ').trim() || 'the student';
 }
 
+// Real bug (live-reported): "sino sino ang mga estudyante ko?" / "who are my students?"
+// got either a bare comma-separated name list (no program/ID/schedule — the legacy
+// `tutor_students` static dataset intent) or, for some phrasings, an ungrounded Gemini
+// reply that fabricated plausible-looking names AND internal placeholder emails
+// (@students.beebright.internal — a real internal field, never meant to be tutor-facing,
+// that no code path here actually surfaces; Gemini invented the whole thing because
+// nothing grounded was given to answer from). Both are fixed the same way: always route
+// this question through a REAL grounded reply with the exact structured block format
+// requested (Name/Program/Student ID/Schedule), so there's never a reason for Gemini to
+// improvise.
+// Real bug (live-reported, regression): "can you give me my student list?" is a
+// perfectly natural way to ask this same question but originally had no matching list-
+// signal word here ("roster" wasn't covered) — and critically, this exact gate is also
+// reused by verifyNamedStudentReference (below) to recognize "this is a roster request,
+// not a reference to one specific named student" BEFORE that guard's own name-extraction
+// regex runs, so a narrow word list here doesn't just affect routing, it affects whether
+// a real question gets wrongly declined as "can't find that student". Kept intentionally
+// broad (roster, "mga" plural markers, additional Tagalog/Taglish phrasings) rather than
+// enumerating only the exact phrases already seen live.
+function isTutorStudentListQuestion(normalized) {
+  return /\b(estudyante|estudyanteng|student|students|studyante)\b/.test(normalized)
+    && /(sino sino|sino ang|sino.*ko\b|who are|who('?s| is)|\blist\b|listahan|\broster\b|lahat ng|all my|assigned to me|naka\s*-?\s*assign)/.test(normalized)
+    && !isAttendanceQuestion(normalized);
+}
+
+const SCHEDULE_DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** "Fri/Sat, 3:00–4:00 PM" — every distinct weekday (in Sun..Sat order) this tutor's real
+ *  sessions with this student fall on, plus the time range (every distinct range listed,
+ *  comma-separated, on the rare chance a student has more than one with this tutor). */
+function formatStudentScheduleLabel(sessions) {
+  const days = new Set();
+  const times = new Set();
+  for (const s of sessions) {
+    const d = new Date(s.date);
+    if (!Number.isNaN(d.getTime())) days.add(d.getUTCDay());
+    if (s.startTime && s.endTime) times.add(`${formatTimeOfDay12h(s.startTime)}–${formatTimeOfDay12h(s.endTime)}`);
+  }
+  const dayLabel = SCHEDULE_DAY_ABBR.filter((_, idx) => days.has(idx)).join('/');
+  const timeLabel = [...times].join(', ');
+  if (!dayLabel && !timeLabel) return 'Not yet scheduled';
+  return [dayLabel, timeLabel].filter(Boolean).join(', ');
+}
+
+/**
+ * Real, per-(student, program) grounded reply for "who are my students" — one full block
+ * per enrollment this tutor actually teaches, each carrying the REAL enrolled package name
+ * (never just the bare program category — "Toddlers Playgroup – 16 Hours", not
+ * "Toddlers Playgroup"), the real Student ID, and this tutor's own real schedule with that
+ * student for that specific program. A student this tutor teaches in TWO programs gets
+ * TWO full blocks (name repeated), never one block with both programs combined onto a
+ * single Program line — real bug (live-reported): an earlier version grouped by student
+ * only and comma-joined multiple programs into one line, which also doesn't compose with
+ * a per-program Schedule line (two programs can have two different schedules). Reuses
+ * getTutorStudents (the same roster "who are my assigned students" and the Remarks tab
+ * already agree on) rather than a new query, so this can never disagree with either about
+ * who counts as assigned.
+ *
+ * The returned text is a literal, field-labeled block structure built here in code, NOT
+ * prose for an LLM to compose — real bug (live-reported, 3 consecutive attempts): Gemini
+ * reliably rewrote this into a narrative sentence when only given the data as grounding
+ * context. generateChatbotLlmReply (see EXACT_PASSTHROUGH_TOPICS) now returns this
+ * fallbackReply verbatim for the my_students topic instead of asking Gemini to compose
+ * from it, so the exact format can no longer drift between attempts.
+ */
+async function buildTutorStudentListContext(tutorId) {
+  const students = await getTutorStudents(tutorId);
+  if (!students.length) {
+    return {
+      contextText: 'Role: tutor\nThis tutor has no assigned students.',
+      fallbackReply: 'I could not find any students assigned to you yet.',
+    };
+  }
+
+  const studentIds = students.map((s) => String(s._id));
+  const [mySessions, enrollments] = await Promise.all([
+    Schedule.find({ $or: [{ tutor: tutorId }, { tutors: tutorId }] })
+      .populate('subject', 'name code')
+      .lean(),
+    Enrollment.find({ student: { $in: studentIds }, status: { $in: ADMIN_ACTIVE_ENROLLMENT_STATUSES } })
+      .select('student packages permanentStudentId studentId')
+      .lean(),
+  ]);
+
+  // `${studentId}|${programCode}` -> this tutor's own real sessions with that student for
+  // that one program — the unit a block is built from, not the student alone.
+  const sessionsByStudentProgram = new Map();
+  for (const s of mySessions) {
+    const programCode = resolveProgramCode(s.subject);
+    if (!programCode) continue;
+    const people = [s.student, ...(Array.isArray(s.students) ? s.students : [])].filter(Boolean);
+    for (const p of people) {
+      const key = `${String(p?._id || p)}|${programCode}`;
+      if (!sessionsByStudentProgram.has(key)) sessionsByStudentProgram.set(key, []);
+      sessionsByStudentProgram.get(key).push(s);
+    }
+  }
+
+  const enrollmentsByStudent = new Map();
+  for (const e of enrollments) {
+    const sid = String(e.student);
+    if (!enrollmentsByStudent.has(sid)) enrollmentsByStudent.set(sid, []);
+    enrollmentsByStudent.get(sid).push(e);
+  }
+
+  const blocks = [];
+  for (const student of students) {
+    const sid = String(student._id);
+    const studentEnrollments = enrollmentsByStudent.get(sid) || [];
+    const studentIdLabel = studentEnrollments[0]?.permanentStudentId || studentEnrollments[0]?.studentId || 'N/A';
+    const name = personDisplayName(student);
+
+    const programCodesWithThisTutor = [];
+    for (const key of sessionsByStudentProgram.keys()) {
+      const [keySid, code] = key.split('|');
+      if (keySid === sid) programCodesWithThisTutor.push(code);
+    }
+
+    if (!programCodesWithThisTutor.length) {
+      // Assigned via getTutorStudents (so a real session exists) but its subject's program
+      // couldn't be resolved — still show one honest block rather than silently dropping them.
+      blocks.push({ name, program: 'Program not resolved', studentId: studentIdLabel, schedule: 'Not yet scheduled' });
+      continue;
+    }
+
+    for (const programCode of programCodesWithThisTutor) {
+      const pkg = studentEnrollments
+        .flatMap((e) => e.packages || [])
+        .find((p) => String(p.programCode || '').toUpperCase() === programCode);
+      const sessionsForThisProgram = sessionsByStudentProgram.get(`${sid}|${programCode}`) || [];
+      blocks.push({
+        name,
+        program: pkg?.displayName || programCode,
+        studentId: studentIdLabel,
+        schedule: formatStudentScheduleLabel(sessionsForThisProgram),
+      });
+    }
+  }
+
+  const textBlocks = blocks.map((b) => `Name: ${b.name}\nProgram: ${b.program}\nStudent ID: ${b.studentId}\nSchedule: ${b.schedule}`);
+  return {
+    contextText: ['Role: tutor', `Assigned students: ${blocks.length}`, ...textBlocks].join('\n\n'),
+    fallbackReply: textBlocks.join('\n\n'),
+  };
+}
+
 // Match a person named in the message. Returns the single match, or null (ambiguous / none).
 function resolveNamedPerson(message, people) {
   const normalized = normalizeMessage(message);
@@ -5954,6 +6269,175 @@ async function buildTutorStudentNotesContext(tutorId, message) {
   return {
     contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nBee Bright does not use numeric grades; no legacy grade remarks to summarise.`,
     fallbackReply: `Bee Bright does not use numeric grades, so there's nothing to summarise for ${personDisplayName(target)} this way — check the Remark History tab for your own written remarks on them.`,
+  };
+}
+
+// A tutor's attendance question is very often just "<Name>'s attendance" or "her absent
+// count", with none of extractChildNameReference's narrow "my student X"/"si/kay/ni X"
+// cues — so a lighter extractor is needed here specifically: a possessive ("Luna's") or,
+// failing that, any bare Title-Cased 1-3 word run (every real name shown anywhere in the
+// admin/tutor UI already is). Only used to tell "a name WAS given but doesn't match an
+// assigned student" apart from "no name given at all" — resolveNamedPerson (a broader,
+// whole-message scan against the tutor's OWN roster) still does the actual match.
+const ATTENDANCE_NAME_CANDIDATE_STOPWORDS = new Set([
+  'what', 'who', 'how', 'she', 'he', 'it', 'her', 'his', 'that', 'this', 'there',
+  'where', 'when', 'why', 'please', 'can', 'could', 'would', 'is', 'are', 'show', 'tell',
+]);
+
+function extractAttendanceNameCandidate(message) {
+  const raw = String(message || '');
+  const isRealName = (candidate) => !ATTENDANCE_NAME_CANDIDATE_STOPWORDS.has(candidate.split(/\s+/)[0].toLowerCase());
+
+  // No apostrophe inside the repeated word class — it must stay reserved for the
+  // TRAILING possessive marker, otherwise a leading word that itself ends in an
+  // apostrophe-s ("What's Luna's attendance?") gets greedily swallowed into the
+  // capture as "What's Luna" instead of stopping cleanly at "Luna".
+  const possessiveRe = /\b([A-Z][a-zA-Z.-]*(?:\s+[A-Z][a-zA-Z.-]*){0,2})['’]s\b/g;
+  let m;
+  while ((m = possessiveRe.exec(raw))) {
+    const candidate = m[1].trim();
+    if (isRealName(candidate)) return candidate;
+  }
+  const bareRe = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/g;
+  while ((m = bareRe.exec(raw))) {
+    const candidate = m[1].trim();
+    if (isRealName(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Real bug (live-reported), Request 1 Issue 5 — a tutor asking for an assigned
+ * student's attendance ("Luna's overall attendance", "attendance report", "her absent
+ * count and dates") always got a vague "can't find"/"not in my records" reply, even
+ * before genuinely checking whether the named student is assigned to this tutor at all
+ * — because no attendance topic existed for tutors (only the parent branch had one), so
+ * there was no real lookup behind the refusal either way.
+ *
+ * Grounds the reply in the EXACT SAME data already behind the Tutor Dashboard's Student
+ * summary / My Students tabs: attachCycleByStudent resolves which enrollment CYCLE each
+ * session belongs to (so a renewed program's counts are never blended with an old,
+ * finished cycle), and attachProgramDateRangeToCycles attaches that cycle's real
+ * start/end session dates — `endDate` stays null until the whole package is fully
+ * SCHEDULED, which is a different thing from that date having actually ELAPSED yet
+ * (a fully-scheduled package can still have its last session days or weeks in the
+ * future); the rangeLabel below checks the real date, not just null-vs-non-null,
+ * before calling a program "(finished)" — same real bug as the status conflation this
+ * function used to have. Present/absent counts are tallied from
+ * effectiveAttendanceStatusForStudent (schedulingPolicy.js), which also layers the
+ * tutor dashboard's existing 3-day-grace auto-absent rule on top of the raw stored
+ * value, so an old unmarked session is never left out of the absent count — the same
+ * resolver buildParentAttendanceContext uses, scoped to THIS tutor's own sessions with
+ * the student (matching Student summary's own scope — a different tutor's sessions with
+ * the same child are a different program/cycle's concern, not this one's).
+ */
+async function buildTutorAttendanceContext(tutorId, message) {
+  const students = await getTutorStudents(tutorId);
+  if (!students.length) {
+    return {
+      contextText: 'Role: tutor\nThis tutor has no assigned students.',
+      fallbackReply: 'I could not find any students assigned to you yet.',
+    };
+  }
+
+  const target = resolveNamedPerson(message, students);
+  if (!target) {
+    const candidate = extractAttendanceNameCandidate(message);
+    if (candidate) {
+      // A name WAS given — plainly say it's not one of this tutor's own students,
+      // rather than a vague "not found" that could mean either case.
+      return {
+        contextText: `Role: tutor\n"${candidate}" does not match any student assigned to this tutor.`,
+        fallbackReply: `${candidate} is not one of your assigned students, so I don't have attendance data to show for them.`,
+      };
+    }
+    const names = students.map(personDisplayName);
+    return {
+      contextText: `Role: tutor\nAssigned students: ${names.join(', ')}\nThe tutor did not name which student.`,
+      fallbackReply: `Which student's attendance would you like to see? You're assigned to: ${names.join(', ')}.`,
+    };
+  }
+
+  const mySessions = await Schedule.find({
+    $and: [
+      { $or: [{ tutor: tutorId }, { tutors: tutorId }] },
+      { $or: [{ student: target._id }, { students: target._id }] },
+    ],
+  })
+    .populate('subject', 'name code')
+    .sort({ date: 1 })
+    .lean();
+
+  if (!mySessions.length) {
+    return {
+      contextText: `Role: tutor\nStudent: ${personDisplayName(target)}\nNo sessions recorded yet with this tutor, so there is no attendance history.`,
+      fallbackReply: `There are no recorded sessions with ${personDisplayName(target)} yet, so there's no attendance history to show.`,
+    };
+  }
+
+  const withCycles = await attachCycleByStudent(mySessions);
+  const withRanges = await attachProgramDateRangeToCycles(withCycles);
+
+  const asksForDates = /\b(date|dates|kailan|anong (araw|petsa))\b/.test(normalizeMessage(message));
+
+  const groups = new Map(); // `${programLabel}|${cycleId}` -> tally
+  for (const s of withRanges) {
+    const cycleEntry = (s.cycleByStudent || []).find((c) => String(c.student) === String(target._id));
+    const cycleId = cycleEntry?.enrollmentId || '__unknown__';
+    const programLabel = s.subject?.name || 'Unknown Program';
+    const key = `${programLabel}|${cycleId}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        programLabel,
+        startDate: cycleEntry?.startDate || null,
+        endDate: cycleEntry?.endDate || null,
+        present: 0,
+        absent: 0,
+        unmarked: 0,
+        absentDates: [],
+      });
+    }
+    const g = groups.get(key);
+    const status = effectiveAttendanceStatusForStudent(s, target._id);
+    if (status === 'present') g.present += 1;
+    else if (status === 'absent') { g.absent += 1; g.absentDates.push(s.date); }
+    else g.unmarked += 1;
+  }
+
+  const lines = [];
+  const fallbackParts = [];
+  const now = new Date();
+  for (const g of groups.values()) {
+    // `endDate` means "the whole package is fully SCHEDULED" (see the comment above),
+    // not "this program has already happened" — a fully-scheduled package can still
+    // have its last session days away. Only call it "(finished)" once that date is
+    // actually in the past, matching the exact `ongoing`/ongoing-date convention the
+    // parent-side Progress tab already uses (frontend/src/lib/programEndDate.ts).
+    const isActuallyFinished = Boolean(g.endDate) && new Date(g.endDate) < now;
+    const rangeLabel = g.startDate
+      ? (g.endDate
+        ? `${formatDate(g.startDate)} to ${formatDate(g.endDate)}${isActuallyFinished ? ' (finished)' : ' (fully scheduled, still ongoing)'}`
+        : `started ${formatDate(g.startDate)}, still ongoing`)
+      : 'not yet scheduled';
+    const absentDateList = g.absentDates.map((d) => formatDate(d)).join(', ');
+
+    lines.push([
+      `Program: ${g.programLabel}`,
+      `Date range: ${rangeLabel}`,
+      `Present: ${g.present}`,
+      `Absent: ${g.absent}`,
+      `Unmarked: ${g.unmarked}`,
+      g.absentDates.length ? `Absent dates: ${absentDateList}` : null,
+    ].filter(Boolean).join('\n'));
+
+    let part = `${g.programLabel} (${rangeLabel}): present ${g.present}, absent ${g.absent}`;
+    if (asksForDates && g.absentDates.length) part += ` (absent on ${absentDateList})`;
+    fallbackParts.push(part);
+  }
+
+  return {
+    contextText: [`Role: tutor`, `Student: ${personDisplayName(target)}`, ...lines].join('\n\n'),
+    fallbackReply: `${personDisplayName(target)}'s attendance — ${fallbackParts.join('; ')}.`,
   };
 }
 
@@ -6142,6 +6626,65 @@ async function buildAdminEnrollmentContext() {
   };
 }
 
+// Real bug (live-reported): "pwede ko ba makita yung list ng student ng hindi pa na
+// i-schedule" (students still waiting to be scheduled for 1-on-1 or Toddlers Playgroup)
+// always got a bare "go check the Schedule tab yourself" deflection, never the real
+// list — no grounded topic for this existed at all.
+function isUnscheduledStudentsListQuestion(normalized) {
+  return /\b(student|students|estudyante|bata|mga bata)\b/.test(normalized)
+    && /(not\s*yet\s*schedul|hindi\s*pa\s*(na)?\s*i?-?\s*schedul|waiting\s*(to\s*be\s*)?schedul|naghihintay.*schedul|unscheduled|wala\s*pang?\s*schedul|walang\s*schedul)/.test(normalized);
+}
+
+function formatStudentIdFor(enrollment) {
+  return enrollment?.permanentStudentId || enrollment?.studentId || 'N/A';
+}
+
+/**
+ * Real, structured list of every (student, program) pair still waiting to be scheduled —
+ * reuses the EXACT SAME eligibility check (isStudentAlreadyScheduledForProgram,
+ * scheduleAvailability.js) the 1-on-1 and Toddlers Playgroup Scheduling Wizards' own
+ * "Select a student" dropdowns already use, so the chatbot's list can never disagree with
+ * what the Wizard would actually offer. One block per still-unscheduled package — a child
+ * enrolled in two programs where only one still needs scheduling is listed once, for that
+ * one program only; a child already scheduled for everything they're enrolled in doesn't
+ * appear at all.
+ */
+async function buildAdminUnscheduledStudentsContext() {
+  const enrollments = await Enrollment.find({ status: { $in: ADMIN_ACTIVE_ENROLLMENT_STATUSES } })
+    .select('student studentSnapshot packages permanentStudentId studentId')
+    .lean();
+
+  const blocks = [];
+  for (const e of enrollments) {
+    const studentUserId = e.student ? String(e.student) : null;
+    for (const pkg of e.packages || []) {
+      const programCode = String(pkg.programCode || '').toUpperCase();
+      if (!programCode) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const alreadyScheduled = studentUserId ? await isStudentAlreadyScheduledForProgram(studentUserId, programCode) : false;
+      if (alreadyScheduled) continue;
+      blocks.push({
+        name: childDisplayName(e),
+        program: pkg.displayName || programCode,
+        studentId: formatStudentIdFor(e),
+      });
+    }
+  }
+
+  if (!blocks.length) {
+    return {
+      contextText: 'Role: admin\nEvery enrolled student already has a schedule for their program(s).',
+      fallbackReply: 'Every enrolled student already has a schedule for their program(s) right now — nobody is waiting to be scheduled.',
+    };
+  }
+
+  const textBlocks = blocks.map((b) => `Name: ${b.name}\nProgram: ${b.program}\nStudent ID: ${b.studentId}`);
+  return {
+    contextText: ['Role: admin', `Students not yet scheduled: ${blocks.length}`, ...textBlocks].join('\n\n'),
+    fallbackReply: textBlocks.join('\n\n'),
+  };
+}
+
 function isAdminTutorListQuestion(normalized) {
   return /\btutors?\b/.test(normalized)
     && /(how many|ilan|list|sino|who (are|is)|names?|pangalan|roster|lahat ng tutor)/.test(normalized);
@@ -6224,6 +6767,554 @@ async function buildAdminRevenueContext(message) {
   };
 }
 
+// Real bug (live-reported): "what is available schedule for [tutor] for [student] in
+// the morning" got a malformed, ungrounded answer (e.g. "you can choose this day...
+// from 8am to 8am") because no scheduling-SUGGESTION topic existed at all —
+// buildAdminScheduleContext below only ever lists already-booked sessions, never a
+// tutor's actual availability. This is intentionally gated on an "availability" word
+// (not just "schedule" alone), so a plain "what is my schedule" question still falls
+// through to the generic topic below, unaffected.
+//
+// Real bug (live-reported, follow-up): "pwedeng" (a very common conjugated form of
+// "pwede") never matched `\bpwede\b` at all — word-boundary mismatch, since the plain
+// word requires the match to END right after "pwede" but "pwedeng" continues with "ng".
+// A mid-conversation scheduling question using this one conjugation fell through
+// completely ungrounded, leaving Gemini to continue the reply from conversation history
+// alone — which is how a later turn produced a flatly false "no such student" claim
+// about a student the system actually has on record (confirmed by an earlier, correctly
+// grounded turn in the same conversation). `pwede\w*` catches "pwede"/"pwedeng"/etc.
+function isScheduleAvailabilityQuestion(normalized) {
+  const asksAvailability = /\b(available|availability|avail|open|free|vacant|puwede\w*|pwede\w*|libre)\b/.test(normalized);
+  const asksSchedule = /\b(schedule|slot|oras|iskedyul)\b/.test(normalized)
+    || extractDayOfWeekFromMessage(normalized) !== null
+    || parseExplicitSlotTimeRange(normalized) !== null;
+  return asksAvailability && asksSchedule;
+}
+
+// Real bug (live-reported): "Full ba ang 8-9AM sa Oct 21?" / "Full ba ang 10-11AM sa Oct
+// 21?" — a direct "is this EXACT date+time slot full" question — never got a real yes/no
+// or a count; the chatbot just told the admin to go check the Schedule/Calendar tab
+// themselves, which defeats the whole point of a suggestion feature. No grounded topic
+// recognized this question shape at all (isScheduleAvailabilityQuestion needs an
+// "available"/"open"/etc. word AND a "schedule"/"oras" word, neither of which "full ba"
+// phrasing contains), so it fell through to an ungrounded deflection. Gated on an
+// explicit H-H AM/PM time range so a generic "is Monday full" without a real slot still
+// falls through unaffected.
+function isSlotCapacityQuestion(normalized) {
+  const asksFull = /\b(full|punong[- ]?puno|puno)\b/.test(normalized);
+  const hasExplicitTimeRange = parseExplicitSlotTimeRange(normalized) !== null;
+  return asksFull && hasExplicitTimeRange;
+}
+
+/** "8-9am", "8:00-9:00 am", "10 to 11 AM" -> {startTime:"08:00", endTime:"09:00"} — a
+ *  single trailing AM/PM suffix is read as applying to BOTH numbers, matching how the
+ *  standard 1-on-1 hourly slots (8-9, 9-10, ... 4-5) are naturally phrased; returns null
+ *  when no such explicit range is present. */
+function parseExplicitSlotTimeRange(normalized) {
+  const m = normalized.match(/\b(\d{1,2})(?::(\d{2}))?\s*(?:-|to)\s*(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\b/i);
+  if (!m) return null;
+  const [, h1Raw, m1Raw, h2Raw, m2Raw, period] = m;
+  const isPM = period.toLowerCase() === 'p';
+  const to24 = (hRaw) => {
+    let h = parseInt(hRaw, 10);
+    if (!Number.isFinite(h)) return null;
+    if (h === 12) h = 0;
+    return isPM ? h + 12 : h;
+  };
+  const h1 = to24(h1Raw);
+  const h2 = to24(h2Raw);
+  if (h1 === null || h2 === null) return null;
+  const m1 = m1Raw ? parseInt(m1Raw, 10) : 0;
+  const m2 = m2Raw ? parseInt(m2Raw, 10) : 0;
+  const fmt = (h, mins) => `${String(h).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+  return { startTime: fmt(h1, m1), endTime: fmt(h2, m2) };
+}
+
+function dateKeyOfUtc(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Grounds "is this EXACT date+time slot full" in the SAME real, batched slot-availability
+ * computation the Scheduling Wizard's own monthly calendar grid uses
+ * (scheduleController.js's getAvailableTutorsGridForWindow) — never a separate estimate,
+ * so the chatbot can never disagree with what the calendar itself shows for that cell.
+ */
+async function buildAdminSlotCapacityContext(message) {
+  const normalized = normalizeMessage(message);
+  const range = parseScheduleDateRange(message);
+  const timeRange = parseExplicitSlotTimeRange(normalized);
+
+  if (!range || !timeRange) {
+    return {
+      contextText: 'Role: admin\nCould not resolve a specific date and time slot from this capacity question.',
+      fallbackReply: 'Please tell me the exact date and time slot you want me to check, e.g. "is 8-9AM on Oct 21 full?".',
+    };
+  }
+
+  const targetDate = new Date(Date.UTC(range.start.getFullYear(), range.start.getMonth(), range.start.getDate()));
+  const dayOfWeek = targetDate.getUTCDay();
+  const dateLabel = formatFullDateWithWeekday(dateKeyOfUtc(targetDate));
+
+  const grid = await getAvailableTutorsGridForWindow({
+    subjectId: null,
+    existingStudentId: null,
+    days: [dayOfWeek],
+    generationStart: targetDate,
+    subscriptionEnd: targetDate,
+  });
+  const dayEntries = grid[dateKeyOfUtc(targetDate)] || [];
+  const slotEntry = dayEntries.find((s) => s.startTime === timeRange.startTime);
+  const slotLabel = `${formatTimeOfDay12h(timeRange.startTime)}-${formatTimeOfDay12h(timeRange.endTime)} on ${dateLabel}`;
+
+  if (!slotEntry) {
+    return {
+      contextText: `Role: admin\n${slotLabel} is not one of the standard hourly 1-on-1 slots (8 AM-5 PM, hourly, with a lunch break).`,
+      fallbackReply: `${slotLabel} isn't one of the standard 1-on-1 hourly slots (8 AM-5 PM, hourly, with a lunch break), so there's nothing to check there.`,
+    };
+  }
+
+  if (slotEntry.available) {
+    const tutorNames = slotEntry.tutors.map((t) => t.name).join(', ');
+    return {
+      contextText: `Role: admin\n${slotLabel} is NOT full. ${slotEntry.tutors.length} tutor(s) free: ${tutorNames}.`,
+      fallbackReply: `${slotLabel} is not full — ${slotEntry.tutors.length} tutor${slotEntry.tutors.length === 1 ? ' is' : 's are'} free: ${tutorNames}.`,
+    };
+  }
+
+  return {
+    contextText: `Role: admin\n${slotLabel} is full/unavailable. Reason: ${slotEntry.reason || 'No available tutor for this time.'}`,
+    fallbackReply: `${slotLabel} is full — ${slotEntry.reason || 'no tutor is available for this time.'}`,
+  };
+}
+
+function extractTimeOfDayFromMessage(normalized) {
+  if (/\b(morning|umaga)\b/.test(normalized)) return 'morning';
+  if (/\b(afternoon|hapon)\b/.test(normalized)) return 'afternoon';
+  if (/\b(evening|night|gabi)\b/.test(normalized)) return 'evening';
+  return null;
+}
+
+// First-version phrase extraction, scoped to the reported "...for [tutor] for
+// [student]..." shape and simple "kay"/"ni" variants — same iterative, live-testing-
+// driven approach every other name-extraction helper in this file was built with
+// (extractRequestedName, extractRenewProgramTargetName, etc.), not a general NLP parser.
+//
+// Real bug (live-reported, follow-up): the original lookahead only stopped a name
+// capture at another "for/kay/ni", an "in the morning/afternoon/evening" phrase, or the
+// end of the whole message — so a name followed by ANY other trailing clause (a very
+// common shape in a natural follow-up question, e.g. "...kay aviery pag mag start siya ng
+// monday...") never found a place to stop and the match failed entirely, silently
+// dropping the name. Extended with common Filipino function/continuation words that
+// would never themselves be part of a person's name, so the capture now stops cleanly at
+// the first one instead of requiring one specific set of phrasings.
+const SCHEDULING_NAME_STOP_WORDS = 'for|kay|ni|pag|kung|na|ba|mo|ang|yung|kailan|sa|pwede\\w*|gusto|dapat|at|kasi';
+function extractForPhrasesForScheduling(normalized) {
+  const re = new RegExp(
+    `\\b(?:for|kay|ni)\\s+([a-z][a-z\\s.'-]{1,40}?)(?=\\s+(?:${SCHEDULING_NAME_STOP_WORDS})\\b|\\s+in\\s+the\\s+(?:morning|afternoon|evening)\\b|\\s*$)`,
+    'gi'
+  );
+  const out = [];
+  let m;
+  while ((m = re.exec(normalized))) {
+    const phrase = m[1].trim().replace(/[.,]+$/, '').trim();
+    if (phrase) out.push(phrase);
+  }
+  return out;
+}
+
+/** Resolves the tutor named in this scheduling question — tries each "for/kay/ni X"
+ *  phrase first (so it isn't confused with the student's name in the same message),
+ *  then falls back to scanning the whole message for any active tutor's name. */
+async function resolveTutorForScheduling(normalized, phrases) {
+  const activeTutors = await User.find({ role: 'tutor', isActive: true, deletedAt: null }).select('firstName lastName').lean();
+  for (let i = 0; i < phrases.length; i++) {
+    const match = activeTutors.find((t) => nameMatchesAnyPerson(phrases[i], [t]));
+    if (match) return { tutor: match, remainingPhrases: phrases.filter((_, idx) => idx !== i) };
+  }
+  const wholeMessageMatch = activeTutors.find((t) => nameMatchesAnyPerson(normalized, [t]));
+  return { tutor: wholeMessageMatch || null, remainingPhrases: phrases };
+}
+
+/**
+ * Grounds the chatbot's scheduling-SUGGESTION answer in the exact same availability/
+ * conflict logic the real admin Scheduling Wizard uses (utils/scheduleAvailability.js,
+ * itself built on scheduleController.js's canTutorHandleSchedule/
+ * hasStudentScheduleConflict) — never a generic or hallucinated answer. This function
+ * only ever produces descriptive text for Gemini/the fallback reply; nothing here
+ * creates, modifies, or submits an actual Schedule document — admin always finalizes
+ * through the unchanged Scheduling Wizard. Also reconciles the parent's stated
+ * schedule preference (Enrollment.preferredDaysByProgram/preferredSlots) against the
+ * same real availability, when a specific student + their program can be resolved.
+ */
+/** Resolves the student's relevant program for scheduling purposes — EITHER the
+ *  1-on-1 package (ACT102/EXP106) or the Toddlers Playgroup package (TPG101),
+ *  whichever this student actually has. If a message explicitly says "playgroup",
+ *  that's preferred when the student has both; otherwise one-on-one wins (the more
+ *  common "schedule a tutor" question), falling back to Playgroup alone if that's
+ *  all they have. */
+function resolveSchedulingProgramForStudent(studentRecord, normalized) {
+  const packages = studentRecord?.packages || [];
+  const oneOnOnePkg = packages.find((p) => PROGRAM_POLICIES[String(p.programCode || '').toUpperCase()]?.sessionType === 'one-on-one');
+  const playgroupPkg = packages.find((p) => PROGRAM_POLICIES[String(p.programCode || '').toUpperCase()]?.sessionType === 'playgroup');
+  const mentionsPlaygroup = /\bplaygroup\b/.test(normalized);
+  if (mentionsPlaygroup && playgroupPkg) return { programCode: String(playgroupPkg.programCode).toUpperCase(), sessionType: 'playgroup' };
+  if (oneOnOnePkg) return { programCode: String(oneOnOnePkg.programCode).toUpperCase(), sessionType: 'one-on-one' };
+  if (playgroupPkg) return { programCode: String(playgroupPkg.programCode).toUpperCase(), sessionType: 'playgroup' };
+  return null;
+}
+
+/** "2026-10-20" or any date-key -> "Tuesday, October 20, 2026", joined with the
+ *  others when a slot has more than one real upcoming date — "and more" is appended
+ *  only when there genuinely may be further dates beyond the ones listed (see
+ *  scheduleAvailability.js's computeOpenSlotsForTutor hasMore flag). */
+function formatSlotDateList(entry) {
+  const list = entry.dates.map(formatFullDateWithWeekday).join('; ');
+  return entry.hasMore ? `${list} (and possibly more weeks)` : list;
+}
+
+const SCHEDULE_DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+/** Scans for an explicit English weekday name ("...sa Monday", "...on Monday") — used
+ *  by the roster-wide tutor-availability question below ("which tutors are free for
+ *  Playgroup on Monday"), which names a DAY but deliberately no specific tutor. */
+function extractDayOfWeekFromMessage(normalized) {
+  for (const name of SCHEDULE_DAY_NAMES) {
+    if (new RegExp(`\\b${name}\\b`).test(normalized)) return dayNameToNumber(name);
+  }
+  return null;
+}
+
+/** Like extractDayOfWeekFromMessage, but returns EVERY distinct weekday named in the
+ *  message (Sun..Sat order) — "pag mag start siya ng monday, tuesday, at wednesday"
+ *  names three candidate starting days at once, not just one. */
+function extractAllDaysOfWeekFromMessage(normalized) {
+  const out = [];
+  for (const name of SCHEDULE_DAY_NAMES) {
+    if (new RegExp(`\\b${name}\\b`).test(normalized)) {
+      const dayOfWeek = dayNameToNumber(name);
+      if (dayOfWeek !== null && !out.includes(dayOfWeek)) out.push(dayOfWeek);
+    }
+  }
+  return out;
+}
+
+function mentionsPlaygroupProgram(normalized) {
+  return /\bplaygroup\b/.test(normalized);
+}
+
+function mentionsOneOnOneProgram(normalized) {
+  return /\b(academic tutorial|examination preparation|exam prep|one[- ]on[- ]one|1[- ]on[- ]1)\b/.test(normalized);
+}
+
+/**
+ * Real bug (live-reported): "anong oras may available na tutors para sa Toddlers
+ * Playgroup sa Monday?" — asking about TUTORS IN GENERAL for a program, not one named
+ * tutor — got the generic operating-hours answer instead of real data, because
+ * buildAdminScheduleAvailabilityContext only ever handled a NAMED tutor and otherwise
+ * deflected with "please tell me which tutor", which Gemini then had nothing concrete to
+ * build on and fell back to reciting whatever general hours it already knew. Fix: when
+ * no tutor is named but the message DOES name a program (optionally a day too), run the
+ * SAME per-tutor computeOpenSlotsForTutor computation a named-tutor question already
+ * uses, once per active tutor, and report which ones are actually free — real per-tutor
+ * data, the same way a named-tutor question already gets, not a generic fallback.
+ */
+/**
+ * Real bug (live-reported), follow-up — "sino ang available na tutor na pwede para kay
+ * [student] pag mag start siya ng monday, tuesday, at wednesday sa 8-9am... kung hindi
+ * available, bigyan mo ako ng tamang date" asked for tutors filtered by STUDENT + DAYS +
+ * TIME, with a fallback-date request if none of those days work — but got back a flat,
+ * completely unfiltered "here is the list of tutors" (the roster's names with zero
+ * availability check at all), because this question's "sino...tutor" phrasing also
+ * satisfies isAdminTutorListQuestion, which was checked ahead of schedule_availability
+ * and won by pure topic-priority, even though the question plainly has real filtering
+ * criteria the roster-listing topic has no way to apply. Fixed in two places: (1)
+ * detectGroundedTopic now skips the plain tutor-roster topic when the message also
+ * carries scheduling-filter signals (a day name, an explicit time range, or a "for/kay/ni
+ * X" phrase), so it falls through to here instead; (2) this function now accepts
+ * `studentId`/`daysOfWeek` (plural)/`explicitRange` so the SAME real per-tutor
+ * availability computation can be filtered by all of them together, and — when none of
+ * the specifically-requested days turn up anything — falls back to the single earliest
+ * genuinely open date on ANY day, so "give me the right date to start instead" has a real
+ * answer rather than silence.
+ */
+async function buildAdminTutorRosterAvailabilityContext({ normalized, timeOfDay, dayOfWeek, daysOfWeek: daysOfWeekParam, studentId, studentName, explicitRange, programOverride }) {
+  // `programOverride` wins when given — set when the program was resolved from the
+  // STUDENT's own real enrollment rather than a literal "playgroup"/"academic tutorial"
+  // word in the message, so a question like "who's free for [student] on Mon/Tue/Wed at
+  // 8-9am" doesn't need to name the program a second time.
+  const isPlaygroup = programOverride ? programOverride.sessionType === 'playgroup' : mentionsPlaygroupProgram(normalized);
+  const programLabel = isPlaygroup ? 'Toddlers Playgroup' : '1-on-1 programs (Academic Tutorial / Examination Preparation)';
+  const slotWindows = isPlaygroup ? PROGRAM_POLICIES.TPG101.fixedSlots : undefined;
+  const daysOfWeek = Array.isArray(daysOfWeekParam) && daysOfWeekParam.length
+    ? daysOfWeekParam
+    : (dayOfWeek !== null && dayOfWeek !== undefined ? [dayOfWeek] : undefined);
+  const dayLabels = (daysOfWeek || []).map(dayNumberToLabel);
+  const dayLabel = dayLabels.length ? dayLabels.join('/') : null;
+  const forWhom = studentName ? ` for ${studentName}` : '';
+
+  const activeTutors = await User.find({ role: 'tutor', isActive: true, deletedAt: null })
+    .select('firstName lastName employmentType availability')
+    .lean();
+
+  const matchesExplicitRange = (slot) => !explicitRange || (slot.startTime === explicitRange.startTime && slot.endTime === explicitRange.endTime);
+
+  const computeForDays = async (daysFilter) => {
+    const perTutor = [];
+    for (const tutor of activeTutors) {
+      // eslint-disable-next-line no-await-in-loop
+      const openSlots = (await computeOpenSlotsForTutor({ tutorId: tutor._id, subjectId: null, studentId: studentId || null, timeOfDay, slotWindows, daysOfWeek: daysFilter, anchorDate: new Date() }))
+        .filter(matchesExplicitRange);
+      if (openSlots.length) perTutor.push({ tutor, slots: openSlots });
+    }
+    return perTutor;
+  };
+
+  const perTutor = await computeForDays(daysOfWeek);
+
+  const scopeSuffix = `${dayLabel ? ` on ${dayLabel}` : ''}${timeOfDay ? ` in the ${timeOfDay}` : ''}${explicitRange ? ` at ${formatTimeOfDay12h(explicitRange.startTime)}-${formatTimeOfDay12h(explicitRange.endTime)}` : ''}`;
+
+  if (!perTutor.length) {
+    // Fallback: the specifically-requested day(s) are genuinely full — look for the
+    // single earliest open date on ANY day instead, so there's still a real, concrete
+    // answer to "when CAN they start" rather than a dead end.
+    let fallbackLine = '';
+    if (daysOfWeek && daysOfWeek.length) {
+      const anyDay = await computeForDays(undefined);
+      let earliest = null;
+      for (const { tutor, slots } of anyDay) {
+        for (const slot of slots) {
+          for (const dateKey of slot.dates) {
+            if (!earliest || dateKey < earliest.dateKey) earliest = { dateKey, tutor, slot };
+          }
+        }
+      }
+      if (earliest) {
+        fallbackLine = `The earliest real open date on any day${forWhom} is ${formatFullDateWithWeekday(earliest.dateKey)} with ${buildFullName(earliest.tutor)} (${earliest.slot.dayLabel} ${formatTimeOfDay12h(earliest.slot.startTime)}-${formatTimeOfDay12h(earliest.slot.endTime)}).`;
+      }
+    }
+    return {
+      contextText: `Role: admin\nNo tutors have real open availability${forWhom} for ${programLabel}${scopeSuffix}.${fallbackLine ? `\n${fallbackLine}` : ''}`,
+      fallbackReply: `No tutors currently have real open availability${forWhom} for ${programLabel}${scopeSuffix}, based on their actual schedules.${fallbackLine ? ` ${fallbackLine}` : ''}`,
+    };
+  }
+
+  const detailLines = perTutor.map(({ tutor, slots }) =>
+    `${buildFullName(tutor)}: ${slots.map((s) => `${s.dayLabel} ${formatTimeOfDay12h(s.startTime)}-${formatTimeOfDay12h(s.endTime)} (${formatSlotDateList(s)})`).join('; ')}`
+  );
+  // Real bug (live-reported): this summary (the actual fallbackReply text, what the
+  // admin sees when Gemini isn't rewording it) used to name only the bare weekday
+  // ("Wed 8:00 AM-9:00 AM"), with no real calendar date attached — across a month-long
+  // recurring schedule, a bare "Wed" doesn't say WHICH Wednesday. Every day mentioned
+  // here now carries its real date too, same as detailLines above and the named-tutor
+  // reply path already does.
+  const summaryList = perTutor.map(({ tutor, slots }) =>
+    `${buildFullName(tutor)} (${slots.map((s) => `${s.dayLabel} ${formatTimeOfDay12h(s.startTime)}-${formatTimeOfDay12h(s.endTime)}: ${formatSlotDateList(s)}`).join('; ')})`
+  ).join(', ');
+
+  return {
+    contextText: [
+      'Role: admin',
+      `Real per-tutor availability${forWhom} for ${programLabel}${scopeSuffix}:`,
+      ...detailLines,
+    ].join('\n'),
+    fallbackReply: `Tutors actually available${forWhom} for ${programLabel}${scopeSuffix}: ${summaryList}.`,
+  };
+}
+
+async function buildAdminScheduleAvailabilityContext(message) {
+  const normalized = normalizeMessage(message);
+  const timeOfDay = extractTimeOfDayFromMessage(normalized);
+  const phrases = extractForPhrasesForScheduling(normalized);
+  const { tutor, remainingPhrases } = await resolveTutorForScheduling(normalized, phrases);
+
+  // Resolve a named student EVEN WHEN no tutor was named — real bug (live-reported):
+  // when tutor resolution failed, this function used to deflect with a bare "please tell
+  // me which tutor" and never even attempted the student lookup, leaving Gemini with
+  // nothing concrete about the student either. With nothing real to answer from, Gemini
+  // continued the reply purely from conversation history and, on a later turn, produced a
+  // flatly false "no such student exists" claim about a student that DOES exist in the
+  // system (proven by a subsequent, correctly-grounded turn in that same conversation).
+  // Resolving the student here — before branching on whether a tutor was found — means
+  // every scheduling-availability reply now carries a real, checked fact about them
+  // either way, closing off that specific hallucination.
+  const studentPhrase = remainingPhrases.find((p) => p) || null;
+  let studentRecord = null;
+  let studentNotFound = false;
+  let studentAmbiguous = false;
+  if (studentPhrase) {
+    const found = await findChildEnrollmentGroupByName(studentPhrase);
+    if (!found.found) studentNotFound = true;
+    else if (found.ambiguous) studentAmbiguous = true;
+    else studentRecord = found.records[0];
+  }
+
+  // Keep the existing "can't find"/"which one" behavior this codebase already uses
+  // for an admin-named student elsewhere (buildAdminRenewProgramContext) — never
+  // silently fall through to a generic/ambiguous answer when a name WAS given but
+  // didn't resolve.
+  if (studentNotFound) {
+    return {
+      contextText: `Role: admin\nNo student record found matching "${studentPhrase}".`,
+      fallbackReply: `I could not find a student matching "${studentPhrase}".`,
+    };
+  }
+  if (studentAmbiguous) {
+    return {
+      contextText: `Role: admin\nMore than one student matches "${studentPhrase}".`,
+      fallbackReply: `More than one student matches "${studentPhrase}". Please specify the full name.`,
+    };
+  }
+
+  const studentName = studentRecord ? childDisplayName(studentRecord) : null;
+  const studentIsSchedulable = studentRecord && (studentRecord.status === 'approved' || studentRecord.status === 'active');
+  const resolvedProgramEarly = studentIsSchedulable ? resolveSchedulingProgramForStudent(studentRecord, normalized) : null;
+
+  if (!tutor) {
+    // "which tutors are available for Playgroup on Monday", or "who's free for [a named
+    // student, program resolved from THEIR OWN enrollment] on Mon/Tue/Wed at 8-9am" — a
+    // program and/or a real day/time filter is present instead of one specific tutor;
+    // ground it in real per-tutor data (buildAdminTutorRosterAvailabilityContext above)
+    // rather than either deflecting or (the actual reported bug) letting the simpler
+    // "sino ang mga tutors" roster-listing topic hijack a question that has real
+    // filtering criteria — see detectGroundedTopic's own guard against exactly that.
+    const daysOfWeek = extractAllDaysOfWeekFromMessage(normalized);
+    const explicitRange = parseExplicitSlotTimeRange(normalized);
+    const hasFilterSignal = daysOfWeek.length > 0 || explicitRange !== null || timeOfDay !== null;
+
+    if (mentionsPlaygroupProgram(normalized) || mentionsOneOnOneProgram(normalized) || (studentRecord && (resolvedProgramEarly || hasFilterSignal))) {
+      return buildAdminTutorRosterAvailabilityContext({
+        normalized,
+        timeOfDay,
+        daysOfWeek: daysOfWeek.length ? daysOfWeek : undefined,
+        explicitRange,
+        studentId: studentRecord?.student ? String(studentRecord.student) : null,
+        studentName,
+        programOverride: resolvedProgramEarly,
+      });
+    }
+    return {
+      contextText: studentRecord
+        ? `Role: admin\nCould not resolve a specific tutor name from this scheduling-availability question. Student "${studentName}" was found on record (no program resolved to filter by).`
+        : 'Role: admin\nCould not resolve a specific tutor name from this scheduling-availability question.',
+      fallbackReply: 'Please tell me which tutor you\'d like me to check availability for, e.g. "available schedule for Jake Soriano for Maria Cruz in the morning".',
+    };
+  }
+
+  const tutorName = buildFullName(tutor);
+
+  // Scope suggestions to students who still need scheduling — the EXACT same
+  // eligibility OneOnOneSchedulingWizard.tsx / PlaygroupSchedulingWizard.tsx already
+  // use to build their own "Select a student" dropdowns (isEnrollmentSchedulable +
+  // "not already scheduled for this program"), reused here via
+  // isStudentAlreadyScheduledForProgram so the chatbot and the wizards can never
+  // disagree about who counts as unscheduled. A student whose sessions were deleted
+  // reads as unscheduled again for free (nothing left to match); a student whose
+  // sessions are all completed still counts as scheduled, same as the wizards.
+  let subjectDoc = null;
+  let resolvedProgram = null;
+  if (studentIsSchedulable) {
+    resolvedProgram = resolvedProgramEarly;
+    if (resolvedProgram) {
+      subjectDoc = await Subject.findOne({ code: resolvedProgram.programCode }).select('_id').lean();
+      const studentUserIdForCheck = studentRecord.student ? String(studentRecord.student) : null;
+      const alreadyScheduled = await isStudentAlreadyScheduledForProgram(studentUserIdForCheck, resolvedProgram.programCode);
+      if (alreadyScheduled) {
+        const programLabel = PROGRAM_POLICIES[resolvedProgram.programCode]?.sessionType === 'playgroup' ? 'Toddlers Playgroup' : resolvedProgram.programCode;
+        return {
+          contextText: `Role: admin\n${studentName} already has a schedule for ${programLabel} — scheduling suggestions only cover students still waiting to be scheduled.`,
+          fallbackReply: `${studentName} already has a schedule for ${programLabel}. Scheduling suggestions only cover students who are still waiting to be scheduled — you can review or adjust their existing sessions directly in the Schedule tab.`,
+        };
+      }
+    }
+  }
+
+  const studentUserId = studentRecord?.student ? String(studentRecord.student) : null;
+  // Anchor "next occurrence" math on the wizard's own starting-date convention: the
+  // parent's preferred start date when one exists and isn't already in the past,
+  // otherwise today — matching OneOnOneSchedulingWizard.tsx's own default.
+  const anchorDate = (() => {
+    const preferred = studentRecord?.preferredStartDate ? new Date(studentRecord.preferredStartDate) : null;
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    return preferred && preferred >= today ? preferred : today;
+  })();
+  const slotWindows = resolvedProgram?.sessionType === 'playgroup' ? PROGRAM_POLICIES.TPG101.fixedSlots : undefined;
+
+  const openSlots = await computeOpenSlotsForTutor({
+    tutorId: tutor._id,
+    subjectId: subjectDoc?._id || null,
+    studentId: studentUserId,
+    timeOfDay,
+    slotWindows,
+    anchorDate,
+  });
+  const slotLines = openSlots.map((s) => `${s.dayLabel} ${formatTimeOfDay12h(s.startTime)}-${formatTimeOfDay12h(s.endTime)}: ${formatSlotDateList(s)}`);
+
+  const contextLines = ['Role: admin', `Tutor: ${tutorName}`];
+  if (studentName) contextLines.push(`Student: ${studentName}`);
+  if (timeOfDay) contextLines.push(`Requested time of day: ${timeOfDay}`);
+  contextLines.push(slotLines.length ? `Real open slots, with actual calendar dates (this is the actual, suggest-only availability — admin still finalizes in the Scheduling Wizard):\n${slotLines.join('\n')}` : 'Real open slots: none found for this request.');
+
+  let fallbackReply = slotLines.length
+    ? `${tutorName} is actually available${studentName ? ` for ${studentName}` : ''}${timeOfDay ? ` in the ${timeOfDay}` : ''} on: ${slotLines.join('; ')}. You can finalize this in the Scheduling Wizard.`
+    : `${tutorName} has no open${timeOfDay ? ` ${timeOfDay}` : ''} slots${studentName ? ` for ${studentName}` : ''} right now, based on their actual availability and existing schedule.`;
+
+  // Reconcile the parent's stated preference against real availability, if we were
+  // able to resolve the exact program the preference was recorded for.
+  if (resolvedProgram) {
+    const programCodeForReconcile = resolvedProgram.programCode;
+    const preferredEntry = (studentRecord.preferredDaysByProgram || []).find(
+      (p) => String(p.programCode || '').toUpperCase() === programCodeForReconcile
+    );
+    const preferredSlot = (studentRecord.preferredSlots || []).find(
+      (p) => String(p.programCode || '').toUpperCase() === programCodeForReconcile
+    );
+    if (preferredEntry?.days?.length) {
+      const availableDays = [];
+      const blockedDays = [];
+      for (const dayName of preferredEntry.days) {
+        const dayOfWeek = dayNameToNumber(dayName);
+        if (dayOfWeek === null) continue;
+        const openSlotThatDay = openSlots.find((s) => s.dayOfWeek === dayOfWeek);
+        const startTime = preferredSlot?.startTime || openSlotThatDay?.startTime;
+        const endTime = preferredSlot?.endTime || openSlotThatDay?.endTime;
+        const dayLabel = dayNumberToLabel(dayOfWeek);
+        if (!startTime || !endTime) {
+          blockedDays.push({ dayLabel, reason: 'No matching availability window', dateLabel: null });
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const check = await checkSpecificDaySlot({ tutorId: tutor._id, subjectId: subjectDoc?._id || null, studentId: studentUserId, dayOfWeek, startTime, endTime, anchorDate });
+        const dateLabel = formatFullDateWithWeekday(check.date);
+        if (check.ok) availableDays.push({ dayLabel, dateLabel });
+        else blockedDays.push({ dayLabel, reason: check.reason, dateLabel });
+      }
+
+      const preferredDayLabelSet = new Set(preferredEntry.days.map((d) => dayNumberToLabel(dayNameToNumber(d))));
+      const alternativeSlots = openSlots.filter((s) => !preferredDayLabelSet.has(s.dayLabel));
+      const alternativeDateLabels = alternativeSlots.map((s) => formatSlotDateList(s));
+
+      contextLines.push(`Parent's preferred days for ${programCodeForReconcile}: ${[...preferredDayLabelSet].join('/')}.`);
+      if (availableDays.length) contextLines.push(`Preferred days that ARE actually available: ${availableDays.map((d) => d.dateLabel).join('; ')}.`);
+      if (blockedDays.length) contextLines.push(`Preferred days that are NOT available: ${blockedDays.map((b) => `${b.dateLabel || b.dayLabel} (${b.reason})`).join('; ')}.`);
+      if (alternativeDateLabels.length) contextLines.push(`Other real open days not originally preferred: ${alternativeDateLabels.join('; ')}.`);
+
+      if (blockedDays.length && availableDays.length) {
+        fallbackReply += ` The parent preferred ${[...preferredDayLabelSet].join('/')} — ${availableDays.map((d) => d.dateLabel).join('; ')} ${availableDays.length === 1 ? 'is' : 'are'} available but ${blockedDays.map((b) => b.dateLabel || b.dayLabel).join('; ')} ${blockedDays.length === 1 ? 'is' : 'are'} not, since ${blockedDays[0].reason.toLowerCase()}.`;
+        if (alternativeDateLabels.length) fallbackReply += ` ${alternativeDateLabels.join('; ')} ${alternativeDateLabels.length === 1 ? 'is' : 'are'} available instead if you'd like to consider ${alternativeDateLabels.length === 1 ? 'that' : 'those'}.`;
+      } else if (blockedDays.length && !availableDays.length) {
+        fallbackReply += ` None of the parent's preferred days (${[...preferredDayLabelSet].join('/')}) are actually available (${blockedDays.map((b) => `${b.dateLabel || b.dayLabel}: ${b.reason}`).join('; ')}).`;
+        if (alternativeDateLabels.length) fallbackReply += ` ${alternativeDateLabels.join('; ')} ${alternativeDateLabels.length === 1 ? 'is' : 'are'} available instead.`;
+      } else if (availableDays.length) {
+        fallbackReply += ` Good news — all of the parent's preferred days (${availableDays.map((d) => d.dateLabel).join('; ')}) are available.`;
+      }
+    }
+  }
+
+  return { contextText: contextLines.join('\n'), fallbackReply };
+}
+
 async function buildAdminScheduleContext(message = '') {
   const range = parseScheduleDateRange(message);
 
@@ -6284,6 +7375,13 @@ async function buildAdminScheduleContext(message = '') {
     ].join('\n'),
     fallbackReply: `The next session is on ${formatDate(sessions[0].date)} from ${sessions[0].startTime} to ${sessions[0].endTime} for ${sessions[0].subject?.name || 'Unknown subject'}.`
   };
+}
+
+// Shared by both the parent branch (above) and the tutor branch (Request 1, Issue 5) —
+// extracted so a tutor asking "what's her absent count" / "attendance report for Luna"
+// is recognized by the EXACT same rule a parent's equivalent question already is.
+function isAttendanceQuestion(normalized) {
+  return /\battendance\b|\babsen(t|ces?|teeism)?\b|\bpresent\b.*(class|today|session|niya|siya)|\blumiban\b|\bdumalo\b|\bdalo\b|\bpumasok\b.*(ba|klase)/.test(normalized);
 }
 
 function isParentChildProgressQuestion(normalized) {
@@ -6934,9 +8032,12 @@ async function buildParentAttendanceContext(parentId, message, history = []) {
   }
 
   // A Toddlers Playgroup session's attendance is per-child (attendanceByStudent), not a
-  // single whole-session value — attendanceStatusForStudent resolves the right one for
-  // THIS child on either session shape, one-on-one or group (see schedulingPolicy.js).
-  const statusFor = (s) => attendanceStatusForStudent(s, matched.student);
+  // single whole-session value — effectiveAttendanceStatusForStudent resolves the right
+  // one for THIS child on either session shape, one-on-one or group (see
+  // schedulingPolicy.js), and also layers the existing 3-day-grace auto-absent rule on
+  // top so an old unmarked session is counted as Absent here too, not left "unmarked"
+  // forever (real bug, same conflation as buildTutorAttendanceContext used to have).
+  const statusFor = (s) => effectiveAttendanceStatusForStudent(s, matched.student);
   const present = sessions.filter((s) => statusFor(s) === 'present').length;
   const absent = sessions.filter((s) => statusFor(s) === 'absent').length;
   const unmarked = sessions.filter((s) => statusFor(s) === 'unmarked').length;
@@ -7120,9 +8221,82 @@ async function getCarriedOverParentTopic(parentId, message, history = []) {
 // down classifier service already does elsewhere in this file ("a down service...
 // falls through unchanged") — the pipeline still continues to Gemini (ungrounded) or
 // the deterministic fallback instead of failing outright.
+// Real bug (live-reported), Request 1 Issue 4 — asking about "Jake" correctly triggered
+// a "more than one student matches" disambiguation. But replying with just the
+// clarified name alone ("Jake Soriano", then "Jake Porbile pala") both got "I cannot
+// find a student named [name]", even though Jake Porbile genuinely exists and a later
+// FULL-SENTENCE question about him resolved correctly. Root cause: a bare name reply
+// carries none of isScheduleAvailabilityQuestion's trigger words (available/oras/
+// schedule/etc.), so detectGroundedTopic returns null for it and the real
+// resolveTutorForScheduling/findChildEnrollmentGroupByName lookup a full question goes
+// through never runs at all — the bare reply falls through to an ungrounded, generic
+// "can't find" answer instead. Mirrors getPendingParentDisambiguationTopic/
+// getCarriedOverParentTopic's existing pattern for the parent side: find the TRUE
+// original question further back in history (skipping over any earlier bare-name
+// attempts that also failed), re-derive the SAME ambiguous/not-found student phrase a
+// full question already extracts, and splice the clarified name into THAT original
+// question — so the exact same real lookup runs again, this time unambiguously, with
+// the tutor/time-of-day context fully preserved.
+function looksLikeNameClarificationNeeded(assistantReply) {
+  const t = String(assistantReply || '').toLowerCase();
+  return /(more than one|multiple student|which (one|student)|please specify the full name|could not find|cannot find|couldn.?t find|no student (record )?(found|matching)|not sure (which|who))/.test(t);
+}
+
+async function getCarriedOverAdminScheduleAvailabilityMessage(message, history = []) {
+  const items = Array.isArray(history) ? history.slice() : [];
+  if (!items.length) return null;
+
+  const lastAssistant = [...items].reverse().find((item) => item && item.role === 'assistant' && typeof item.content === 'string');
+  if (!lastAssistant || !looksLikeNameClarificationNeeded(lastAssistant.content)) return null;
+
+  const trimmed = String(message || '').trim();
+  if (!trimmed || trimmed.split(/\s+/).length > 6) return null; // only a short, bare reply counts
+  const normalizedCurrent = normalizeMessage(trimmed);
+  if (isScheduleAvailabilityQuestion(normalizedCurrent)) return null; // a real new question, leave it alone
+
+  // Walk backward through EVERY prior user turn (not just the one immediately before the
+  // last assistant reply) — a second bare-name attempt sits between this message and the
+  // TRUE original question, after a first bare-name attempt also failed.
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (!item || item.role !== 'user' || typeof item.content !== 'string' || !item.content.trim()) continue;
+    const original = item.content;
+    const normalizedOriginal = normalizeMessage(original);
+    if (!isScheduleAvailabilityQuestion(normalizedOriginal)) continue;
+
+    const phrases = extractForPhrasesForScheduling(normalizedOriginal);
+    // eslint-disable-next-line no-await-in-loop
+    const { remainingPhrases } = await resolveTutorForScheduling(normalizedOriginal, phrases);
+    const studentPhrase = remainingPhrases.find((p) => p);
+    if (!studentPhrase) return null;
+    const clarifiedName = trimmed.replace(/\b(pala|po|na lang|nalang)\b/gi, '').trim();
+    if (!clarifiedName) return null;
+
+    // Position-aware splice, not a bare substring replace — a short name like "Jake" can
+    // be a strict substring of a longer one ("Jake Soriano", the tutor's own name in the
+    // SAME sentence), so a plain string.replace could silently clobber the tutor's name
+    // instead of the student placeholder. Re-running extractForPhrasesForScheduling's own
+    // pattern directly against the ORIGINAL (un-normalized) text gives the exact span of
+    // the SAME "for/kay/ni X" occurrence the student phrase was extracted from.
+    const studentPhraseIndex = phrases.indexOf(studentPhrase);
+    if (studentPhraseIndex === -1) return null;
+    const forPhraseRe = /\b(?:for|kay|ni)\s+([a-z][a-z\s.'-]{1,40}?)(?=\s+(?:for|kay|ni)\b|\s+in\s+the\s+(?:morning|afternoon|evening)\b|\s*$)/gi;
+    const matches = [];
+    let fm;
+    while ((fm = forPhraseRe.exec(original))) matches.push(fm);
+    const targetMatch = matches[studentPhraseIndex];
+    if (!targetMatch) return null;
+    const groupStart = targetMatch.index + targetMatch[0].indexOf(targetMatch[1]);
+    const groupEnd = groupStart + targetMatch[1].length;
+    return `${original.slice(0, groupStart)}${clarifiedName}${original.slice(groupEnd)}`;
+  }
+  return null;
+}
+
 async function getGroundedChatContext(user, message, history = []) {
   try {
     let topic = detectGroundedTopic(user, message);
+    let effectiveMessage = message;
 
     if (!topic && user?.role === 'parent') {
       topic = getPendingParentDisambiguationTopic(history);
@@ -7132,11 +8306,19 @@ async function getGroundedChatContext(user, message, history = []) {
       topic = await getCarriedOverParentTopic(user._id, message, history);
     }
 
+    if (!topic && (user?.role === 'admin' || user?.role === 'super_admin')) {
+      const carriedOverMessage = await getCarriedOverAdminScheduleAvailabilityMessage(message, history);
+      if (carriedOverMessage) {
+        topic = 'schedule_availability';
+        effectiveMessage = carriedOverMessage;
+      }
+    }
+
     if (!topic) {
       return null;
     }
 
-    const context = await resolveGroundedContextForTopic(user, message, topic, history);
+    const context = await resolveGroundedContextForTopic(user, effectiveMessage, topic, history);
     if (context && !context.topic) {
       // Attach the resolved topic so callers (audit logging) know which record type was read.
       context.topic = topic;
@@ -7170,6 +8352,8 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
     if (topic === 'at_risk') return buildTutorAtRiskContext(user._id, message);
     if (topic === 'wellbeing_check') return buildTutorWellbeingCheckContext(user._id, message);
     if (topic === 'schedule') return buildTutorScheduleContext(user._id, message);
+    if (topic === 'attendance') return buildTutorAttendanceContext(user._id, message);
+    if (topic === 'my_students') return buildTutorStudentListContext(user._id);
     if (topic === 'payments') {
       return {
         contextText: 'Role: tutor\nTutors do not manage student payment verification in this system.',
@@ -7190,7 +8374,10 @@ async function resolveGroundedContextForTopic(user, message, topic, history = []
     if (topic === 'schedule') return buildAdminScheduleContext(message);
     if (topic === 'renew_program') return buildAdminRenewProgramContext(message);
     if (topic === 'tutors') return buildAdminTutorContext();
+    if (topic === 'unscheduled_students') return buildAdminUnscheduledStudentsContext();
     if (topic === 'revenue') return buildAdminRevenueContext(message);
+    if (topic === 'schedule_availability') return buildAdminScheduleAvailabilityContext(message);
+    if (topic === 'slot_capacity') return buildAdminSlotCapacityContext(message);
   }
 
   return null;
@@ -7416,6 +8603,11 @@ const NON_NAME_WORDS = new Set([
   // through them too, inflating a correct 2-word name into a 4-word non-name candidate
   // ("ken jen gusto ko") that could never match anyone.
   'gusto', 'malaman', 'alam', 'kailangan', 'dapat',
+  // Real bug (live-reported, regression): "can you give me my student list?" — "my
+  // student" matched the relationship cue, and with no real name following it, the
+  // greedy capture grabbed the next word, "list", as if it were a name. These are the
+  // generic continuation words for a ROSTER/LIST request, never a person's name.
+  'list', 'lists', 'roster', 'listahan', 'lahat',
 ]);
 
 // A question/statement ABOUT the child ("can my child bring a snack to class", "can my
@@ -7588,6 +8780,21 @@ function getNamedStudentAccessDecline(languageProfile, isPublic) {
  * lookup path (getRoleAwarePersonInfoReply).
  */
 async function verifyNamedStudentReference(req, message, history = []) {
+  // Real bug (live-reported, regression): "can you give me my student list?" tripped
+  // CHILD_NAME_REFERENCE_PATTERNS' first alternative (/\b(?:my|our)\s+(?:...|student|...)
+  // (?:'s)?\s+(?:name\s+is\s+|...)?([a-z][a-z.'-]*...)/) — "my student" matched the cue,
+  // the optional "name is/is/named/called" group matched nothing, and the capture then
+  // grabbed the very next word, "list", as if it were the name itself. "list" obviously
+  // isn't anyone's name, so the lookup failed and this guard wrongly declined a question
+  // that was never about one specific student at all. Checked BEFORE name extraction: a
+  // tutor asking for their whole roster (the same general intent isTutorStudentListQuestion
+  // already recognizes across English/Tagalog/Taglish phrasings, not just this one exact
+  // wording) is never a named-individual reference, however it's worded, so this never
+  // even attempts to extract a name from it.
+  if (req?.user?.role === 'tutor' && isTutorStudentListQuestion(normalizeMessage(message))) {
+    return null;
+  }
+
   const candidateName = findChildNameReferenceInConversation(message, history);
   if (!candidateName) {
     return null;
@@ -7917,6 +9124,19 @@ async function handleLessonPrepRequest(req, message) {
   return reply;
 }
 
+// Real bug (live-reported, 3 consecutive attempts): the tutor "who are my students"
+// reply must be exact, field-labeled Name/Program/Student ID/Schedule blocks — but
+// Gemini, given that same text as grounding data, reliably rewrote it into a narrative
+// sentence ("Si Leo Soriano na may programang Toddlers Playgroup.") every single time,
+// no matter how the system prompt instructed it to preserve formatting. There is no
+// reliable prompt-engineering fix for an LLM choosing to "helpfully" rephrase structured
+// data — the only guarantee is to never hand it to the LLM at all. Topics in this set
+// skip generateChatbotLlmReply (and therefore Gemini) entirely and return
+// groundedContext.fallbackReply byte-for-byte; the deterministic fallback pipeline
+// (getResolvedReply/getOllamaBypassReply) already prioritizes the same topics the same
+// way for when Gemini is unreachable, so this stays consistent either path.
+const EXACT_PASSTHROUGH_TOPICS = new Set(['my_students']);
+
 /**
  * Assembles the chatbot's system prompt + conversation contents and calls Gemini once
  * (via geminiClient.generateChatbotReply). Replaced the old phi/Ollama transport — the
@@ -7941,6 +9161,10 @@ async function generateChatbotLlmReply({
   responsePreference,
   history,
 }) {
+  if (groundedContext?.topic && EXACT_PASSTHROUGH_TOPICS.has(groundedContext.topic) && groundedContext.fallbackReply) {
+    return groundedContext.fallbackReply;
+  }
+
   // Task 26 restricted this to English only, because the old phi model (via Ollama)
   // produced unreliable, grammatically broken Filipino/Taglish. Gemini handles
   // Filipino/Taglish well, so that restriction was removed when the chatbot moved to
@@ -8819,5 +10043,36 @@ module.exports = {
   buildParentAttendanceContext,
   buildParentGradesContext,
   getCarriedOverParentTopic,
+  // Request 1 — AI scheduling suggestions, exported for test/chatbot-schedule-availability.test.js
+  isScheduleAvailabilityQuestion,
+  extractTimeOfDayFromMessage,
+  extractForPhrasesForScheduling,
+  resolveTutorForScheduling,
+  resolveSchedulingProgramForStudent,
+  buildAdminScheduleAvailabilityContext,
+  // Request 1 follow-up fixes — exported for test/chatbot-schedule-availability-followup.test.js
+  isSlotCapacityQuestion,
+  parseExplicitSlotTimeRange,
+  buildAdminSlotCapacityContext,
+  extractDayOfWeekFromMessage,
+  extractAllDaysOfWeekFromMessage,
+  buildAdminTutorRosterAvailabilityContext,
+  getCarriedOverAdminScheduleAvailabilityMessage,
+  looksLikeNameClarificationNeeded,
+  // Request 1 Issue 5 — tutor chatbot attendance reports, exported for
+  // test/chatbot-schedule-availability-followup.test.js
+  isAttendanceQuestion,
+  extractAttendanceNameCandidate,
+  buildTutorAttendanceContext,
+  // Admin "students not yet scheduled" list + tutor "my students" structured list —
+  // exported for test/admin-unscheduled-students.test.js and
+  // test/tutor-student-list.test.js
+  isUnscheduledStudentsListQuestion,
+  buildAdminUnscheduledStudentsContext,
+  isTutorStudentListQuestion,
+  buildTutorStudentListContext,
+  formatStudentScheduleLabel,
+  getResolvedReply,
+  getOllamaBypassReply,
 };
 

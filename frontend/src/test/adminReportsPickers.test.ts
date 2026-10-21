@@ -1,16 +1,19 @@
 /**
- * Admin Reports page — Export month picker (handleExportAll's month filtering) and
- * Generate Report's month/week picker (getCalendarWeeksInMonth's Monday-Sunday calendar
- * math, including clipped partial weeks at a month's start/end).
+ * Admin Reports page — Export's two-step picker (dataset, then time range —
+ * handleExportDataset's filtering/CSV building) and Generate Report's month/week picker
+ * (getCalendarWeeksInMonth's Monday-Sunday calendar math, including clipped partial
+ * weeks at a month's start/end). Generate Report's own picker is untouched by the Export
+ * rework; both still share MonthOption/monthKey/monthLabel/dateInMonth.
  */
 import { describe, it, expect, vi } from "vitest";
 import {
   getCalendarWeeksInMonth,
   dateInMonth,
+  dateInYear,
   monthKey,
   monthLabel,
   sameCalendarDay,
-  handleExportAll,
+  handleExportDataset,
   type MonthOption,
 } from "@/pages/AdminDashboard";
 
@@ -72,6 +75,16 @@ describe("dateInMonth / monthKey / monthLabel", () => {
   });
 });
 
+describe("dateInYear", () => {
+  it("matches a date inside the year, rejects an adjacent year, rejects undefined", () => {
+    expect(dateInYear("2026-06-15T12:00:00.000Z", 2026)).toBe(true);
+    expect(dateInYear("2026-12-31T12:00:00.000Z", 2026)).toBe(true);
+    expect(dateInYear("2025-12-31T12:00:00.000Z", 2026)).toBe(false);
+    expect(dateInYear("2027-01-01T12:00:00.000Z", 2026)).toBe(false);
+    expect(dateInYear(undefined, 2026)).toBe(false);
+  });
+});
+
 describe("sameCalendarDay", () => {
   it("compares calendar day only, ignoring time-of-day", () => {
     const localMidnight = new Date(2026, 9, 5);
@@ -110,41 +123,62 @@ function spyOnCsvDownload() {
   };
 }
 
-describe("handleExportAll: month filtering", () => {
+describe("handleExportDataset: two-step Export (dataset, then Monthly/Yearly/Overall time range)", () => {
   const enrollments = [
     { _id: "e1", studentSnapshot: { firstName: "Sep", lastName: "Child" }, createdAt: "2026-09-15T00:00:00.000Z", status: "approved" },
     { _id: "e2", studentSnapshot: { firstName: "Oct", lastName: "Child" }, createdAt: "2026-10-05T00:00:00.000Z", status: "approved" },
-  ] as unknown as Parameters<typeof handleExportAll>[0];
+    { _id: "e3", studentSnapshot: { firstName: "LastYear", lastName: "Child" }, createdAt: "2025-10-05T00:00:00.000Z", status: "approved" },
+  ] as unknown as Parameters<typeof handleExportDataset>[1];
   const users = [
     { _id: "u1", firstName: "Sep", lastName: "User", email: "sep@example.com", role: "parent", isActive: true, createdAt: "2026-09-10T00:00:00.000Z" },
     { _id: "u2", firstName: "Oct", lastName: "User", email: "oct@example.com", role: "parent", isActive: true, createdAt: "2026-10-10T00:00:00.000Z" },
-  ] as unknown as Parameters<typeof handleExportAll>[1];
+    { _id: "u3", firstName: "LastYear", lastName: "User", email: "lastyear@example.com", role: "tutor", isActive: true, createdAt: "2024-01-01T00:00:00.000Z" },
+  ] as unknown as Parameters<typeof handleExportDataset>[2];
   const payments = [
     { _id: "p1", amount: 1000, status: "verified", createdAt: "2026-09-20T00:00:00.000Z" },
     { _id: "p2", amount: 2000, status: "verified", createdAt: "2026-10-20T00:00:00.000Z" },
-  ] as unknown as Parameters<typeof handleExportAll>[2];
+    { _id: "p3", amount: 3000, status: "verified", createdAt: "2025-10-20T00:00:00.000Z" }, // adjacent year
+    { _id: "p4", amount: 4000, status: "verified", createdAt: "2027-01-05T00:00:00.000Z" }, // adjacent year
+  ] as unknown as Parameters<typeof handleExportDataset>[3];
 
-  it("with no month filter, includes everything (existing full-export behavior unchanged)", () => {
+  it("an Enrollments-only Monthly export contains only that month's enrollment rows — never Payments or Users sections", () => {
     const spy = spyOnCsvDownload();
-    handleExportAll(enrollments, users, payments);
-    const csv = spy.lastCsv();
-    expect(csv).toContain("Sep Child");
-    expect(csv).toContain("Oct Child");
-    expect(spy.lastFilename()).toMatch(/beebright_full_report_/);
-    spy.restore();
-  });
-
-  it("with a month filter, includes only that month's enrollments/payments/users", () => {
-    const spy = spyOnCsvDownload();
-    handleExportAll(enrollments, users, payments, { year: 2026, month: 9, label: "October 2026" });
+    handleExportDataset("enrollments", enrollments, users, payments, { type: "monthly", month: { year: 2026, month: 9, label: "October 2026" } });
     const csv = spy.lastCsv();
     expect(csv).toContain("Oct Child");
     expect(csv).not.toContain("Sep Child");
+    expect(csv).not.toContain("LastYear Child");
+    // Genuinely a single-dataset file now — the Payments/Users column headers and rows
+    // never appear in an Enrollments export.
+    expect(csv).not.toContain("Reference,Student,Amount,Status,Date,Method");
+    expect(csv).not.toContain("Name,Role,Email,Phone,Status");
+    expect(csv).not.toContain("Oct User");
+    expect(spy.lastFilename()).toBe("beebright_enrollments_2026-10.csv");
+    spy.restore();
+  });
+
+  it("a Payments-only Yearly export contains every payment from that year and nothing from adjacent years", () => {
+    const spy = spyOnCsvDownload();
+    handleExportDataset("payments", enrollments, users, payments, { type: "yearly", year: 2026 });
+    const csv = spy.lastCsv();
+    expect(csv).toMatch(/₱1,000|₱1000/); // September 2026
+    expect(csv).toMatch(/₱2,000|₱2000/); // October 2026
+    expect(csv).not.toMatch(/₱3,000|₱3000/); // October 2025 — adjacent year excluded
+    expect(csv).not.toMatch(/₱4,000|₱4000/); // January 2027 — adjacent year excluded
+    expect(csv).not.toContain("Name,Programs,Date,Status");
+    expect(spy.lastFilename()).toBe("beebright_payments_2026.csv");
+    spy.restore();
+  });
+
+  it("a Users Overall export contains every user record regardless of date, with no month/year filtering applied", () => {
+    const spy = spyOnCsvDownload();
+    handleExportDataset("users", enrollments, users, payments, { type: "overall" });
+    const csv = spy.lastCsv();
+    expect(csv).toContain("Sep User");
     expect(csv).toContain("Oct User");
-    expect(csv).not.toContain("Sep User");
-    expect(csv).toMatch(/₱2,000|₱2000/);
-    expect(csv).not.toMatch(/₱1,000|₱1000/);
-    expect(spy.lastFilename()).toBe("beebright_report_2026-10.csv");
+    expect(csv).toContain("LastYear User"); // 2024 — far outside any month/year, still included
+    expect(csv).not.toContain("Name,Programs,Date,Status");
+    expect(spy.lastFilename()).toBe("beebright_users_all-time.csv");
     spy.restore();
   });
 });

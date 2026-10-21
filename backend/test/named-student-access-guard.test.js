@@ -222,6 +222,56 @@ test('verifyNamedStudentReference: tutor naming a student NOT assigned to them i
   }
 });
 
+// Real bug (live-reported, regression): "can you give me my student list?" tripped the
+// same guard that's supposed to protect one NAMED student's data — "my student" matched
+// the relationship cue, and with nothing real following it, the capture grabbed "list" as
+// if it were a name, which then (correctly, given a fake name) got declined — "I can't
+// find or access that student's information", even though the question was never about
+// one specific student at all. A tutor asking for their WHOLE roster, in any reasonable
+// English/Tagalog/Taglish wording (not just this one exact phrase), must never be
+// misread as a reference to a single unnamed student.
+test('verifyNamedStudentReference: a tutor asking for their whole student list/roster — several real phrasings — is never misread as a named-student reference', async () => {
+  const origFind = Schedule.find;
+  // No roster stub needed — these must all resolve to null WITHOUT ever reaching the
+  // roster-lookup branch at all, so a Schedule.find call here would itself be a bug.
+  Schedule.find = () => { throw new Error('must not attempt a named-student roster lookup for a list request'); };
+  try {
+    const listPhrasings = [
+      'can you give me my student list?',
+      'what is my student roster',
+      'give me the list of my students',
+      'sino sino ang mga estudyante ko',
+      'who are my students',
+      "who's my students",
+      'pwede ko ba makuha yung list ng student na naka assign saakin?',
+      'show me the listahan ng mga estudyante ko',
+      'can i see all my students',
+    ];
+    for (const message of listPhrasings) {
+      const reply = await verifyNamedStudentReference({ user: { _id: 'tutor1', role: 'tutor' } }, message, []);
+      assert.equal(reply, null, `should NOT be declined as a named-student reference: "${message}"`);
+    }
+  } finally {
+    Schedule.find = origFind;
+  }
+});
+
+test('verifyNamedStudentReference: a GENUINE named-student reference from a tutor is still correctly checked (no regression from the list-request fix)', async () => {
+  const origFind = Schedule.find;
+  Schedule.find = () => mockFindQuery([
+    { student: null, students: [{ firstName: 'Maria', lastName: 'Cruz' }] },
+  ]);
+  try {
+    const assigned = await verifyNamedStudentReference({ user: { _id: 'tutor1', role: 'tutor' } }, 'can you help my student maria cruz', []);
+    assert.equal(assigned, null);
+
+    const notAssigned = await verifyNamedStudentReference({ user: { _id: 'tutor1', role: 'tutor' } }, 'my student alex soriano', []);
+    assert.match(notAssigned, NON_PUBLIC_DECLINE_RE);
+  } finally {
+    Schedule.find = origFind;
+  }
+});
+
 test('verifyNamedStudentReference: admin and student roles are left alone (null), not this guard\'s concern', async () => {
   for (const role of ['admin', 'super_admin', 'student']) {
     const reply = await verifyNamedStudentReference(

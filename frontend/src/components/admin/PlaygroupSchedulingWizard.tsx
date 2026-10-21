@@ -22,7 +22,7 @@ import {
   type PricingPackage,
 } from "@/services/api";
 import { StudentSearchSelect } from "./StudentSearchSelect";
-import { isEnrollmentSchedulable } from "@/utils/enrollmentEligibility";
+import { isEnrollmentSchedulable, enrollmentAlreadyScheduledForProgram } from "@/utils/enrollmentEligibility";
 import { getRequiredDaysForPackage } from "@/constants/programs";
 
 // BeeBright Scheduling Spec, Section 2 — group-based Toddlers Playgroup scheduling.
@@ -131,19 +131,6 @@ interface PlaygroupSchedulingWizardProps {
   onCreated: () => void;
 }
 
-// Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #1 — once a student already has a
-// Playgroup schedule (in the group `students[]` array, not the singular `student`
-// field used by 1-on-1), they must stop appearing as selectable here.
-function alreadyScheduled(enrollment: AdminEnrollment, schedules: AdminSchedule[]): boolean {
-  const studentUserId = enrollment.student?._id;
-  if (!studentUserId) return false;
-  return schedules.some(
-    (s) =>
-      ((s.subject?.code || "").toUpperCase() === PLAYGROUP_CODE) &&
-      ((s.students || []).some((st) => st._id === studentUserId) || s.student?._id === studentUserId)
-  );
-}
-
 export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, pricing, schedules, onCreated }: PlaygroupSchedulingWizardProps) {
   const playgroupSubject = useMemo(
     () => subjects.find((subject) => (subject.code || "").toUpperCase() === PLAYGROUP_CODE) || null,
@@ -151,8 +138,13 @@ export function PlaygroupSchedulingWizard({ subjects, enrollments, tutors, prici
   );
 
   const studentOptions = useMemo<StudentOption[]>(() => {
+    // Admin_Schedule_and_MultiProgram_Days_Fixes.pdf #1 — once a student already has a
+    // Playgroup schedule for THIS enrollment's own cycle, they must stop appearing as
+    // selectable here. Cycle-aware (not just student+program) so a brand-new Renew/Add
+    // Program enrollment isn't wrongly excluded just because an older, already-scheduled
+    // cycle of Playgroup still has schedule rows on file.
     return enrollments
-      .filter((enrollment) => isEnrollmentSchedulable(enrollment) && enrollmentCoversPlaygroup(enrollment) && !alreadyScheduled(enrollment, schedules))
+      .filter((enrollment) => isEnrollmentSchedulable(enrollment) && enrollmentCoversPlaygroup(enrollment) && !enrollmentAlreadyScheduledForProgram(enrollment, PLAYGROUP_CODE, enrollments, schedules))
       .map((enrollment) => ({
         key: enrollment._id,
         enrollment,

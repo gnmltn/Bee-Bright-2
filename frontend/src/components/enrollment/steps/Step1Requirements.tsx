@@ -1,8 +1,10 @@
-import { FileText, Clock, CreditCard, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useState } from 'react';
+import { FileText, Clock, CreditCard, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import StepNav from '../StepNav';
 import type { WizardData } from '../wizard-types';
 import { useToast } from '@/hooks/use-toast';
-import DocUploadField from '../DocUploadField';
+import DocUploadField, { type UploadedFile } from '../DocUploadField';
+import { detectFaceInDataUrl } from '@/lib/faceDetection';
 
 interface Props {
   data: WizardData;
@@ -24,10 +26,38 @@ const timeline = [
 export default function Step1Requirements({ data, update, onNext, addChild }: Props) {
   const { toast } = useToast();
   const isAddChildMode = !!addChild || typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'add-child';
+  const [checkingFace, setCheckingFace] = useState(false);
 
   // Owner direction ("bug (13).pdf" Group AQ): enrollment only requires the 2x2 photo now —
   // Birth Certificate and Guardian Valid ID were removed entirely.
   const allDocsUploaded = !!data.docStudentPhoto;
+
+  // Face-presence gate — only for this one photo field. DocUploadField itself is shared
+  // with Step10Billing's payment-proof upload and other admin upload modals, so the
+  // check lives here (wrapping onChange) rather than inside that shared component.
+  const handlePhotoChange = async (doc: UploadedFile) => {
+    setCheckingFace(true);
+    try {
+      const hasFace = await detectFaceInDataUrl(doc.dataUrl);
+      if (!hasFace) {
+        toast({
+          title: 'No face detected',
+          description: "Please upload a clear photo of the child's face.",
+          variant: 'destructive',
+        });
+        return;
+      }
+      update({ docStudentPhoto: doc });
+    } catch {
+      toast({
+        title: 'Could not verify photo',
+        description: 'Please try a different photo.',
+        variant: 'destructive',
+      });
+    } finally {
+      setCheckingFace(false);
+    }
+  };
 
   const handleNext = () => {
     if (!allDocsUploaded) {
@@ -68,10 +98,15 @@ export default function Step1Requirements({ data, update, onNext, addChild }: Pr
           label="Recent 2×2 Photo of Student"
           desc="Clear, recent photo of the student (passport or ID style)."
           value={data.docStudentPhoto}
-          onChange={(doc) => update({ docStudentPhoto: doc })}
+          onChange={(doc) => void handlePhotoChange(doc)}
           onRemove={() => update({ docStudentPhoto: null })}
           accept=".jpg,.jpeg,.png,image/jpeg,image/png"
         />
+        {checkingFace && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" /> Checking photo...
+          </p>
+        )}
       </div>
 
       {/* All-uploaded confirmation badge */}

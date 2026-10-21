@@ -13,6 +13,17 @@ const Enrollment = require('../models/Enrollment');
 const { resolveCycleId, attachCycleByStudent } = require('../utils/attendanceCycles');
 const { getMySessions } = require('../controllers/scheduleController');
 const Schedule = require('../models/Schedule');
+const Pricing = require('../models/Pricing');
+
+/** Generic chainable Mongoose-query stand-in — select/sort/populate all return itself,
+ *  lean() resolves the given result, regardless of call order or count. Needed because
+ *  getMySessions now runs TWO independent Enrollment/Schedule queries in sequence
+ *  (attachCycleByStudent, then attachProgramDateRangeToCycles — see remainingDueDate.js),
+ *  each with its own select/populate shape. */
+function chainable(result) {
+  const q = { select: () => q, sort: () => q, populate: () => q, lean: () => Promise.resolve(result) };
+  return q;
+}
 
 function mockRes() {
   const res = { _status: 200, _body: null };
@@ -122,32 +133,53 @@ test('attachCycleByStudent: no enrolled students at all -> empty cycleByStudent,
 test('getMySessions: response schedules include cycleByStudent', async () => {
   const origScheduleFind = Schedule.find;
   const origEnrollmentFind = Enrollment.find;
-  Schedule.find = () => ({
-    populate: () => ({
-      populate: () => ({
-        populate: () => ({
-          populate: () => ({
-            sort: () => ({
-              lean: async () => [
-                { _id: 's1', student: { _id: 'kid-1' }, students: [], tutor: 'tutor-1', subject: { code: 'ACT102' }, date: '2026-02-01', startTime: '08:00', endTime: '09:00' },
-              ],
-            }),
-          }),
-        }),
-      }),
-    }),
-  });
-  Enrollment.find = () => ({
-    select: () => ({
-      sort: () => ({
-        lean: async () => [{ student: 'kid-1', packages: [{ programCode: 'ACT102' }], enrollmentDate: '2026-01-01', enrollmentId: 'BB-OLD' }],
-      }),
-    }),
-  });
+  const origPricingFind = Pricing.find;
+  Schedule.find = () => chainable([
+    { _id: 's1', student: { _id: 'kid-1' }, students: [], tutor: 'tutor-1', subject: { code: 'ACT102', name: 'Academic Tutorial' }, date: '2026-02-01', startTime: '08:00', endTime: '09:00' },
+  ]);
+  Enrollment.find = () => chainable([
+    { student: 'kid-1', packages: [{ programCode: 'ACT102', displayName: 'Academic Tutorial' }], enrollmentDate: '2026-01-01', enrollmentId: 'BB-OLD', status: 'approved' },
+  ]);
+  Pricing.find = () => chainable([]);
   try {
     const res = mockRes();
     await getMySessions({ user: { id: 'tutor-1', role: 'tutor' } }, res);
     assert.equal(res._status, 200, JSON.stringify(res._body));
     assert.equal(res._body.schedules[0].cycleByStudent[0].enrollmentId, 'BB-OLD');
-  } finally { Schedule.find = origScheduleFind; Enrollment.find = origEnrollmentFind; }
+  } finally { Schedule.find = origScheduleFind; Enrollment.find = origEnrollmentFind; Pricing.find = origPricingFind; }
+});
+
+test('getMySessions: cycleByStudent also carries startDate/endDate/status — the SAME computation the parent side uses (Request 3), never a frontend estimate', async () => {
+  const origScheduleFind = Schedule.find;
+  const origEnrollmentFind = Enrollment.find;
+  const origPricingFind = Pricing.find;
+  // A fully-scheduled 1-session package: one real schedule row for this program/student,
+  // sessionCount 1 -> both startDate and endDate resolve to that one date. Branches on
+  // query shape: the tutor-scoped original query (populated student) vs
+  // attachProgramDateRangeToCycles' own "every schedule for these students, any tutor"
+  // query (plain, unpopulated student ids — the real production shape).
+  Schedule.find = (query) => {
+    const isTutorScoped = (query?.$or || []).some((c) => 'tutor' in c || 'tutors' in c);
+    if (isTutorScoped) {
+      return chainable([
+        { _id: 's1', student: { _id: 'kid-1' }, students: [], tutor: 'tutor-1', subject: { code: 'ACT102', name: 'Academic Tutorial' }, date: '2026-02-01', startTime: '08:00', endTime: '09:00' },
+      ]);
+    }
+    return chainable([
+      { student: 'kid-1', students: [], subject: { code: 'ACT102', name: 'Academic Tutorial' }, date: '2026-02-01' },
+    ]);
+  };
+  Enrollment.find = () => chainable([
+    { student: 'kid-1', packages: [{ programCode: 'ACT102', packageSlug: 'basic', displayName: 'Academic Tutorial' }], enrollmentDate: '2026-01-01', enrollmentId: 'BB-OLD', status: 'approved' },
+  ]);
+  Pricing.find = () => chainable([{ programCode: 'ACT102', packageSlug: 'basic', sessionCount: 1 }]);
+  try {
+    const res = mockRes();
+    await getMySessions({ user: { id: 'tutor-1', role: 'tutor' } }, res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const cycle = res._body.schedules[0].cycleByStudent[0];
+    assert.equal(cycle.status, 'approved');
+    assert.equal(new Date(cycle.startDate).toISOString().slice(0, 10), '2026-02-01');
+    assert.equal(new Date(cycle.endDate).toISOString().slice(0, 10), '2026-02-01');
+  } finally { Schedule.find = origScheduleFind; Enrollment.find = origEnrollmentFind; Pricing.find = origPricingFind; }
 });

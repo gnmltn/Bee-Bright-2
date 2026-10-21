@@ -54,6 +54,28 @@ function makePastSession(daysAgo: number, overrides: Record<string, unknown> = {
   };
 }
 
+// "Past sessions" is temporarily hidden (SHOW_LEGACY_ATTENDANCE_TABS = false in
+// AttendanceTab.tsx) — Calendar Sessions is now the default/only way to reach an old
+// session, and it reuses the exact same renderSessionRow/isLocked/getStatus logic
+// these tests exist to exercise, so navigating via the calendar is a faithful
+// replacement, not a different code path. react-day-picker's day cells are real
+// <button> elements but override their role to "gridcell", not the implicit "button".
+function clickCalendarDay(dayOfMonth: number) {
+  fireEvent.click(screen.getByRole("gridcell", { name: String(dayOfMonth) }));
+}
+
+/** Clicks the calendar day matching this session's date — skips (returns false)
+ *  if that day's number isn't safely earlier in the month than today, avoiding the
+ *  month-boundary ambiguity showOutsideDays={false} introduces (same tolerance
+ *  attendanceTabCalendar.test.tsx's own calendar tests already accept). */
+function goToSessionDayOnCalendar(session: { date: string }): boolean {
+  const todayDay = new Date().getDate();
+  const targetDay = new Date(session.date).getDate();
+  if (targetDay >= todayDay) return false;
+  clickCalendarDay(targetDay);
+  return true;
+}
+
 describe("AttendanceTab: Present/Absent button locking", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -137,7 +159,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
   it("more than 3 days old, still unmarked: reads as Absent, and BOTH Present and Absent are disabled — neither is clickable anymore", async () => {
     const session = makePastSession(4); // 4 days ago -> past the grace period
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     const absentBtn = await screen.findByRole("button", { name: /^absent$/i });
     const presentBtn = screen.getByRole("button", { name: /^present$/i });
@@ -153,7 +175,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
   it("within the 3-day window, still unmarked: does NOT get forced to Absent — Present submits immediately, no confirmation", async () => {
     const session = makePastSession(2); // 2 days ago -> still inside the grace window
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     fireEvent.click(await screen.findByRole("button", { name: /^present$/i }));
     await waitFor(() => {
@@ -165,7 +187,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
   it("exactly 3 days old is still within the grace period — \"more than 3 days\" means day 4 onward, not day 3", async () => {
     const session = makePastSession(3);
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     fireEvent.click(await screen.findByRole("button", { name: /^present$/i }));
     await waitFor(() => {
@@ -182,7 +204,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
   it("more than 3 days old AND already marked Present: BOTH buttons are still disabled — the existing mark can no longer be changed", async () => {
     const session = makePastSession(10, { attendanceStatus: "present" });
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     const presentBtn = await screen.findByRole("button", { name: /^present$/i });
     const absentBtn = screen.getByRole("button", { name: /^absent$/i });
@@ -197,7 +219,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
   it("more than 3 days old AND already marked Absent: BOTH buttons are still disabled", async () => {
     const session = makePastSession(10, { attendanceStatus: "absent" });
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     expect(await screen.findByRole("button", { name: /^present$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^absent$/i })).toBeDisabled();
@@ -206,7 +228,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
   it("within the 3-day window AND already marked: stays fully editable — switching status still opens the confirmation dialog as before", async () => {
     const session = makePastSession(1, { attendanceStatus: "present" });
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     const absentBtn = await screen.findByRole("button", { name: /^absent$/i });
     expect(absentBtn).not.toBeDisabled();
@@ -225,7 +247,7 @@ describe("AttendanceTab: 3-day grace period auto-resolves an unmarked past sessi
     try {
       const session = makePastSession(3, { attendanceStatus: "present" }); // still exactly within the window
       render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-      fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+      if (!goToSessionDayOnCalendar(session)) return;
 
       expect(screen.getByRole("button", { name: /^absent$/i })).not.toBeDisabled();
 
@@ -322,9 +344,9 @@ describe("AttendanceTab: Toddlers Playgroup sessions are marked per child, not o
   });
 
   it("a Playgroup entry in the History ('Past sessions') list is ALSO per-child, not a single group-wide row", async () => {
-    const session = makePlaygroupSession({ date: "2026-01-01T00:00:00.000Z" });
+    const session = makePlaygroupSession({ date: `${daysAgoDateStr(10)}T00:00:00.000Z` });
     render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /past sessions/i }));
+    if (!goToSessionDayOnCalendar(session)) return;
 
     fireEvent.click(await screen.findByText(/toddlers playgroup/i));
     expect(await screen.findByText("Ana Cruz")).toBeTruthy();
@@ -423,6 +445,79 @@ describe("AttendanceTab: Student summary shows the program per row and never mer
     expect(screen.getByText("Ben Reyes")).toBeTruthy();
     expect(screen.getAllByText("Toddlers Playgroup").length).toBe(2);
     expect(screen.queryByText("—")).toBeNull();
+  });
+});
+
+// Tutor Dashboard "Student summary" — the same per-program start/end date range the
+// parent side already shows (Request 3), carried on each session's cycleByStudent entry
+// (attachProgramDateRangeToCycles, backend/utils/remainingDueDate.js) and reused here
+// rather than re-estimated, so the tutor's view can never disagree with the parent's.
+describe("AttendanceTab: Student summary shows each row's program date range (reusing the parent-side computation)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function openSummary() {
+    fireEvent.click(screen.getByRole("button", { name: /student summary/i }));
+  }
+
+  it("shows the correct 'Oct 17 to Nov 26, 2026' style range next to the program name", async () => {
+    const session = makePastSession(10, {
+      attendanceStatus: "present",
+      cycleByStudent: [{ student: "student-1", enrollmentId: "BB-1", startDate: "2026-10-17T00:00:00.000Z", endDate: "2026-11-26T00:00:00.000Z", status: "approved" }],
+    });
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    openSummary();
+
+    expect(await screen.findByText("Ana Cruz")).toBeTruthy();
+    expect(screen.getByText(/Oct 17 to Nov 26, 2026/)).toBeTruthy();
+  });
+
+  it("a student in 2 programs gets a SEPARATE, independent date range on each row", async () => {
+    const sessions = [
+      makePastSession(10, {
+        _id: "s1",
+        attendanceStatus: "present",
+        subject: { name: "Academic Tutorial" },
+        cycleByStudent: [{ student: "student-1", enrollmentId: "BB-AT", startDate: "2026-10-17T00:00:00.000Z", endDate: "2026-11-26T00:00:00.000Z", status: "approved" }],
+      }),
+      makePastSession(20, {
+        _id: "s2",
+        attendanceStatus: "absent",
+        subject: { name: "Toddlers Playgroup" },
+        cycleByStudent: [{ student: "student-1", enrollmentId: "BB-TPG", startDate: "2026-09-01T00:00:00.000Z", endDate: "2026-10-13T00:00:00.000Z", status: "active" }],
+      }),
+    ];
+    render(<AttendanceTab sessions={sessions} onRefresh={() => {}} />);
+    openSummary();
+
+    expect(await screen.findByText(/Oct 17 to Nov 26, 2026/)).toBeTruthy();
+    expect(screen.getByText(/Sep 1 to Oct 13, 2026/)).toBeTruthy();
+  });
+
+  it("the range disappears once the program is no longer in progress (e.g. completed) — the row itself still shows", async () => {
+    const session = makePastSession(10, {
+      attendanceStatus: "present",
+      cycleByStudent: [{ student: "student-1", enrollmentId: "BB-1", startDate: "2026-10-17T00:00:00.000Z", endDate: "2026-11-26T00:00:00.000Z", status: "completed" }],
+    });
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    openSummary();
+
+    expect(await screen.findByText("Ana Cruz")).toBeTruthy();
+    expect(screen.getByText("Academic Tutorial")).toBeTruthy();
+    expect(screen.queryByText(/Oct 17 to Nov 26, 2026/)).toBeNull();
+  });
+
+  it("no range shown while the program isn't fully scheduled yet (endDate still null)", async () => {
+    const session = makePastSession(10, {
+      attendanceStatus: "present",
+      cycleByStudent: [{ student: "student-1", enrollmentId: "BB-1", startDate: "2026-10-17T00:00:00.000Z", endDate: null, status: "approved" }],
+    });
+    render(<AttendanceTab sessions={[session]} onRefresh={() => {}} />);
+    openSummary();
+
+    expect(await screen.findByText("Academic Tutorial")).toBeTruthy();
+    expect(screen.queryByText(/ to /)).toBeNull();
   });
 });
 

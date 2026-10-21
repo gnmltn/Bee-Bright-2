@@ -595,7 +595,7 @@ test('attachRemainingDueDates: invoiceDueDate (last session) and remainingDueDat
   Pricing.find = () => mockQuery([{ programCode: 'ACT102', packageSlug: 'pkg-8', sessionCount: 8 }]);
   try {
     const [result] = await attachRemainingDueDates([
-      { student: studentId, packages: [{ programCode: 'ACT102', packageSlug: 'pkg-8' }] },
+      { _id: new mongoose.Types.ObjectId().toString(), student: studentId, enrollmentDate: '2026-01-01', packages: [{ programCode: 'ACT102', packageSlug: 'pkg-8' }] },
     ]);
     assert.equal(result.invoiceDueDate, null, 'only 7 of 8 sessions scheduled — invoice Due Date not determinable yet');
     assert.equal(new Date(result.remainingDueDate).toISOString().slice(0, 10), '2026-10-12', 'halfway (4th) session already reached, unaffected by the invoice Due Date fix');
@@ -603,7 +603,7 @@ test('attachRemainingDueDates: invoiceDueDate (last session) and remainingDueDat
     // Add the 8th session — now both should resolve, to their own distinct dates.
     scheduleDocs.push({ student: studentId, students: [], subject: { _id: subjectId, code: 'ACT102' }, date: '2026-10-21' });
     const [full] = await attachRemainingDueDates([
-      { student: studentId, packages: [{ programCode: 'ACT102', packageSlug: 'pkg-8' }] },
+      { _id: new mongoose.Types.ObjectId().toString(), student: studentId, enrollmentDate: '2026-01-01', packages: [{ programCode: 'ACT102', packageSlug: 'pkg-8' }] },
     ]);
     assert.equal(new Date(full.invoiceDueDate).toISOString().slice(0, 10), '2026-10-21', 'invoice Due Date = last (8th) session');
     assert.equal(new Date(full.remainingDueDate).toISOString().slice(0, 10), '2026-10-12', 'reminder timing untouched by adding the final session');

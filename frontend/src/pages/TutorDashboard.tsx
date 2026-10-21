@@ -63,6 +63,7 @@ import {
 } from "@/services/api";
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import { displayStudentId } from "@/lib/children";
+import { formatProgramLabelWithRange } from "@/lib/programEndDate";
 import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
 import { PROGRAM_CATEGORIES, PROGRAM_LABELS, type ActiveProgramCode } from "@/constants/programs";
 import { AttendanceTab } from "@/components/tutor/AttendanceTab";
@@ -1117,10 +1118,19 @@ export default function TutorDashboard() {
                       {studentCards.map((card) => (
                         <div key={card.studentId || card.studentUserId} className="bg-card rounded-xl border border-border p-5 space-y-1.5" data-testid="student-card">
                           <p className="font-display font-bold text-lg text-foreground">{card.name}</p>
-                          <p className="text-sm text-foreground">
+                          <div className="text-sm text-foreground">
                             <span className="text-muted-foreground">Programs: </span>
-                            {card.programs.length ? card.programs.join("; ") : "—"}
-                          </p>
+                            {card.programs.length ? (
+                              <div className="inline">
+                                {card.programs.map((program, index) => (
+                                  <span key={`${program.programCode || program.displayName}-${index}`} data-testid="student-card-program">
+                                    {index > 0 ? "; " : ""}
+                                    {formatProgramLabelWithRange(program)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : "—"}
+                          </div>
                           <p className="text-sm text-foreground">
                             <span className="text-muted-foreground">Student ID: </span>
                             <span className="font-mono">{card.studentId || "—"}</span>
