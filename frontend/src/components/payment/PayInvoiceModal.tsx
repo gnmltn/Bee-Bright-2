@@ -111,9 +111,15 @@ interface PayInvoiceModalProps {
    * Payments_FullyPaid_NewProgramRefinements_AdminWalkIn.pdf Section A.
    */
   alreadyPaid?: boolean;
+  /**
+   * Used by the rejected-account restricted screen (StudentDashboard.tsx) — this IS
+   * the entire screen at that point, with nothing behind it to "cancel" back to, so
+   * there's no Cancel button and no dismissing it via Escape/outside click.
+   */
+  forceOpen?: boolean;
 }
 
-export default function PayInvoiceModal({ isOpen, onClose, enrollmentId, invoiceLabel, amount, kind, onSubmitted, alreadyPaid }: PayInvoiceModalProps) {
+export default function PayInvoiceModal({ isOpen, onClose, enrollmentId, invoiceLabel, amount, kind, onSubmitted, alreadyPaid, forceOpen }: PayInvoiceModalProps) {
   const [selectedMethodId, setSelectedMethodId] = useState<(typeof METHODS)[number]["id"]>("gcash");
   // Deliberately separate from selectedMethodId (which already defaults to "gcash" for
   // the instructions panel below, unrelated to this): a QR only becomes visible once
@@ -192,8 +198,22 @@ export default function PayInvoiceModal({ isOpen, onClose, enrollmentId, invoice
   const showAlreadyPaidPanel = alreadyPaid || backendSaysAlreadyPaid;
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+    <Dialog
+      open={isOpen}
+      // forceOpen (the rejected-account restricted screen) deliberately runs non-modal:
+      // Radix's modal mode aria-hides and focus-traps EVERY sibling in the document,
+      // which would also swallow the screen's own always-visible Logout button — dismiss
+      // is already fully blocked by onInteractOutside/onEscapeKeyDown below regardless of
+      // this flag, so nothing about "can't click away" changes, only whether Logout stays reachable.
+      modal={!forceOpen}
+      onOpenChange={(open) => { if (!open && !forceOpen) handleClose(); }}
+    >
+      <DialogContent
+        className="sm:max-w-lg max-h-[90vh] overflow-y-auto"
+        onInteractOutside={forceOpen ? (e) => e.preventDefault() : undefined}
+        onEscapeKeyDown={forceOpen ? (e) => e.preventDefault() : undefined}
+        hideClose={forceOpen}
+      >
         <DialogHeader>
           <DialogTitle>{kind === "remaining" ? "Pay Remaining Balance" : "Pay Invoice"}</DialogTitle>
           <DialogDescription>{invoiceLabel} · ₱{amount.toLocaleString()} due</DialogDescription>
@@ -301,9 +321,11 @@ export default function PayInvoiceModal({ isOpen, onClose, enrollmentId, invoice
           </div>
 
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={handleClose} disabled={submitting}>
-              Cancel
-            </Button>
+            {!forceOpen && (
+              <Button type="button" variant="outline" onClick={handleClose} disabled={submitting}>
+                Cancel
+              </Button>
+            )}
             <Button type="button" className="btn-glow" onClick={handleSubmit} disabled={submitting}>
               {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Submit Payment Proof

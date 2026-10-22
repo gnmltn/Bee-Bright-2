@@ -14,6 +14,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { ChatBot } from "@/components/ChatBot";
 import { SessionInactivityGuard } from "@/components/auth/SessionInactivityGuard";
+import { RejectionGateGuard } from "@/components/auth/RejectionGateGuard";
 import { settingsService } from "@/services/api";
 import Index from "./pages/Index";
 import About from "./pages/About";
@@ -112,6 +113,7 @@ const App = () => (
           <BrowserRouter>
             <MaintenanceRouteGuard />
             <SessionInactivityGuard />
+            <RejectionGateGuard />
             <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3">
               <ChatBot />
               <ThemeToggle />

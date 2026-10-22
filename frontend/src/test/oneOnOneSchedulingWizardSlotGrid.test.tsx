@@ -195,6 +195,79 @@ describe("OneOnOneSchedulingWizard: real monthly calendar grid (Step 3)", () => 
     expect(openSlot).not.toBeDisabled();
   });
 
+  // Real bug (live-reported): a slot blocked by something that has NOTHING to do with
+  // tutor supply — the student's own pre-existing conflict on a later occurrence of the
+  // same weekday, or the system-wide capacity cap — still said "No available tutor" on
+  // its face, which reads as "this needs a new tutor account" even though no number of
+  // new tutors could ever fix either case. The label must reflect the REAL backend
+  // `reason`, not presume the cause.
+  it("a slot blocked by a STUDENT conflict (not tutor supply) is labeled accurately, never 'No available tutor'", async () => {
+    getMonthlySlotGrid.mockImplementation((body: { days: number[]; startDate: string }) => {
+      const dateKey = nextDateKeyForDay(body.startDate, 1);
+      const slots = STANDARD_SLOT_TIMES.map(([s, e]) => slot(s, e, { tutors: [{ _id: "tutor-nicole", name: "Nicole Monzada" }] }));
+      slots[0] = slot("08:00", "09:00", {
+        available: false,
+        tutors: [],
+        reason: "The student already has a conflicting session at this time on 2026-11-16 (same weekday, later in the month).",
+      });
+      return Promise.resolve({ data: { success: true, startDate: body.startDate, subscriptionEnd: body.startDate, grid: { [dateKey]: slots } } });
+    });
+
+    renderWizard();
+    await selectStudent("Maria Cruz — Academic Tutorial");
+    fireEvent.click(screen.getByText("Mon"));
+    const dateKey = await clickTheOnlyEligibleCalendarDay();
+
+    const blockedSlot = await screen.findByTestId(`slot-${dateKey}-08:00`);
+    expect(blockedSlot).toBeDisabled();
+    expect(within(blockedSlot).queryByText(/no available tutor/i)).toBeNull();
+    expect(within(blockedSlot).getByText(/student conflict/i)).toBeTruthy();
+    expect(blockedSlot.title).toMatch(/conflicting session/i);
+  });
+
+  it("a slot blocked by the system-wide capacity cap (not tutor supply) is labeled accurately, never 'No available tutor'", async () => {
+    getMonthlySlotGrid.mockImplementation((body: { days: number[]; startDate: string }) => {
+      const dateKey = nextDateKeyForDay(body.startDate, 1);
+      const slots = STANDARD_SLOT_TIMES.map(([s, e]) => slot(s, e, { tutors: [{ _id: "tutor-nicole", name: "Nicole Monzada" }] }));
+      slots[0] = slot("08:00", "09:00", {
+        available: false,
+        tutors: [],
+        reason: "This hour is full — the center fits at most 12 one-on-one sessions at the same time.",
+      });
+      return Promise.resolve({ data: { success: true, startDate: body.startDate, subscriptionEnd: body.startDate, grid: { [dateKey]: slots } } });
+    });
+
+    renderWizard();
+    await selectStudent("Maria Cruz — Academic Tutorial");
+    fireEvent.click(screen.getByText("Mon"));
+    const dateKey = await clickTheOnlyEligibleCalendarDay();
+
+    const blockedSlot = await screen.findByTestId(`slot-${dateKey}-08:00`);
+    expect(within(blockedSlot).queryByText(/no available tutor/i)).toBeNull();
+    expect(within(blockedSlot).getByText(/fully booked/i)).toBeTruthy();
+  });
+
+  it("a day where EVERY blocked slot is a genuine tutor shortage still shows the calendar-cell badge 'No available tutor'; a student-conflict day shows 'Not available' instead", async () => {
+    getMonthlySlotGrid.mockImplementation((body: { days: number[]; startDate: string }) => {
+      const dateKey = nextDateKeyForDay(body.startDate, 1);
+      const slots = STANDARD_SLOT_TIMES.map(([s, e]) =>
+        slot(s, e, { available: false, tutors: [], reason: "No available tutor for this time across every occurrence this month." })
+      );
+      return Promise.resolve({ data: { success: true, startDate: body.startDate, subscriptionEnd: body.startDate, grid: { [dateKey]: slots } } });
+    });
+
+    renderWizard();
+    await selectStudent("Maria Cruz — Academic Tutorial");
+    fireEvent.click(screen.getByText("Mon"));
+
+    const cell = await waitFor(() => {
+      const found = document.querySelector('[data-testid^="calendar-day-"]:not([disabled])');
+      if (!found) throw new Error("no eligible calendar day cell rendered yet");
+      return found as HTMLElement;
+    });
+    expect(within(cell).getByText(/no available tutor/i)).toBeTruthy();
+  });
+
   it("a slot where at least one tutor is free shows EXACTLY those tutors when clicked, not every tutor in the system", async () => {
     getMonthlySlotGrid.mockImplementation((body: { days: number[]; startDate: string }) => {
       const dateKey = nextDateKeyForDay(body.startDate, 1);

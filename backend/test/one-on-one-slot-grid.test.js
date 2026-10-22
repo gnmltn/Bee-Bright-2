@@ -157,6 +157,78 @@ test('a slot where EVERY tutor is already booked is reported as unavailable, wit
   } finally { restore3(); }
 });
 
+// Real bug (live-reported): the 8:00 AM slot showed "No available tutor" right after a
+// brand-new full-time tutor account was created, which reads as "the new tutor isn't
+// being picked up". Investigated directly against the real dev database: the new tutor
+// (isActive:true, deletedAt:null, employmentType:'full-time', availability:'' — exactly
+// the schema's own defaults for a freshly created tutor, set by User.js's pre-save hook,
+// never touched by anything else) DOES correctly appear as available for 8AM and every
+// other standard slot once nothing else blocks it — confirmed live. These tests lock
+// that in, using the exact same "fresh account" shape (empty availability string, zero
+// existing schedules) rather than an already-seeded tutor fixture.
+test('a freshly created full-time tutor (empty availability string, zero existing schedules) is available at 8AM and every other standard slot, immediately', async () => {
+  const BRAND_NEW_TUTOR = { _id: 'tutor-fresh', firstName: 'Joy', lastName: 'Cruz', employmentType: 'full-time', availability: '' };
+  const restore = stubGrid({ tutors: [BRAND_NEW_TUTOR], scheduleRows: [] });
+  try {
+    const res = mockRes();
+    await getMonthlySlotGrid(gridReq({ days: [1] }), res);
+    assert.equal(res._status, 200, JSON.stringify(res._body));
+    const mondayKey = firstDateKeyForDay(res._body.grid, 1);
+    for (const entry of res._body.grid[mondayKey]) {
+      assert.equal(entry.available, true, `${entry.startTime} should be open for a brand-new full-time tutor with no conflicts`);
+      assert.deepEqual(entry.tutors.map((t) => t._id), ['tutor-fresh']);
+    }
+    const eightAm = res._body.grid[mondayKey].find((s) => s.startTime === '08:00');
+    assert.ok(eightAm, '8:00 AM must be one of the standard slots');
+    assert.equal(eightAm.available, true);
+  } finally { restore(); }
+});
+
+// The REAL root cause behind the live report: a brand-new tutor existing doesn't help
+// when the block is tutor-INDEPENDENT — the student already has a conflicting session on
+// a later occurrence of the SAME weekday elsewhere in the one-month window (the "whole
+// pattern" rule, documented at the top of getAvailableTutorsGridForWindow). The backend's
+// own `reason` text already correctly says so (never the generic "no available tutor"
+// text in this case) — confirmed directly against the real dev database with a real
+// recurring-conflict student. The frontend's unavailableSlotLabel (OneOnOneSchedulingWizard.tsx)
+// relies on this distinction to avoid showing a misleading "No available tutor" label for
+// a block that no new tutor account could ever fix.
+test('a slot blocked by the STUDENT\'s own later-occurrence conflict reports the real reason, even with a brand-new, fully-free tutor in the pool', async () => {
+  const BRAND_NEW_TUTOR = { _id: 'tutor-fresh', firstName: 'Joy', lastName: 'Cruz', employmentType: 'full-time', availability: '' };
+  const probeRestore = stubGrid({ tutors: [BRAND_NEW_TUTOR] });
+  const probe = mockRes();
+  await getMonthlySlotGrid(gridReq({ days: [1] }), probe);
+  const mondayKeys = Object.keys(probe._body.grid).sort();
+  const firstMonday = mondayKeys[0];
+  const laterMonday = mondayKeys[mondayKeys.length - 1];
+  probeRestore();
+  assert.notEqual(firstMonday, laterMonday, 'test needs at least 2 real Mondays in the window');
+
+  // The enrolled student already has a conflicting session on a LATER Monday — not the
+  // first one — so the first Monday's own slot is genuinely free on its own date, yet
+  // must still read as blocked (by the student's schedule, not the tutor).
+  const restore = stubGrid({
+    tutors: [BRAND_NEW_TUTOR],
+    scheduleRows: [
+      // tutor/tutors must be set to a real, live tutor id — filterLiveSessions (this
+      // conflicting session's OWN tutor, from a different program, is irrelevant to this
+      // test) drops any row with no real tutor as a "ghost" session.
+      { tutor: 'tutor-fresh', tutors: ['tutor-fresh'], student: 'student-1', students: [], date: new Date(`${laterMonday}T00:00:00.000Z`), startTime: '08:00', endTime: '09:00', sessionType: 'one-on-one' },
+    ],
+  });
+  try {
+    const res = mockRes();
+    await getMonthlySlotGrid(gridReq({ days: [1] }), res);
+    const eightAmFirstMonday = res._body.grid[firstMonday].find((s) => s.startTime === '08:00');
+    assert.equal(eightAmFirstMonday.available, false);
+    assert.equal(eightAmFirstMonday.tutors.length, 0);
+    // Must NOT be the generic "no available tutor" reason — a brand-new tutor exists and
+    // is otherwise completely free; the real blocker is the student's own schedule.
+    assert.doesNotMatch(eightAmFirstMonday.reason, /no available tutor/i);
+    assert.match(eightAmFirstMonday.reason, /conflicting session/i);
+  } finally { restore(); }
+});
+
 test('a slot where at least one tutor is free shows EXACTLY those tutors, not every tutor', async () => {
   const probeRestore = stubGrid({ tutors: [TUTOR_A, TUTOR_B] });
   const probe = mockRes();

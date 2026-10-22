@@ -119,11 +119,13 @@ async function sendEnrollmentApprovedEmail(to, { parentName, studentName, enroll
   ).catch((err) => logEmailError('enrollment approved email', err, { to, enrollmentId }));
 }
 
-// The account this enrollment belonged to is permanently deleted right after this email is
-// sent (see enrollmentController.js's adminRejectEnrollment) — there is no dashboard left to
-// log into, so this never offers a "resubmit"/"log in" path, only a fresh application.
-async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enrollmentId, reason }) {
-  const enrollUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/enrollment`;
+// Panel-required change: the account/enrollment is no longer deleted on reject (see
+// enrollmentController.js's adminRejectEnrollment) — the parent's account still exists and
+// still logs in normally, they just land on a restricted upload-only screen until they
+// resubmit a valid payment proof. `allowResubmission` tells them which is actually true:
+// a genuine Reject (resubmittable) vs the legacy "cancel" alias (terminal, no path back).
+async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enrollmentId, reason, allowResubmission = true }) {
+  const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
   return sendEmail(
     {
       to,
@@ -138,13 +140,15 @@ async function sendEnrollmentRejectedEmail(to, { parentName, studentName, enroll
           <div style="background:#fff;border-left:4px solid #ef4444;border-radius:4px;padding:16px;margin:16px 0;">
             <p style="margin:0;"><strong>Reason:</strong> ${reason}</p>
           </div>` : ''}
-          <p>Please submit a new enrollment application if you'd like to try again.</p>
+          ${allowResubmission
+            ? `<p>Your account is still active — please log in and upload a new, valid payment proof so we can review it again.</p>`
+            : `<p>This enrollment has been cancelled. Please submit a new enrollment application if you'd like to try again.</p>`}
           <p style="color:#b91c1c;font-size:14px;margin-top:20px;">
             If you have questions, please contact us at beebrightph@gmail.com
           </p>
         `,
-        ctaLabel: 'Start a New Enrollment',
-        ctaUrl: enrollUrl,
+        ctaLabel: allowResubmission ? 'Log In and Resubmit' : 'Start a New Enrollment',
+        ctaUrl: allowResubmission ? loginUrl : `${process.env.FRONTEND_URL || 'http://localhost:5173'}/enrollment`,
       }),
     },
     'enrollment rejected'

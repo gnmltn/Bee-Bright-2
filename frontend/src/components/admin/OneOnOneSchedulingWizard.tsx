@@ -96,6 +96,35 @@ function formatSlotTime(value: string) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
+// Real bug (live-reported): a blocked slot's VISIBLE label always said "No available
+// tutor", even when the backend's own `reason` said something completely different —
+// e.g. the STUDENT already has a conflicting session on a later occurrence of the same
+// weekday (the "whole month pattern" rule), or the hour is at the system-wide 12-session
+// cap. Neither of those has anything to do with tutor supply, so an admin creating a
+// brand-new tutor account to try to "fix" a slot blocked for one of these other reasons
+// sees no change — confirmed live: a newly created full-time tutor correctly appears as
+// available for every slot their stated hours cover; the slot that still read "No
+// available tutor" was blocked by the student's own pre-existing schedule instead. This
+// derives an accurate short label straight from the real backend reason instead of
+// presuming the cause.
+function unavailableSlotLabel(reason: string | null): string {
+  if (!reason) return "No available tutor";
+  const lower = reason.toLowerCase();
+  if (lower.includes("conflicting session")) return "Student conflict";
+  if (lower.includes("full") || lower.includes("fits at most")) return "Fully booked";
+  return "No available tutor";
+}
+
+/** Day-level summary label for the compact calendar cell — "No available tutor" only
+ *  when EVERY blocked slot that day is genuinely a tutor-supply problem; otherwise a
+ *  neutral "Not available" so the cell never falsely points at tutor availability for a
+ *  day actually blocked by a student conflict or the system-wide capacity cap. */
+function dayUnavailableLabel(slots: MonthlySlotGridEntry[]): string {
+  const blocked = slots.filter((s) => !s.available);
+  const allGenuinelyNoTutor = blocked.every((s) => unavailableSlotLabel(s.reason) === "No available tutor");
+  return allGenuinelyNoTutor ? "No available tutor" : "Not available";
+}
+
 /** Local calendar date as YYYY-MM-DD (never the UTC date, which is "yesterday" early morning in the Philippines). */
 function toDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -711,7 +740,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
                       <span className="text-foreground">{cell.date.getDate()}</span>
                       {eligible && (
                         <span className={`text-[9px] ${openCount > 0 ? "text-emerald-600" : "text-destructive"}`}>
-                          {openCount > 0 ? `${openCount}/8 open` : "No available tutor"}
+                          {openCount > 0 ? `${openCount}/8 open` : dayUnavailableLabel(slots ?? [])}
                         </span>
                       )}
                     </button>
@@ -764,7 +793,7 @@ export function OneOnOneSchedulingWizard({ subjects, enrollments, tutors, pricin
                           }`}
                         >
                           <span className="block font-medium">{formatSlotTime(slot.startTime)}</span>
-                          <span className="block">{slot.available ? `${slot.tutors.length} free` : "No available tutor"}</span>
+                          <span className="block">{slot.available ? `${slot.tutors.length} free` : unavailableSlotLabel(slot.reason)}</span>
                         </button>
                       );
                     })}

@@ -70,6 +70,18 @@ describe("groupEnrollmentsIntoChildren", () => {
     const children = groupEnrollmentsIntoChildren(ENROLLMENTS); // Leo: e1 approved, e2 submitted
     expect(children.map((c) => c.name)).toContain("Leo Soriano");
   });
+
+  // Panel-required change: a new child added via Add Child, still rejected/awaiting
+  // resubmission, must stay inaccessible (no schedule/progress) — this list feeds the
+  // "Viewing child" selector app-wide, so excluding the child here is what actually
+  // blocks it; the "My Child" page's own card (a different, ungated listing straight off
+  // `enrollments`) still shows normally. See ChildCardRejectionAction.tsx.
+  it("an Add Child enrollment that is REJECTED (not just pending) is excluded the same way, and reappears once Approved", () => {
+    const rejected = [{ _id: "x3", enrollmentId: "BB-3", permanentStudentId: "BB-3", status: "rejected", source: "add_child", allowResubmission: true, studentSnapshot: { firstName: "Ajay", lastName: "Soriano" } }];
+    expect(groupEnrollmentsIntoChildren(rejected)).toHaveLength(0);
+    const approved = [{ ...rejected[0], status: "approved" }];
+    expect(groupEnrollmentsIntoChildren(approved).map((c) => c.name)).toEqual(["Ajay Soriano"]);
+  });
 });
 
 describe("remainingBalanceOf", () => {

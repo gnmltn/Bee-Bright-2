@@ -37,8 +37,11 @@ import { scheduleService, remarkService, certificateService, announcementService
 import { EnrollmentAssessmentView } from "@/components/enrollment/EnrollmentAssessmentView";
 import type { PreEnrollmentAssessment } from "@/components/enrollment/assessment-types";
 import RenewProgramModal, { type RenewChildInfo } from "@/components/enrollment/RenewProgramModal";
-import AddChildModal, { type AddChildPrefill } from "@/components/enrollment/AddChildModal";
+import AddChildModal from "@/components/enrollment/AddChildModal";
 import { ContactTutorPanel } from "@/components/dashboard/ContactTutorPanel";
+import { RejectedAccountGate } from "@/components/dashboard/RejectedAccountGate";
+import { ChildCardRejectionAction } from "@/components/dashboard/ChildCardRejectionAction";
+import { computeRejectionGateState, childRejectionCycleEnrollments } from "@/lib/rejectionGate";
 import { AttendanceCard, type AttendanceCalendarSession } from "@/components/dashboard/AttendanceCard";
 import { resolveAttendanceStatus, computeAttendanceStats } from "@/lib/attendanceGrace";
 import { useSelectedChild } from "@/hooks/useSelectedChild";
@@ -205,8 +208,6 @@ export default function StudentDashboard() {
   const [isAddChildOpen, setIsAddChildOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [renewChildInfo, setRenewChildInfo] = useState<RenewChildInfo | null>(null);
-  // Prefill for resubmitting a rejected enrollment through the Add Child modal (null = blank form).
-  const [addChildPrefill, setAddChildPrefill] = useState<AddChildPrefill | null>(null);
 
   // ─── Schedule view controls ────────────────────────────────────────────────────
   const [scheduleViewMode, setScheduleViewMode] = useState<"monthly" | "weekly" | "daily">("monthly");
@@ -919,16 +920,7 @@ export default function StudentDashboard() {
     navigate(nextHash ? `/student-dashboard#${nextHash}` : "/student-dashboard", { replace: true });
   };
 
-  const handleAddChild = (resubmission?: typeof enrollments[number]) => {
-    // A plain "+ Add Child" click starts from a blank form; resubmitting a rejected enrollment
-    // pre-fills the child's details and the same package.
-    setAddChildPrefill(resubmission ? {
-      firstName: resubmission.studentSnapshot?.firstName || "",
-      middleName: resubmission.studentSnapshot?.middleName || "",
-      lastName: resubmission.studentSnapshot?.lastName || "",
-      birthdate: resubmission.studentSnapshot?.birthdate?.slice(0, 10) || "",
-      packageDisplayName: resubmission.packages?.[0]?.displayName,
-    } : null);
+  const handleAddChild = () => {
     setIsAddChildOpen(true);
   };
 
@@ -1038,6 +1030,30 @@ export default function StudentDashboard() {
   const avatarInitials = user?.firstName && user?.lastName
     ? `${user.firstName[0]}${user.lastName[0]}`.toUpperCase()
     : "ST";
+
+  // ── Rejected-account gate ───────────────────────────────────────────────────
+  // Panel-required change: a parent who has never been approved for ANYTHING yet,
+  // and whose enrollment is mid a reject/resubmit cycle, must see ONLY a restricted
+  // screen on login — not the normal dashboard. See lib/rejectionGate.ts for why.
+  const rejectionGate = isParent ? computeRejectionGateState(enrollments) : { restricted: false, enrollment: null, needsNewProof: false };
+
+  if (isParent && enrollmentsLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-muted">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (rejectionGate.restricted && rejectionGate.enrollment) {
+    return (
+      <RejectedAccountGate
+        enrollment={rejectionGate.enrollment}
+        needsNewProof={rejectionGate.needsNewProof}
+        onSubmitted={() => { void fetchEnrollments(); }}
+      />
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -1275,6 +1291,14 @@ export default function StudentDashboard() {
                       ) : (
                         childEntries.map((child) => {
                           const { badge, notes } = childStatusSummary(child.statuses);
+                          // The SAME per-card rejection-cycle check that drives
+                          // ChildCardRejectionAction below — reused here (not a separate
+                          // status check) so Renew/Add Program locks for exactly as long
+                          // as this card is showing "Submit Proof of Payment"/"please
+                          // wait," including the post-resubmission window where status has
+                          // already left "rejected" but the child still isn't approved.
+                          const rejectionCycleEnrollments = childRejectionCycleEnrollments(child.enrollments);
+                          const isMidRejectionCycle = rejectionCycleEnrollments.length > 0;
                           return (
                           <div key={child.childName} className="rounded-2xl border border-border bg-muted/20 p-4 shadow-sm">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1293,12 +1317,13 @@ export default function StudentDashboard() {
                                     <span key={note} className="text-[10px] leading-tight text-muted-foreground">{note}</span>
                                   ))}
                                 </div>
-                                {/* Blocked only while the child's own enrollment is still pending admin
-                                    approval — a client-side-only lock (no data touched), so it can stay
-                                    this plain: just disabled, no accompanying note. Lifts on its own the
-                                    moment `badge` recomputes "Active" (status arrives via the same live
-                                    enrollments refetch everything else on this page already uses). */}
-                                <Button type="button" size="sm" variant="outline" disabled={badge.value === "pending"} onClick={() => handleRenewChild(child)}>
+                                {/* Blocked while the child's own enrollment is still pending admin
+                                    approval, OR mid a reject/resubmit cycle (isMidRejectionCycle) — a
+                                    client-side-only lock (no data touched), so it can stay this plain:
+                                    just disabled, no accompanying note. Lifts on its own once this
+                                    child's enrollment is actually approved (status arrives via the same
+                                    live enrollments refetch everything else on this page already uses). */}
+                                <Button type="button" size="sm" variant="outline" disabled={badge.value === "pending" || isMidRejectionCycle} onClick={() => handleRenewChild(child)}>
                                   Renew / Add Program
                                 </Button>
                               </div>
@@ -1333,21 +1358,21 @@ export default function StudentDashboard() {
                                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${statusBadgeClass(badge.value)}`}>{badge.label}</span>
                                     </div>
                                   </div>
-                                  {child.enrollments.filter((enrollment) => enrollment.status === "rejected").map((enrollment) => (
-                                    <div key={enrollment._id}>
-                                      {enrollment.rejectionReason && (
-                                        <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-                                          <p className="font-semibold">Admin feedback</p>
-                                          <p>{enrollment.rejectionReason}</p>
-                                        </div>
-                                      )}
-                                      {enrollment.allowResubmission && (
-                                        <Button type="button" size="sm" variant="outline" className="mt-2 w-full border-red-200 text-red-700 hover:bg-red-50" onClick={() => handleAddChild(enrollment)}>
-                                          Review and Resubmit
-                                        </Button>
-                                      )}
-                                    </div>
-                                  ))}
+                                  {/* A reject/resubmit cycle for THIS child — Add Child and Renew/Add Program
+                                      enrollments never lock the whole dashboard (see rejectionGate.ts); the
+                                      cycle plays out right here on the child's own card instead. Stops
+                                      showing the moment this enrollment is actually approved. */}
+                                  {rejectionCycleEnrollments.map((enrollment) => (
+                                      <div key={enrollment._id}>
+                                        {enrollment.status === "rejected" && enrollment.rejectionReason && (
+                                          <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                                            <p className="font-semibold">Admin feedback</p>
+                                            <p>{enrollment.rejectionReason}</p>
+                                          </div>
+                                        )}
+                                        <ChildCardRejectionAction enrollment={enrollment} onSubmitted={() => void fetchEnrollments()} />
+                                      </div>
+                                    ))}
                                 </div>
                               </div>
                             </div>
@@ -1920,7 +1945,6 @@ export default function StudentDashboard() {
       <AddChildModal
         open={isAddChildOpen}
         onOpenChange={setIsAddChildOpen}
-        prefill={addChildPrefill}
         onEnrolled={handleAddChildEnrolled}
       />
       <Dialog open={!!selectedAnnouncement} onOpenChange={(open) => { if (!open) setSelectedAnnouncement(null); }}>

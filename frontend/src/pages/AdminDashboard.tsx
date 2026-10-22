@@ -39,9 +39,11 @@ import { RemarksReviewQueue } from "@/components/admin/RemarksReviewQueue";
 import { notifyBadgesChanged, useNavBadges } from "@/lib/navBadges";
 import { displayStudentId } from "@/lib/children";
 import { scheduleEntryBgClass, SCHEDULE_ENTRY_TEXT_CLASS } from "@/lib/scheduleColors";
+import { REJECT_ENROLLMENT_DIALOG_COPY, REJECT_PAYMENT_DIALOG_COPY } from "@/lib/rejectDialogCopy";
 import { getEmailError, getEmailCharacterError } from "@/utils/emailRules";
 import { RemarksReviewHistory } from "@/components/admin/RemarksReviewHistory";
 import { CertificatesPanel } from "@/components/admin/CertificatesPanel";
+import { AdminEmailComposerModal } from "@/components/admin/AdminEmailComposerModal";
 import FilePreview from "@/components/enrollment/FilePreview";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatCard } from "@/components/ui/stat-card";
@@ -628,6 +630,11 @@ export default function AdminDashboard() {
     : "Overview of Bee Bright Tutorial Center operations";
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Visible from the shared header on every tab — see the "Email" button next to
+  // "Schedule" below. Self-contained (fetches its own recipient list), no page-level
+  // data wiring needed here.
+  const [isEmailComposerOpen, setIsEmailComposerOpen] = useState(false);
 
   const [enrollments, setEnrollments] = useState<AdminEnrollment[]>([]);
   const [enrollmentsLoading, setEnrollmentsLoading] = useState(true);
@@ -3056,6 +3063,10 @@ export default function AdminDashboard() {
               <p className="text-muted-foreground">{dashboardSubtitle}</p>
             </div>
             <div className="flex items-center gap-3">
+              <Button variant="outline" onClick={() => setIsEmailComposerOpen(true)}>
+                <Mail className="h-4 w-4 mr-2" />
+                Email
+              </Button>
               <Button className="btn-glow" onClick={() => handleTabChange("schedule")}>
                 <Calendar className="h-4 w-4 mr-2" />
                 Schedule
@@ -6832,11 +6843,8 @@ export default function AdminDashboard() {
       <Dialog open={!!rejectEnrollmentId} onOpenChange={(open) => !open && setRejectEnrollmentId(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Reject Enrollment</DialogTitle>
-            <DialogDescription>
-              This permanently deletes the account and all its enrollment/payment data — this cannot be undone.
-              The parent will be notified by email and must submit a brand-new enrollment if they want to try again.
-            </DialogDescription>
+            <DialogTitle>{REJECT_ENROLLMENT_DIALOG_COPY.title}</DialogTitle>
+            <DialogDescription>{REJECT_ENROLLMENT_DIALOG_COPY.description}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
@@ -6849,7 +6857,7 @@ export default function AdminDashboard() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectEnrollmentId(null)}>Cancel</Button>
             <Button variant="destructive" disabled={rejectLoading || !rejectReason.trim()} onClick={handleConfirmReject}>
-              {rejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Reject &amp; Delete Account
+              {rejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} {REJECT_ENROLLMENT_DIALOG_COPY.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -6894,10 +6902,8 @@ export default function AdminDashboard() {
       <Dialog open={!!remainingRejectPaymentId} onOpenChange={(open) => !open && setRemainingRejectPaymentId(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Reject Payment</DialogTitle>
-            <DialogDescription>
-              The parent will see this amount as outstanding again and can submit a new payment proof.
-            </DialogDescription>
+            <DialogTitle>{REJECT_PAYMENT_DIALOG_COPY.title}</DialogTitle>
+            <DialogDescription>{REJECT_PAYMENT_DIALOG_COPY.description}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
@@ -6910,7 +6916,7 @@ export default function AdminDashboard() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setRemainingRejectPaymentId(null)}>Cancel</Button>
             <Button variant="destructive" disabled={remainingRejectLoading || !remainingRejectReason.trim()} onClick={handleConfirmRemainingReject}>
-              {remainingRejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Reject Payment
+              {remainingRejectLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} {REJECT_PAYMENT_DIALOG_COPY.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7026,6 +7032,8 @@ export default function AdminDashboard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AdminEmailComposerModal open={isEmailComposerOpen} onOpenChange={setIsEmailComposerOpen} />
     </DashboardLayout>
   );
 }

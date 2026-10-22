@@ -29,8 +29,6 @@ const { validateAndBuildAssessment } = require('../utils/validateAssessment');
 const { attachRemainingDueDates } = require('../utils/remainingDueDate');
 const Schedule = require('../models/Schedule');
 const { getEmailErrorMessage, logEmailError } = require('../utils/emailService');
-const { hardDeleteUser } = require('../utils/hardDeleteUser');
-const { runTransactionSafe } = require('../utils/runTransactionSafe');
 const { PROGRAM_POLICIES } = require('../utils/schedulingPolicy');
 const { canTutorHandleSchedule } = require('./scheduleController');
 const { permanentIdOf, findRenewalSource } = require('../utils/studentIdentity');
@@ -205,6 +203,10 @@ const submitEnrollment = async (req, res) => {
     let parentId = req.user?._id || null;
     let parentUser = req.user || null;
     let pendingSignup = null;
+    // Captured before pendingSignup/legacy-fallback resolution below can populate
+    // parentId some other way — true only when the caller already had a live session,
+    // i.e. this is an Add Child submission, not an account-creation signup.
+    const wasAlreadyAuthenticated = Boolean(parentId);
 
     // A verified signup that has NOT become an account yet (nothing is in Users). Its
     // enrollment token carries the pending id; the real User is created below, in this
@@ -258,6 +260,7 @@ const submitEnrollment = async (req, res) => {
       body.studentLastName = snap.lastName || '';
       body.birthdate = snap.birthdate ? new Date(snap.birthdate).toISOString().slice(0, 10) : body.birthdate;
     }
+    const enrollmentSource = renewalSource ? 'renewal' : (wasAlreadyAuthenticated ? 'add_child' : 'signup');
 
     // ── Validate packages ──
     const packages = Array.isArray(body.packages) ? body.packages : [];
@@ -435,6 +438,7 @@ const submitEnrollment = async (req, res) => {
       student: renewalSource?.student || null,
       permanentStudentId: renewalSource ? permanentIdOf(renewalSource) : enrollmentId,
       renewalOf: renewalSource?._id || null,
+      source: enrollmentSource,
       studentSnapshot: snapshot,
       packages: canonicalPackages,
       preferredStartDate,
@@ -1519,13 +1523,28 @@ const adminApproveEnrollment = async (req, res) => {
 };
 
 // PUT /api/admin/enrollments/:id/reject
-// A rejected enrollment can never log in anyway (still needs admin approval), so there's no
-// reason to keep its data around — "Reject" hard-deletes the account instead of just flagging
-// it, reusing the same transaction-safe hardDeleteUser() the Archive → Delete flow already
-// uses. See "bug (5).pdf" Group W.
+// Panel-required change: Reject must NOT delete the account/enrollment — it moves into
+// a persisted 'rejected' (or, for the legacy "cancel" alias below, 'cancelled') state
+// instead, same as the already-correct, non-destructive pattern adminVerifyPayment's own
+// reject branch already uses (just status updates + .save(), never a delete). The parent
+// keeps their account; students/schedules/remarks/payment HISTORY tied to this enrollment
+// are completely untouched. `allowResubmission` (true for a genuine Reject, false for the
+// 'cancelled' alias) is what the frontend gate (StudentDashboard.tsx) + Payments tab key
+// off of to offer — or not offer — a way back in. Resubmission itself needs NO new
+// endpoint: the EXISTING submitPaymentProof (POST /enrollments/:id/submit-proof) already
+// finds this enrollment's existing Payment record, updates it in place, and calls
+// pushStatusHistory(enrollment, 'payment_under_verification', ...) — which flips
+// enrollment.status itself — so the Enrollments tab's EXISTING isActionable gate
+// (['submitted','payment_under_verification','pending_approval','pending']) already
+// brings Verify Pay/Approve/Reject back for admin automatically, with no changes needed
+// there either. Deliberately does NOT reset `allowResubmission` back to false on
+// resubmission — it stays true until the enrollment is actually approved (status leaves
+// this whole not-yet-approved family entirely), so the frontend gate can tell "still
+// mid rejection-cycle, possibly already resubmitted and awaiting re-verification" apart
+// from "never been rejected at all" using this one field.
 const adminRejectEnrollment = async (req, res) => {
   try {
-    const { reason } = req.body;
+    const { reason, allowResubmission = true } = req.body;
     const enrollment = await Enrollment.findById(req.params.id);
     if (!enrollment) return res.status(404).json({ success: false, message: 'Enrollment not found.' });
 
@@ -1533,19 +1552,16 @@ const adminRejectEnrollment = async (req, res) => {
     const parentUser = await User.findById(enrollment.parent);
     if (!parentUser) return res.status(404).json({ success: false, message: 'Parent account not found.' });
 
-    // A parent can have more than one Enrollment (e.g. a renewal or an additional program
-    // for a family that's already active). Hard-deleting the WHOLE account is only safe
-    // when this rejected enrollment is the parent's only one — otherwise it would wipe out
-    // an unrelated, already-approved child's data too. In that case only THIS enrollment
-    // (and its own payment records) is removed; the parent account and their other
-    // enrollment(s) are left untouched.
-    const otherEnrollmentCount = await Enrollment.countDocuments({ parent: enrollment.parent, _id: { $ne: enrollment._id } });
-    const wholeAccountDeleted = otherEnrollmentCount === 0;
-
     const studentName = `${enrollment.studentSnapshot?.firstName || ''} ${enrollment.studentSnapshot?.lastName || ''}`.trim();
     const enrollmentIdLabel = permanentIdOf(enrollment);
+    const canResubmit = Boolean(allowResubmission);
 
-    // Kicked off before the delete — the parent's email/name only exist to read until then.
+    enrollment.rejectionReason = rejectionReason;
+    enrollment.allowResubmission = canResubmit;
+    enrollment.paymentStatus = 'rejected';
+    pushStatusHistory(enrollment, canResubmit ? 'rejected' : 'cancelled', req.user._id, req.user.role, rejectionReason);
+    await enrollment.save();
+
     // Not awaited, matching every other outgoing email in this codebase (sendEmail's own
     // SMTP round-trip must never block the request); sendEnrollmentRejectedEmail already
     // swallows its own send failures internally (logs via logEmailError) either way.
@@ -1555,30 +1571,32 @@ const adminRejectEnrollment = async (req, res) => {
         studentName,
         enrollmentId: enrollmentIdLabel,
         reason: rejectionReason,
+        allowResubmission: canResubmit,
       });
     }
 
-    await runTransactionSafe(async (session) => {
-      if (wholeAccountDeleted) {
-        await hardDeleteUser(parentUser, session);
-      } else {
-        const opts = session ? { session } : undefined;
-        await Payment.deleteMany({ enrollment: enrollment._id }, opts);
-        await Enrollment.deleteOne({ _id: enrollment._id }, opts);
-      }
-    });
+    // Lets a parent with this page open right now (or SelectedChildContext anywhere in
+    // the dashboard) refetch immediately — the same event adminApproveEnrollment already
+    // emits for the opposite transition, so both sides of the cycle stay live.
+    emitToParent(enrollment.parent, 'enrollment:statusChanged', { enrollmentId: enrollment.enrollmentId, status: enrollment.status });
 
     logAudit({
       req,
       userId: req.user._id,
       action: 'Reject Enrollment',
       module: 'Enrollment',
-      description: `Rejected and deleted ${enrollment.enrollmentId}: ${rejectionReason}${wholeAccountDeleted ? ' (account permanently deleted)' : ' (enrollment deleted; parent account kept — other enrollments exist)'}`,
+      description: `Rejected ${enrollment.enrollmentId}: ${rejectionReason}${canResubmit ? ' (parent may resubmit payment proof)' : ' (no resubmission — cancelled)'}`,
       status: 'SUCCESS',
-      metadata: { enrollmentId: enrollment.enrollmentId, wholeAccountDeleted },
+      metadata: { enrollmentId: enrollment.enrollmentId, allowResubmission: canResubmit },
     }).catch(() => {});
 
-    return res.status(200).json({ success: true, message: 'Enrollment rejected and the account was permanently deleted.', wholeAccountDeleted });
+    return res.status(200).json({
+      success: true,
+      message: canResubmit
+        ? 'Enrollment rejected. The parent can log in and resubmit a new payment proof.'
+        : 'Enrollment rejected and cancelled.',
+      enrollment,
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

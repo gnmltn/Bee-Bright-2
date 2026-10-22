@@ -36,6 +36,8 @@ export type DashboardEnrollment = {
   preEnrollmentAssessment?: PreEnrollmentAssessment | null;
   rejectionReason?: string | null;
   allowResubmission?: boolean;
+  /** Which entry point created this enrollment — see lib/rejectionGate.ts. */
+  source?: "signup" | "add_child" | "renewal";
   healthInfo?: {
     allergies?: string;
     medications?: string;

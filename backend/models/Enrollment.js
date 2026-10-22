@@ -209,6 +209,15 @@ const enrollmentSchema = new mongoose.Schema({
   permanentStudentId: { type: String, default: null, index: true },
   renewalOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Enrollment', default: null },
 
+  // Which entry point created this enrollment — decides how a Reject is shown on the
+  // parent's side: 'signup' (the main Enrollment page / account-creation wizard) locks
+  // the whole dashboard to the restricted screen while unresolved, since there is
+  // nothing else on the account yet; 'add_child' (an already-logged-in parent adding
+  // another child) and 'renewal' (Renew / Add Program) never do — the parent already
+  // has real dashboard access, so rejection is shown scoped to that one child's card
+  // instead. See frontend/src/lib/rejectionGate.ts.
+  source: { type: String, enum: ['signup', 'add_child', 'renewal'], default: 'signup' },
+
   // The child's own profile picture (set by the parent, kept in sync across every
   // enrollment of the child). Falls back to the enrollment 2×2 photo when unset.
   studentProfileImage: { type: String, default: null },

@@ -118,9 +118,28 @@ async function getEnrollmentLoginBlock(user) {
   if (user.role === 'parent') {
     const hasApprovedEnrollment = await Enrollment.exists({
       parent: user._id,
-      status: { $in: ['approved', 'active'] },
+      status: { $in: ['approved', 'active', 'completed'] },
     });
     if (hasApprovedEnrollment) return null;
+
+    // Reject no longer deletes anything (see frontend/src/lib/rejectionGate.ts) — the
+    // account must still be able to log in, landing on the restricted upload-only
+    // screen (RejectedAccountGate) or, for an Add Child/Renewal rejection, scoped to
+    // that one child's card (ChildCardRejectionAction) instead. `allowResubmission` is
+    // the SAME umbrella flag those use: set true the moment admin rejects (the whole
+    // enrollment OR just its payment proof), left untouched through resubmission (so it
+    // also covers "resubmitted, awaiting re-verification"), only ever cleared once that
+    // enrollment is actually approved — which the hasApprovedEnrollment check above
+    // already lets through first. Add Child/Renewal enrollments can only exist once the
+    // parent's own account (created by their original signup enrollment) already does,
+    // so this single check naturally covers every rejection entry point, not just the
+    // main Enrollment page's. A genuinely still-pending enrollment (never rejected) has
+    // allowResubmission still false and falls through to the block below, unchanged.
+    const hasResubmittableEnrollment = await Enrollment.exists({
+      parent: user._id,
+      allowResubmission: true,
+    });
+    if (hasResubmittableEnrollment) return null;
   }
 
   if (user.enrollmentStatus === 'rejected') {
@@ -704,15 +723,19 @@ const loginStart = async (req, res) => {
     }
 
     if (!user.isActive) {
-      if (user.role === 'student' || user.role === 'parent') {
+      if (user.role === 'student') {
         return res.status(403).json({
           success: false,
           code: 'ENROLLMENT_PENDING_APPROVAL',
           message: 'Enrollment is pending admin approval. You can log in once your account is approved.'
         });
-      } else {
+      } else if (user.role !== 'parent') {
         return res.status(401).json({ success: false, message: 'Account is deactivated. Please contact support.' });
       }
+      // parent: enrollment-based gating is already fully handled by
+      // getEnrollmentLoginBlock above (approved, or a rejected-but-resubmittable
+      // enrollment deliberately let through so it can reach the restricted screen)
+      // — isActive alone must never re-block a parent it already decided to let in.
     }
 
     if (role && user.role !== role.toLowerCase()) {
@@ -997,9 +1020,8 @@ const verifyLoginOtp = async (req, res) => {
     }
 
     if (!user.isActive) {
-      await AdminEmailVerification.deleteOne({ _id: verificationRecord._id });
-
       if (user.role === 'student') {
+        await AdminEmailVerification.deleteOne({ _id: verificationRecord._id });
         return res.status(403).json({
           success: false,
           code: 'ENROLLMENT_PENDING_APPROVAL',
@@ -1007,15 +1029,13 @@ const verifyLoginOtp = async (req, res) => {
         });
       }
 
-      // Parent accounts are inactive until enrollment is approved —
-      // they must be allowed through so they can track their application.
-      if (user.role === 'parent') {
-        return res.status(403).json({
-          success: false,
-          code: 'ENROLLMENT_PENDING_APPROVAL',
-          message: 'Enrollment is pending admin approval. You can log in once your account is approved.'
-        });
-      } else {
+      // Parent accounts are inactive until enrollment is approved — but enrollment-based
+      // gating is already fully handled by getEnrollmentLoginBlock above (approved, or a
+      // rejected-but-resubmittable enrollment deliberately let through so it can reach
+      // the restricted screen). isActive alone must never re-block a parent it already
+      // decided to let in; they really are allowed through here, unlike before.
+      if (user.role !== 'parent') {
+        await AdminEmailVerification.deleteOne({ _id: verificationRecord._id });
         return res.status(401).json({
           success: false,
           message: 'Account is deactivated. Please contact support.'
@@ -1532,5 +1552,6 @@ module.exports = {
   getMe,
   updateProfile,
   uploadProfileImage,
-  changePassword
+  changePassword,
+  getEnrollmentLoginBlock,
 };

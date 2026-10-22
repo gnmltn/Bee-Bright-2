@@ -1132,6 +1132,22 @@ export const certificateService = {
   },
 };
 
+export interface AdminEmailRecipient {
+  _id: string;
+  name: string;
+  email: string | null;
+  /** The most recent enrollment status for a parent (e.g. "rejected") — always null for a tutor. */
+  status: string | null;
+  isArchived: boolean;
+}
+
+export const adminEmailService = {
+  getRecipients: (role: "parent" | "tutor") =>
+    api.get<{ success: boolean; recipients: AdminEmailRecipient[] }>('/admin/email/recipients', { params: { role } }),
+  send: (data: { userIds: string[]; subject: string; message: string }) =>
+    api.post<{ success: boolean; message: string; sentCount: number; results: { userId: string; sent: boolean; reason: string | null }[] }>('/admin/email/send', data),
+};
+
 export type AnnouncementItem = {
   _id: string;
   title: string;

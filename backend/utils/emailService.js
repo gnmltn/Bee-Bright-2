@@ -420,6 +420,44 @@ const sendAnnouncementEmail = async (to, recipientName, title, body, category = 
   }
 };
 
+// Panel-required change — admin composer: no more opening a Gmail tab by hand to email a
+// parent/tutor. Uses the SAME SMTP transport + branded template as every other email in
+// this file (logo header, "Tutorial Center" subtitle, cream body box) — the admin's own
+// Subject becomes both the real email subject AND the bold heading inside the template
+// (replacing where "Login Verification" sits in the OTP email), and the admin's Message
+// becomes the body (replacing the "Hello Jake, use this code..." text). Built directly on
+// sendAnnouncementEmail's own escape+<br/> pattern just above (admin-authored plain text,
+// never raw HTML) — this is the one, not buildOtpEmailHtml, since there's no code/CTA box.
+//
+// Pulled out as its own pure function (no I/O) so the actual template content — subject,
+// heading, body placement — is directly unit-testable without needing to intercept the
+// real sendEmail/SMTP call, which (same file, bare function reference) can't be mocked
+// from outside this module the way a cross-file require() can.
+function buildAdminComposedEmailMessage(to, recipientName, subject, message) {
+  const safeSubject = (subject || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safeMessage = (message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+  return {
+    to,
+    // The admin's own Subject, verbatim — no auto-prefix. This is a direct,
+    // admin-authored message to one person, not a system notification template.
+    subject,
+    html: buildBrandedEmailHtml({
+      title: safeSubject,
+      bodyHtml: `<p>Hello ${recipientName},</p><div style="margin-top:12px;">${safeMessage}</div>`,
+    }),
+    text: `Hello ${recipientName},\n\n${message}`,
+  };
+}
+
+const sendAdminComposedEmail = async (to, recipientName, subject, message) => {
+  try {
+    await sendEmail(buildAdminComposedEmailMessage(to, recipientName, subject, message), 'admin composed email');
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
 module.exports = {
   getTransporter,
   verifyEmailTransport,
@@ -429,6 +467,8 @@ module.exports = {
   sendPaymentApprovalEmail,
   sendEnrollmentRejectionEmail,
   sendAnnouncementEmail,
+  sendAdminComposedEmail,
+  buildAdminComposedEmailMessage,
   buildBrandedEmailHtml,
   buildOtpEmailHtml,
   isSmtpAuthError,
